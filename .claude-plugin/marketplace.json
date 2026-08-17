@@ -40,8 +40,8 @@
     {
       "name": "crew",
       "source": "./plugins/crew",
-      "description": "The multi-person shared-workspace layer on top of desk: read-across/write-own desks/<alias>/ subtrees, the facts-vs-perspectives-vs-decisions attribution taxonomy, the conflict-safe write protocol, and perspective queries (what would <person> think / what's agreed vs just a fact). Vendor-neutral; the multiplayer overlay for a team running the desk substrate in one shared repo.",
-      "version": "0.1.0",
+      "description": "The multi-person shared-workspace layer on top of desk: crew onboarding through an overlay-supplied identity, read-across/write-own desks/<alias>/ subtrees, the facts-vs-perspectives-vs-decisions attribution taxonomy, the conflict-safe write protocol, and perspective queries. Vendor-neutral.",
+      "version": "0.2.0",
       "category": "workflow",
       "tags": [
         "collaboration",
