@@ -13,6 +13,9 @@ operator's workspace, `crew` is what turns one git repo into a shared workspace 
   primitive).
 - **perspective queries** -- answer "what would `<person>` think about X", "what's `<person>` working
   on", "what's actually agreed vs just a fact", read from the right home and attributed honestly.
+- **crew onboarding** -- clone a shared workspace through an overlay-supplied identity, resolve the
+  committed identity-to-alias mapping, seed a new member from the complete repo template, and bind writes
+  to that member's desk.
 
 Vendor-neutral. Layers on top of `desk` + `work-suite`. A corporate overlay supplies
 the identity skin (how a teammate's writes authenticate); this plugin is the substrate-neutral core.
@@ -21,3 +24,4 @@ the identity skin (how a teammate's writes authenticate); this plugin is the sub
 
 - `shared-desk-conventions` -- the layout, the taxonomy, and the write protocol.
 - `perspective-query` -- the read side: answer perspective- and status-shaped questions honestly.
+- `join-crew` -- vendor-neutral onboarding; an overlay supplies identity, transport, and private tooling.

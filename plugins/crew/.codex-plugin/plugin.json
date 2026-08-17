@@ -1,7 +1,7 @@
 {
   "name": "crew",
-  "version": "0.1.0",
-  "description": "The multi-person shared-workspace layer on top of desk: read-across/write-own desks, the facts/perspectives/decisions attribution taxonomy, the conflict-safe write protocol, and perspective queries.",
+  "version": "0.2.0",
+  "description": "The multi-person shared-workspace layer on top of desk: crew onboarding, read-across/write-own desks, the facts/perspectives/decisions attribution taxonomy, the conflict-safe write protocol, and perspective queries.",
   "author": {
     "name": "ourostack",
     "url": "https://github.com/ourostack/ouroboros-skills"
@@ -20,7 +20,7 @@
     "codex": {
       "dependencyProvider": {
         "id": "crew",
-        "version": "0.1.0",
+        "version": "0.2.0",
         "resolution": "flattened"
       }
     }
@@ -28,7 +28,7 @@
   "interface": {
     "displayName": "Crew",
     "shortDescription": "Multi-person shared-workspace collaboration on the desk substrate.",
-    "longDescription": "Crew packages the multiplayer layer for a team running the desk substrate in one shared repo: read-across/write-own desk subtrees, the facts-vs-perspectives-vs-decisions attribution taxonomy, the conflict-safe write protocol, and perspective queries (what would a given person think, what's agreed vs just a fact). Vendor-neutral; layers on top of desk.",
+    "longDescription": "Crew packages the multiplayer layer for a group running the desk substrate in one shared repo: onboarding through an overlay-supplied identity, read-across/write-own desk subtrees, the facts-vs-perspectives-vs-decisions attribution taxonomy, the conflict-safe write protocol, and perspective queries. Vendor-neutral; layers on top of desk.",
     "developerName": "ourostack",
     "category": "Productivity",
     "capabilities": [
