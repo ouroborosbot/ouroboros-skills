@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 1.7.17 — 2026-08-18
+
+**Authored prose now has an always-on no-hard-wrap invariant.** Desk workers must keep each Markdown paragraph, list item, blockquote, message, task card paragraph, commit body paragraph, and PR body paragraph on one physical line, using newlines only for genuine structure or source-preserved semantic breaks. A fail-closed finishing check joins column-wrap continuation lines only in prose authored or changed by the current task, avoiding brittle rewrites of third-party or historical source. The contract is repeated across the shared principles, Claude agent and output-style surfaces, Copilot agent, Codex subagent, and activation-owned Codex default instructions so downstream overlays inherit it. Host-manifest validation now fails when any boot surface drifts. `desk-mcp@1.3.3` remains unchanged.
+
 ## 1.7.16 — 2026-07-22
 
 **Persistent MCP configuration now treats startup availability as part of the contract.** `add-workspace-mcp` classifies every frontmatter or auto-loaded workspace MCP as boot-critical: persist only when it can initialize truthfully everywhere the agent is expected to launch, keep conditionally available services behind explicit one-off activation, and never disguise authentication, authorization, or protocol failures as success. Launch verification now proves first-prompt readiness and checks the full output for repeated initialization failures instead of stopping at a successful config parse. MCP remains `desk-mcp@1.3.3`.
