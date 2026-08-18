@@ -2,7 +2,7 @@
 model = "gpt-5.4"
 approval_policy = "on-request"
 
-# BEGIN desk activation: desk@1.7.17 mode=project-local owner=desk-activation
+# BEGIN desk activation: desk@1.7.18 mode=project-local owner=desk-activation
 [plugins."work-suite@ourostack"]
 enabled = true
 

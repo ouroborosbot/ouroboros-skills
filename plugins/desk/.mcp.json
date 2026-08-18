@@ -3,8 +3,14 @@
     "desk": {
       "type": "stdio",
       "command": "node",
-      "args": ["./mcp/index.js"],
-      "env": {}
+      "args": [
+        "-e",
+        "const fs=require('node:fs');const path=require('node:path');const {pathToFileURL}=require('node:url');const configured=process.env.DESK_PLUGIN_ROOT;const root=configured&&fs.existsSync(path.join(configured,'mcp','index.js'))?configured:process.cwd();process.env.DESK_PLUGIN_ROOT=root;import(pathToFileURL(path.join(root,'mcp','index.js')).href).then(({main})=>main()).catch((error)=>{console.error(error);process.exitCode=1});"
+      ],
+      "cwd": ".",
+      "env": {
+        "DESK_PLUGIN_ROOT": "${CLAUDE_PLUGIN_ROOT}"
+      }
     }
   }
 }
