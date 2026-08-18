@@ -37,7 +37,8 @@ All 15 tools are wired to real implementations.
 
 ## How consumers wire this up
 
-The plugin's sibling `.mcp.json` (at `plugins/desk/.mcp.json`) declares the spawn:
+Desk ships host-specific declarations for hosts with different plugin-root
+contracts. Copilot loads `.mcp.copilot.json`:
 
 ```json
 {
@@ -45,14 +46,17 @@ The plugin's sibling `.mcp.json` (at `plugins/desk/.mcp.json`) declares the spaw
     "desk": {
       "type": "stdio",
       "command": "node",
-      "args": ["./mcp/index.js"],
+      "args": ["${COPILOT_PLUGIN_ROOT}/mcp/index.js"],
       "env": {}
     }
   }
 }
 ```
 
-Plugin-aware hosts load this file from the installed Desk plugin root and launch with plugin-scoped relative paths resolved from that root. Desk does not rely on placeholder substitution inside `.mcp.json`. Claude Code reads this natively. Copilot CLI inherits the same spec. Ouroboros bundles read `.mcp.json` from the bundled Desk plugin.
+Copilot expands `${COPILOT_PLUGIN_ROOT}` to the installed plugin directory before
+launching the server, so startup is independent of the session working directory.
+Claude Code, Codex, and generic Ouroboros consumers continue to use `.mcp.json`,
+whose relative entrypoint is resolved by their host-specific activation path.
 
 Codex global activation writes an owned `~/.codex/desk.activation.json` file in the default Codex profile. When that file exists, the MCP entrypoint auto-loads it at startup so `desk_status` can report the selected activation target, overlay chain, desk root, and runtime cache. Project-local Codex activation passes the same config explicitly with `--activation-config .codex/desk.activation.json`.
 

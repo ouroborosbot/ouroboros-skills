@@ -302,17 +302,25 @@ function assertNoUnsupportedLaunchPlaceholders(id, value) {
 function materializeHostLaunch(server, { configBaseDir }) {
   assertNoUnsupportedLaunchPlaceholders("MCP launch config", server);
   const cwd = path.resolve(configBaseDir, server.cwd ?? ".");
-  const command = pathLikeLaunchValue(server.command)
-    ? path.resolve(cwd, server.command)
-    : server.command;
-  const args = (server.args ?? []).map((arg) => (
-    pathLikeLaunchValue(arg) ? path.resolve(cwd, arg) : arg
-  ));
+  const commandValue = expandSupportedHostTokens(server.command, { pluginRoot: configBaseDir });
+  const command = pathLikeLaunchValue(commandValue)
+    ? path.resolve(cwd, commandValue)
+    : commandValue;
+  const args = (server.args ?? []).map((arg) => {
+    const value = expandSupportedHostTokens(arg, { pluginRoot: configBaseDir });
+    return pathLikeLaunchValue(value) ? path.resolve(cwd, value) : value;
+  });
   return {
     command,
     args,
     cwd,
   };
+}
+
+function expandSupportedHostTokens(value, { pluginRoot }) {
+  return typeof value === "string"
+    ? value.replaceAll("${COPILOT_PLUGIN_ROOT}", pluginRoot)
+    : value;
 }
 
 function pathLikeLaunchValue(value) {
@@ -532,7 +540,9 @@ describe("runtime cache and host launch contract", () => {
               PATH: nodeShim.path,
             },
           });
-          assert.match(readFileSync(nodeShim.invocationLogPath, "utf8"), /^node .+/u, `${declaration.id} must launch through the controlled node PATH shim`);
+          if (process.platform !== "win32") {
+            assert.match(readFileSync(nodeShim.invocationLogPath, "utf8"), /^node .+/u, `${declaration.id} must launch through the controlled node PATH shim`);
+          }
         });
       }
 

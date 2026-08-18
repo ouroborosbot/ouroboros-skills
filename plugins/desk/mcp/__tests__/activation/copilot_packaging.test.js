@@ -19,7 +19,7 @@ const copilotBundleCommand =
 const expectedCopilotSourcePaths = [
   "plugins/desk/plugin.json",
   "plugins/desk/agents/worker.agent.md",
-  "plugins/desk/.mcp.json",
+  "plugins/desk/.mcp.copilot.json",
   "plugins/work-suite/plugin.json",
   copilotBundlePath,
 ]
@@ -39,7 +39,7 @@ function assertFileExists(...segments) {
 
 function parseSimpleFrontmatter(...segments) {
   const text = readText(...segments)
-  const match = text.match(/^---\n([\s\S]*?)\n---/u)
+  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---/u)
   assert.ok(match, `${segments.join("/")} must have YAML frontmatter`)
   return Object.fromEntries(match[1]
     .split(/\r?\n/u)
@@ -133,7 +133,7 @@ function expectedCopilotBundle() {
     },
     launch: {
       agent: `plugins/desk/${copilotWorkerSource}`,
-      mcp: "plugins/desk/.mcp.json",
+      mcp: "plugins/desk/.mcp.copilot.json",
     },
     dependency_closure: [
       {
@@ -142,7 +142,7 @@ function expectedCopilotBundle() {
         plugin: "plugins/desk/plugin.json",
         skills: "plugins/desk/skills/",
         agents: "plugins/desk/agents/",
-        mcpServers: "plugins/desk/.mcp.json",
+        mcpServers: "plugins/desk/.mcp.copilot.json",
       },
       {
         id: "work-suite",
@@ -171,7 +171,7 @@ test("Copilot root plugin metadata exposes Desk worker and MCP without manual re
   assert.equal(deskPlugin.version, marketplacePlugin("desk").version)
   assert.equal(deskPlugin.agents, "./agents/")
   assert.equal(deskPlugin.skills, "./skills/")
-  assert.equal(deskPlugin.mcpServers, "./.mcp.json")
+  assert.equal(deskPlugin.mcpServers, "./.mcp.copilot.json")
   assert.deepEqual(deskPlugin.activation?.copilot?.targets?.["desk:worker"], {
     default: true,
     source: copilotWorkerSource,
@@ -299,14 +299,14 @@ test("Copilot packaging validation rejects missing root surfaces and stale versi
   missingMcp.deskPlugin.mcpServers = "./missing-mcp.json"
   assert.deepEqual(
     validateCopilotPackagingContract(missingMcp),
-    ["Copilot root plugin metadata must expose ./.mcp.json"],
+    ["Copilot root plugin metadata must expose ./.mcp.copilot.json"],
   )
 
   const staleDeskVersion = clone(currentCopilotPackagingInput())
   staleDeskVersion.deskPlugin.version = "1.7.2"
   assert.deepEqual(
     validateCopilotPackagingContract(staleDeskVersion),
-    ["Copilot root Desk version must match activation version 1.7.16"],
+    ["Copilot root Desk version must match activation version 1.7.17"],
   )
 
   const staleWorkSuiteVersion = clone(currentCopilotPackagingInput())

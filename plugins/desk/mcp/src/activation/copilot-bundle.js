@@ -16,6 +16,7 @@ const outputPath = "plugins/desk/activation/copilot-root.flattened-bundle.json"
 const generatorCommand =
   "npm --prefix plugins/desk/mcp run activation:copilot-bundle:generate"
 const copilotWorkerSource = "agents/worker.agent.md"
+const copilotMcpSource = "plugins/desk/.mcp.copilot.json"
 
 export function buildCopilotBundle({ activation }) {
   const workSuiteDependency = activation.dependencies.find((dependency) => (
@@ -33,7 +34,7 @@ export function buildCopilotBundle({ activation }) {
     },
     launch: {
       agent: `plugins/desk/${copilotWorkerSource}`,
-      mcp: "plugins/desk/.mcp.json",
+      mcp: copilotMcpSource,
     },
     dependency_closure: [
       {
@@ -42,7 +43,7 @@ export function buildCopilotBundle({ activation }) {
         plugin: deskPluginPath,
         skills: "plugins/desk/skills/",
         agents: "plugins/desk/agents/",
-        mcpServers: "plugins/desk/.mcp.json",
+        mcpServers: copilotMcpSource,
       },
       {
         id: "work-suite",
@@ -75,8 +76,8 @@ export function validateCopilotPackagingContract(input) {
   if (deskPlugin.skills !== "./skills/") {
     errors.push("Copilot root plugin metadata must expose ./skills/")
   }
-  if (deskPlugin.mcpServers !== "./.mcp.json") {
-    errors.push("Copilot root plugin metadata must expose ./.mcp.json")
+  if (deskPlugin.mcpServers !== "./.mcp.copilot.json") {
+    errors.push("Copilot root plugin metadata must expose ./.mcp.copilot.json")
   }
   if (deskPlugin.version !== activation.version) {
     errors.push(`Copilot root Desk version must match activation version ${activation.version}`)

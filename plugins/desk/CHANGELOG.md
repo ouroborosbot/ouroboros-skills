@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 1.7.17 — 2026-08-18
+
+**Copilot now launches Desk from the installed plugin root on every platform.** The Copilot root manifest uses a dedicated MCP declaration with `${COPILOT_PLUGIN_ROOT}`, avoiding the process-working-directory ambiguity that made `desk` fail on Windows while a workspace-level duplicate appeared healthy. Claude, Codex, Ouroboros, and generic stdio consumers keep the host-neutral `.mcp.json` contract.
+
 ## 1.7.16 — 2026-07-22
 
 **Persistent MCP configuration now treats startup availability as part of the contract.** `add-workspace-mcp` classifies every frontmatter or auto-loaded workspace MCP as boot-critical: persist only when it can initialize truthfully everywhere the agent is expected to launch, keep conditionally available services behind explicit one-off activation, and never disguise authentication, authorization, or protocol failures as success. Launch verification now proves first-prompt readiness and checks the full output for repeated initialization failures instead of stopping at a successful config parse. MCP remains `desk-mcp@1.3.3`.

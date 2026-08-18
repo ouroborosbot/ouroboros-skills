@@ -38,7 +38,7 @@ function loadJson(...segments) {
 
 function parseSimpleFrontmatter(...segments) {
   const text = readText(...segments)
-  const match = text.match(/^---\n([\s\S]*?)\n---/u)
+  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---/u)
   assert.ok(match, `${segments.join("/")} must have YAML frontmatter`)
   return Object.fromEntries(match[1]
     .split(/\r?\n/u)

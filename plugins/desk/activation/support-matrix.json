@@ -48,7 +48,7 @@
       "source_paths": [
         "plugins/desk/plugin.json",
         "plugins/desk/agents/worker.agent.md",
-        "plugins/desk/.mcp.json",
+        "plugins/desk/.mcp.copilot.json",
         "plugins/work-suite/plugin.json",
         "plugins/desk/activation/copilot-root.flattened-bundle.json"
       ],

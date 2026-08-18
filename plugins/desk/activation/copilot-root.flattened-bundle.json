@@ -9,16 +9,16 @@
   },
   "launch": {
     "agent": "plugins/desk/agents/worker.agent.md",
-    "mcp": "plugins/desk/.mcp.json"
+    "mcp": "plugins/desk/.mcp.copilot.json"
   },
   "dependency_closure": [
     {
       "id": "desk",
-      "version": "1.7.16",
+      "version": "1.7.17",
       "plugin": "plugins/desk/plugin.json",
       "skills": "plugins/desk/skills/",
       "agents": "plugins/desk/agents/",
-      "mcpServers": "plugins/desk/.mcp.json"
+      "mcpServers": "plugins/desk/.mcp.copilot.json"
     },
     {
       "id": "work-suite",
