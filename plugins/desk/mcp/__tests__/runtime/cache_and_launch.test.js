@@ -245,33 +245,43 @@ function manifestCases(pluginRoot = deskPluginRoot) {
 function declarationCases(pluginRoot = deskPluginRoot) {
   return [
     {
-      id: "desk .mcp.json",
+      id: "agency shared .mcp.json",
       sourcePath: path.join(pluginRoot, ".mcp.json"),
       configBaseDir: pluginRoot,
+      expandTokens: ["CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT"],
+      resolveRelativeCwdFromConfig: false,
       resolveServer: () => mcpServerFromConfig(path.join(pluginRoot, ".mcp.json")),
     },
     {
       id: "desk plugin.json",
       sourcePath: path.join(pluginRoot, "plugin.json"),
       configBaseDir: pluginRoot,
+      expandTokens: ["COPILOT_PLUGIN_ROOT"],
+      resolveRelativeCwdFromConfig: false,
       resolveServer: () => mcpServerFromManifest(path.join(pluginRoot, "plugin.json"), { pluginRoot }),
     },
     {
       id: "codex plugin.json",
       sourcePath: path.join(pluginRoot, ".codex-plugin/plugin.json"),
       configBaseDir: pluginRoot,
+      expandTokens: [],
+      resolveRelativeCwdFromConfig: true,
       resolveServer: () => mcpServerFromManifest(path.join(pluginRoot, ".codex-plugin/plugin.json"), { pluginRoot }),
     },
     {
       id: "claude plugin.json",
       sourcePath: path.join(pluginRoot, ".claude-plugin/plugin.json"),
       configBaseDir: pluginRoot,
+      expandTokens: ["CLAUDE_PLUGIN_ROOT"],
+      resolveRelativeCwdFromConfig: false,
       resolveServer: () => mcpServerFromManifest(path.join(pluginRoot, ".claude-plugin/plugin.json"), { pluginRoot }),
     },
     {
       id: "generic stdio fixture",
       sourcePath: path.join(pluginRoot, "mcp/__tests__/fixtures/runtime/host-launch/generic-stdio.mcp.json"),
       configBaseDir: path.join(pluginRoot, "mcp/__tests__/fixtures/runtime/host-launch"),
+      expandTokens: [],
+      resolveRelativeCwdFromConfig: true,
       resolveServer: () => mcpServerFromConfig(path.join(pluginRoot, "mcp/__tests__/fixtures/runtime/host-launch/generic-stdio.mcp.json")),
     },
   ];
@@ -286,12 +296,21 @@ function rawEntrypointConfigCases(pluginRoot = deskPluginRoot) {
     {
       id: "desk .mcp.json",
       sourcePath: path.join(pluginRoot, ".mcp.json"),
-      expectedArgs: ["${CLAUDE_PLUGIN_ROOT}/mcp/index.js"],
+      expectedArgs: [
+        "-e",
+        "const fs=require('node:fs');const path=require('node:path');const {pathToFileURL}=require('node:url');const configured=process.env.DESK_PLUGIN_ROOT;const root=configured&&fs.existsSync(path.join(configured,'mcp','index.js'))?configured:process.cwd();process.env.DESK_PLUGIN_ROOT=root;import(pathToFileURL(path.join(root,'mcp','index.js')).href).then(({main})=>main()).catch((error)=>{console.error(error);process.exitCode=1});",
+      ],
+      expectedCwd: ".",
+      expectedEnv: {
+        DESK_PLUGIN_ROOT: "${CLAUDE_PLUGIN_ROOT}",
+      },
     },
     {
       id: "desk .mcp.copilot.json",
       sourcePath: path.join(pluginRoot, ".mcp.copilot.json"),
       expectedArgs: ["${COPILOT_PLUGIN_ROOT}/mcp/index.js"],
+      expectedCwd: undefined,
+      expectedEnv: {},
     },
   ];
 }
@@ -314,30 +333,57 @@ function assertNoUnsupportedLaunchPlaceholders(id, value) {
   }
 }
 
-function materializeHostLaunch(server, { configBaseDir }) {
+function materializeHostLaunch(server, {
+  configBaseDir,
+  expandTokens,
+  processCwd,
+  resolveRelativeCwdFromConfig,
+}) {
   assertNoUnsupportedLaunchPlaceholders("MCP launch config", server);
-  const cwd = path.resolve(configBaseDir, server.cwd ?? ".");
-  const commandValue = expandSupportedHostTokens(server.command, { pluginRoot: configBaseDir });
+  const expandedCwd = expandSupportedHostTokens(server.cwd ?? ".", {
+    pluginRoot: configBaseDir,
+    expandTokens,
+  });
+  const cwd = path.isAbsolute(expandedCwd)
+    ? expandedCwd
+    : path.resolve(resolveRelativeCwdFromConfig ? configBaseDir : processCwd, expandedCwd);
+  const commandValue = expandSupportedHostTokens(server.command, {
+    pluginRoot: configBaseDir,
+    expandTokens,
+  });
   const command = pathLikeLaunchValue(commandValue)
     ? path.resolve(cwd, commandValue)
     : commandValue;
   const args = (server.args ?? []).map((arg) => {
-    const value = expandSupportedHostTokens(arg, { pluginRoot: configBaseDir });
+    const value = expandSupportedHostTokens(arg, {
+      pluginRoot: configBaseDir,
+      expandTokens,
+    });
     return pathLikeLaunchValue(value) ? path.resolve(cwd, value) : value;
   });
+  const env = Object.fromEntries(
+    Object.entries(server.env ?? {}).map(([name, value]) => [
+      name,
+      expandSupportedHostTokens(value, {
+        pluginRoot: configBaseDir,
+        expandTokens,
+      }),
+    ]),
+  );
   return {
     command,
     args,
     cwd,
+    env,
   };
 }
 
-function expandSupportedHostTokens(value, { pluginRoot }) {
-  return typeof value === "string"
-    ? value
-      .replaceAll("${COPILOT_PLUGIN_ROOT}", pluginRoot)
-      .replaceAll("${CLAUDE_PLUGIN_ROOT}", pluginRoot)
-    : value;
+function expandSupportedHostTokens(value, { pluginRoot, expandTokens }) {
+  if (typeof value !== "string") return value;
+  return expandTokens.reduce(
+    (expanded, token) => expanded.replaceAll(`\${${token}}`, pluginRoot),
+    value,
+  );
 }
 
 function pathLikeLaunchValue(value) {
@@ -349,11 +395,24 @@ function assertPluginScopedLaunchArgs(id, declaration) {
   const server = declaration.resolveServer();
   assert.equal(server.command, "node", `${id} must launch through the host-provided node command`);
   assertNoUnsupportedLaunchPlaceholders(id, server);
-  const launch = materializeHostLaunch(server, { configBaseDir: declaration.configBaseDir });
+  const launch = materializeHostLaunch(server, {
+    ...declaration,
+    processCwd: makeTempRoot("desk-host-contract-cwd-"),
+  });
   const entrypointArg = launch.args.find((arg) => arg.replaceAll("\\", "/").endsWith("/mcp/index.js"));
-  assert.ok(entrypointArg, `${id} must launch plugins/desk/mcp/index.js`);
-  assert.equal(path.isAbsolute(entrypointArg), true, `${id} MCP entrypoint arg must materialize to an absolute installed path`);
-  assert.equal(existsSync(entrypointArg), true, `${id} materialized MCP entrypoint must exist`);
+  if (entrypointArg) {
+    assert.equal(path.isAbsolute(entrypointArg), true, `${id} MCP entrypoint arg must materialize to an absolute installed path`);
+    assert.equal(existsSync(entrypointArg), true, `${id} materialized MCP entrypoint must exist`);
+    return;
+  }
+  assert.equal(launch.args[0], "-e", `${id} must use the shared Node bootstrap when it has no direct entrypoint arg`);
+  assert.match(launch.args[1], /DESK_PLUGIN_ROOT/u, `${id} shared bootstrap must resolve the installed Desk root`);
+  const envRoot = launch.env.DESK_PLUGIN_ROOT;
+  assert.equal(
+    envRoot === declaration.configBaseDir || launch.cwd === declaration.configBaseDir,
+    true,
+    `${id} must provide the installed plugin root through the environment or resolved cwd`,
+  );
 }
 
 function makeMcpEnvelope(id, method, params = {}) {
@@ -501,6 +560,8 @@ describe("runtime cache and host launch contract", () => {
       await t.test(declaration.id, () => {
         const server = mcpServerFromConfig(declaration.sourcePath);
         assert.deepEqual(server.args, declaration.expectedArgs);
+        assert.equal(server.cwd, declaration.expectedCwd);
+        assert.deepEqual(server.env ?? {}, declaration.expectedEnv);
       });
     }
   });
@@ -551,7 +612,10 @@ describe("runtime cache and host launch contract", () => {
           const runtimeCacheDir = ensureDir(path.join(tempRoot, "runtime-cache"));
           const server = declaration.resolveServer();
           const nodeShim = prependNodeShimToPath(tempRoot, process.env.PATH);
-          const launch = materializeHostLaunch(server, { configBaseDir: declaration.configBaseDir });
+          const launch = materializeHostLaunch(server, {
+            ...declaration,
+            processCwd: tempRoot,
+          });
 
           await runListToolsSession({
             command: launch.command,
@@ -559,7 +623,7 @@ describe("runtime cache and host launch contract", () => {
             cwd: launch.cwd,
             env: {
               ...process.env,
-              ...(server.env ?? {}),
+              ...launch.env,
               DESK: "",
               DESK_RUNTIME_CACHE_DIR: runtimeCacheDir,
               HOME: homeDir,
