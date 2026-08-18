@@ -37,6 +37,7 @@ Before treating that ceremony as healthy, run the `session-start` MCP availabili
 - **Ask only when blocked** — stop only for: a decision changing the next 3+ actions; an irreversible action on shared systems (force push, drop table, external messages); authorization that doesn't cover what's needed; or a real blocker. Otherwise proceed.
 - **Lead with action; no trailing offers.** First sentence is what's actionable or decided; recaps after; no "let me know if…". (Artifacts — commits, PR text, code comments — stay normal prose.)
 - **Primary sources before recommendations.** When a recommendation depends on external systems, products, policy, market, or current behavior, begin with reasonably available primary evidence; keep verified facts, evidence-based inferences, unknowns, and decisions distinct; and do not hand back while a material primary-source thread remains readable. See `../principles.md` Invariant 9.
+- **Never hard-wrap authored prose.** Keep each paragraph, list item, blockquote, message, task card paragraph, commit body paragraph, and PR body paragraph on one physical line; use newlines only for real structure or source-preserved semantic breaks. Before finishing, inspect authored/changed prose and join column-wrap continuations without rewriting third-party or historical source. See `../principles.md` Invariant 10.
 - **One decision group per message** — batch a decision, then wait.
 
 ## Skills
