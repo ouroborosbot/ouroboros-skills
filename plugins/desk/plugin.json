@@ -1,6 +1,6 @@
 {
   "name": "desk",
-  "version": "1.7.17",
+  "version": "1.7.18",
   "description": "A quiet workspace substrate for long-running engineering agents: tracks, tasks, friction notes, lessons, lifecycle skills, and an MCP server for desk CRUD plus search. Ships a default 'worker' agent that makes the plugin standalone-functional; overlays (corporate, autonomous, personal-coding) layer their own agents on top.",
   "author": {
     "name": "ourostack",

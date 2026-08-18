@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 1.7.18 — 2026-08-18
+
+**Claude and Agency now launch Desk from the installed plugin root.** The shared `.mcp.json` uses Claude's production `${CLAUDE_PLUGIN_ROOT}` contract instead of relying on the caller's working directory. Claude resolves the placeholder natively, while Agency already expands it before forwarding plugin MCP configuration to Copilot, permanently removing the Windows startup failure even when Agency loads the shared manifest. The dedicated Copilot manifest remains unchanged. `desk-mcp@1.3.3` remains unchanged.
+
 ## 1.7.17 — 2026-08-18
 
 **Copilot now launches Desk from the installed plugin root on every platform.** The Copilot root manifest uses a dedicated MCP declaration with `${COPILOT_PLUGIN_ROOT}`, avoiding the process-working-directory ambiguity that made `desk` fail on Windows while a workspace-level duplicate appeared healthy. Claude, Codex, Ouroboros, and generic stdio consumers keep the host-neutral `.mcp.json` contract. `desk-mcp@1.3.3` remains unchanged.

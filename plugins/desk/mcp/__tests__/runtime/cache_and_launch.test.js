@@ -286,7 +286,7 @@ function rawEntrypointConfigCases(pluginRoot = deskPluginRoot) {
     {
       id: "desk .mcp.json",
       sourcePath: path.join(pluginRoot, ".mcp.json"),
-      expectedArgs: ["./mcp/index.js"],
+      expectedArgs: ["${CLAUDE_PLUGIN_ROOT}/mcp/index.js"],
     },
     {
       id: "desk .mcp.copilot.json",
@@ -334,7 +334,9 @@ function materializeHostLaunch(server, { configBaseDir }) {
 
 function expandSupportedHostTokens(value, { pluginRoot }) {
   return typeof value === "string"
-    ? value.replaceAll("${COPILOT_PLUGIN_ROOT}", pluginRoot)
+    ? value
+      .replaceAll("${COPILOT_PLUGIN_ROOT}", pluginRoot)
+      .replaceAll("${CLAUDE_PLUGIN_ROOT}", pluginRoot)
     : value;
 }
 

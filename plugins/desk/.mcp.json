@@ -3,7 +3,7 @@
     "desk": {
       "type": "stdio",
       "command": "node",
-      "args": ["./mcp/index.js"],
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/index.js"],
       "env": {}
     }
   }
