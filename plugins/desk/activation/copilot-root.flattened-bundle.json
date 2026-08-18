@@ -9,7 +9,7 @@
   },
   "launch": {
     "agent": "plugins/desk/agents/worker.agent.md",
-    "mcp": "plugins/desk/.mcp.json"
+    "mcp": "plugins/desk/.mcp.copilot.json"
   },
   "dependency_closure": [
     {
@@ -18,7 +18,7 @@
       "plugin": "plugins/desk/plugin.json",
       "skills": "plugins/desk/skills/",
       "agents": "plugins/desk/agents/",
-      "mcpServers": "plugins/desk/.mcp.json"
+      "mcpServers": "plugins/desk/.mcp.copilot.json"
     },
     {
       "id": "work-suite",

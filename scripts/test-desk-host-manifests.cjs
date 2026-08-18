@@ -88,7 +88,7 @@ function expectedCopilotBundle(repoRoot) {
     },
     launch: {
       agent: "plugins/desk/agents/worker.agent.md",
-      mcp: "plugins/desk/.mcp.json",
+      mcp: "plugins/desk/.mcp.copilot.json",
     },
     dependency_closure: [
       {
@@ -97,7 +97,7 @@ function expectedCopilotBundle(repoRoot) {
         plugin: "plugins/desk/plugin.json",
         skills: "plugins/desk/skills/",
         agents: "plugins/desk/agents/",
-        mcpServers: "plugins/desk/.mcp.json",
+        mcpServers: "plugins/desk/.mcp.copilot.json",
       },
       {
         id: "work-suite",
@@ -122,6 +122,10 @@ function stableStringify(value) {
 
 function sameJson(left, right) {
   return stableStringify(left) === stableStringify(right);
+}
+
+function normalizeNewlines(value) {
+  return value.replaceAll("\r\n", "\n");
 }
 
 function pushMismatch(errors, label, actual, expected) {
@@ -249,7 +253,7 @@ function checkClaudePlugin({ repoRoot, errors, checked }) {
 }
 
 function parseFrontmatter(text) {
-  const match = text.match(/^---\n([\s\S]*?)\n---/u);
+  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---/u);
   if (!match) return {};
   return Object.fromEntries(match[1]
     .split(/\r?\n/u)
@@ -360,7 +364,7 @@ async function checkCodexFixtures({ repoRoot, mcpRoot, errors, checked }) {
   checked.push("codex-fixtures");
   const expected = await expectedCodexFixtures({ repoRoot, mcpRoot });
   for (const [relativePath, content] of Object.entries(expected)) {
-    if (readText(repoRoot, relativePath) !== content) {
+    if (normalizeNewlines(readText(repoRoot, relativePath)) !== normalizeNewlines(content)) {
       errors.push(`codex-fixtures drift: ${relativePath}`);
     }
   }

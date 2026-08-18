@@ -281,6 +281,21 @@ function staticLaunchConfigCases() {
   return declarationCases();
 }
 
+function rawEntrypointConfigCases(pluginRoot = deskPluginRoot) {
+  return [
+    {
+      id: "desk .mcp.json",
+      sourcePath: path.join(pluginRoot, ".mcp.json"),
+      expectedArgs: ["./mcp/index.js"],
+    },
+    {
+      id: "desk .mcp.copilot.json",
+      sourcePath: path.join(pluginRoot, ".mcp.copilot.json"),
+      expectedArgs: ["${COPILOT_PLUGIN_ROOT}/mcp/index.js"],
+    },
+  ];
+}
+
 function assertNoUnsupportedLaunchPlaceholders(id, value) {
   if (typeof value === "string") {
     assert.equal(value.includes("${pluginRoot}"), false, `${id} must not rely on undocumented \${pluginRoot} substitution`);
@@ -302,17 +317,25 @@ function assertNoUnsupportedLaunchPlaceholders(id, value) {
 function materializeHostLaunch(server, { configBaseDir }) {
   assertNoUnsupportedLaunchPlaceholders("MCP launch config", server);
   const cwd = path.resolve(configBaseDir, server.cwd ?? ".");
-  const command = pathLikeLaunchValue(server.command)
-    ? path.resolve(cwd, server.command)
-    : server.command;
-  const args = (server.args ?? []).map((arg) => (
-    pathLikeLaunchValue(arg) ? path.resolve(cwd, arg) : arg
-  ));
+  const commandValue = expandSupportedHostTokens(server.command, { pluginRoot: configBaseDir });
+  const command = pathLikeLaunchValue(commandValue)
+    ? path.resolve(cwd, commandValue)
+    : commandValue;
+  const args = (server.args ?? []).map((arg) => {
+    const value = expandSupportedHostTokens(arg, { pluginRoot: configBaseDir });
+    return pathLikeLaunchValue(value) ? path.resolve(cwd, value) : value;
+  });
   return {
     command,
     args,
     cwd,
   };
+}
+
+function expandSupportedHostTokens(value, { pluginRoot }) {
+  return typeof value === "string"
+    ? value.replaceAll("${COPILOT_PLUGIN_ROOT}", pluginRoot)
+    : value;
 }
 
 function pathLikeLaunchValue(value) {
@@ -471,6 +494,15 @@ describe("runtime cache and host launch contract", () => {
     }
   });
 
+  it("committed Desk MCP config files keep distinct raw host entrypoint contracts", async (t) => {
+    for (const declaration of rawEntrypointConfigCases()) {
+      await t.test(declaration.id, () => {
+        const server = mcpServerFromConfig(declaration.sourcePath);
+        assert.deepEqual(server.args, declaration.expectedArgs);
+      });
+    }
+  });
+
   it("uses activation-config runtimeCacheDir before DESK_RUNTIME_CACHE_DIR and never writes runtime deps under desk .state", async () => {
     const tempRoot = makeTempRoot("desk-runtime-cache-config-");
     const installed = makeInstalledPluginFixture(tempRoot);
@@ -532,7 +564,9 @@ describe("runtime cache and host launch contract", () => {
               PATH: nodeShim.path,
             },
           });
-          assert.match(readFileSync(nodeShim.invocationLogPath, "utf8"), /^node .+/u, `${declaration.id} must launch through the controlled node PATH shim`);
+          if (process.platform !== "win32") {
+            assert.match(readFileSync(nodeShim.invocationLogPath, "utf8"), /^node .+/u, `${declaration.id} must launch through the controlled node PATH shim`);
+          }
         });
       }
 
