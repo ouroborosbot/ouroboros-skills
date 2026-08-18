@@ -274,6 +274,9 @@ function checkWorkerSources({ repoRoot, errors, checked }) {
   const claudeWorker = readText(repoRoot, "plugins/desk/agents/worker.md");
   const codexWorker = readText(repoRoot, "plugins/desk/agents/worker.toml");
   const copilotWorker = readText(repoRoot, "plugins/desk/agents/worker.agent.md");
+  const outputStyleWorker = readText(repoRoot, "plugins/desk/output-styles/worker.md");
+  const principles = readText(repoRoot, "plugins/desk/principles.md");
+  const codexAdapter = readText(repoRoot, "plugins/desk/mcp/src/activation/adapters/codex.js");
   const workerFacts = [
     ["claude", parseFrontmatter(claudeWorker).name],
     ["codex", tomlStringValue(codexWorker, "name")],
@@ -296,6 +299,22 @@ function checkWorkerSources({ repoRoot, errors, checked }) {
   }
   if (!claudeWorker.includes("desk:session-start")) {
     errors.push("worker-sources claude session-start prompt drift");
+  }
+  for (const [surface, body] of [
+    ["claude", claudeWorker],
+    ["codex-subagent", codexWorker],
+    ["copilot", copilotWorker],
+    ["claude-output-style", outputStyleWorker],
+  ]) {
+    if (!body.includes("Never hard-wrap authored prose") || !body.includes("authored/changed prose")) {
+      errors.push(`worker-sources ${surface} no-hard-wrap invariant drift`);
+    }
+  }
+  if (!principles.includes("## Invariant 10 — Authored prose never hard-wraps") || !principles.includes("Fail-closed authoring check")) {
+    errors.push("worker-sources principles no-hard-wrap invariant drift");
+  }
+  if (!codexAdapter.includes("Never hard-wrap authored prose") || !codexAdapter.includes("authored/changed prose")) {
+    errors.push("worker-sources codex activation no-hard-wrap invariant drift");
   }
 }
 
