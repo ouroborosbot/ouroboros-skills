@@ -2,7 +2,7 @@
 
 ## 1.7.17 — 2026-08-18
 
-**Copilot now launches Desk from the installed plugin root on every platform.** The Copilot root manifest uses a dedicated MCP declaration with `${COPILOT_PLUGIN_ROOT}`, avoiding the process-working-directory ambiguity that made `desk` fail on Windows while a workspace-level duplicate appeared healthy. Claude, Codex, Ouroboros, and generic stdio consumers keep the host-neutral `.mcp.json` contract.
+**Copilot now launches Desk from the installed plugin root on every platform.** The Copilot root manifest uses a dedicated MCP declaration with `${COPILOT_PLUGIN_ROOT}`, avoiding the process-working-directory ambiguity that made `desk` fail on Windows while a workspace-level duplicate appeared healthy. Claude, Codex, Ouroboros, and generic stdio consumers keep the host-neutral `.mcp.json` contract. `desk-mcp@1.3.3` remains unchanged.
 
 ## 1.7.16 — 2026-07-22
 
