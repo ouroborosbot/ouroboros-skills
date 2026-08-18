@@ -281,6 +281,21 @@ function staticLaunchConfigCases() {
   return declarationCases();
 }
 
+function rawEntrypointConfigCases(pluginRoot = deskPluginRoot) {
+  return [
+    {
+      id: "desk .mcp.json",
+      sourcePath: path.join(pluginRoot, ".mcp.json"),
+      expectedArgs: ["./mcp/index.js"],
+    },
+    {
+      id: "desk .mcp.copilot.json",
+      sourcePath: path.join(pluginRoot, ".mcp.copilot.json"),
+      expectedArgs: ["${COPILOT_PLUGIN_ROOT}/mcp/index.js"],
+    },
+  ];
+}
+
 function assertNoUnsupportedLaunchPlaceholders(id, value) {
   if (typeof value === "string") {
     assert.equal(value.includes("${pluginRoot}"), false, `${id} must not rely on undocumented \${pluginRoot} substitution`);
@@ -475,6 +490,15 @@ describe("runtime cache and host launch contract", () => {
     for (const declaration of staticLaunchConfigCases()) {
       await t.test(declaration.id, () => {
         assertPluginScopedLaunchArgs(declaration.id, declaration);
+      });
+    }
+  });
+
+  it("committed Desk MCP config files keep distinct raw host entrypoint contracts", async (t) => {
+    for (const declaration of rawEntrypointConfigCases()) {
+      await t.test(declaration.id, () => {
+        const server = mcpServerFromConfig(declaration.sourcePath);
+        assert.deepEqual(server.args, declaration.expectedArgs);
       });
     }
   });
