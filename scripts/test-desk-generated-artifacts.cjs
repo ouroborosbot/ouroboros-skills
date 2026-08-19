@@ -13,6 +13,7 @@ const defaultMcpRoot = path.join(defaultRepoRoot, "plugins", "desk", "mcp");
 const embeddedArchiveShaMarker = "<archive-sha256-recorded-in-sidecar>";
 const defaultPublishedRuntimePackTargets = Object.freeze([
   Object.freeze({ platform: "darwin", arch: "arm64", nodeAbi: "127" }),
+  Object.freeze({ platform: "win32", arch: "x64", nodeAbi: "137" }),
 ]);
 const defaultProductionNotesPath = path.join(
   "desk",
