@@ -13,6 +13,15 @@
       "prod_dependency_lock_hash": "e28611fabac02b7d88a0ad71cd7e282de1ec09e86cefab01e6d4e572136896be",
       "archive_sha256": "85a7481dd775988812dccf9613c477270248805e28e0b99b9b73b672edd0d654",
       "artifact_path": "darwin-arm64-node-127/e28611fabac02b7d88a0ad71cd7e282de1ec09e86cefab01e6d4e572136896be"
+    },
+    {
+      "id": "win32-x64-node-137",
+      "platform": "win32",
+      "arch": "x64",
+      "node_abi": "137",
+      "prod_dependency_lock_hash": "e28611fabac02b7d88a0ad71cd7e282de1ec09e86cefab01e6d4e572136896be",
+      "archive_sha256": "2b9bed8508bb16e171254bce218565e411adb4dd7caf65000718ef3713d59d17",
+      "artifact_path": "win32-x64-node-137/e28611fabac02b7d88a0ad71cd7e282de1ec09e86cefab01e6d4e572136896be"
     }
   ]
 }

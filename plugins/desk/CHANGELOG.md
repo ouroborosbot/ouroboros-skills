@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 1.7.19 — 2026-08-18
+
+**Windows Copilot hosts now receive a native Desk runtime pack.** The release includes the production dependency closure for Windows x64 on Node ABI 137, including loadable `better-sqlite3` and `sqlite-vec` binaries, and the generated support matrix advertises that exact target. Generated-artifact validation now requires the Windows pack alongside the existing macOS pack, preventing future releases from silently returning canonical Desk to diagnostic mode. `desk-mcp@1.3.3` remains unchanged.
+
 ## 1.7.18 — 2026-08-18
 
 **Claude, Codex, and Agency now launch Desk from the installed plugin root.** The shared `.mcp.json` uses a portable Node bootstrap: Claude and Agency provide the installed root through `${CLAUDE_PLUGIN_ROOT}`, while Codex resolves the declared working directory against the plugin root. This permanently removes the Windows startup failure even when Agency loads the shared manifest, without breaking Codex's host-native plugin path. The dedicated Copilot manifest remains unchanged. `desk-mcp@1.3.3` remains unchanged.

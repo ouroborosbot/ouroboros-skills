@@ -322,7 +322,10 @@ test("production runtime dependency pack is committed at the current canonical p
     mcpRoot,
   })
 
-  assert.deepEqual(expectations.map((expectation) => expectation.target), ["darwin-arm64-node-127"])
+  assert.deepEqual(
+    expectations.map((expectation) => expectation.target),
+    ["darwin-arm64-node-127", "win32-x64-node-137"],
+  )
   for (const expectation of expectations) {
     const expectedPackDir = path.join(
       mcpRoot,
@@ -468,9 +471,13 @@ test("generated artifact verification uses explicit published targets instead of
 
   assert.deepEqual(
     generatedArtifacts.publishedRuntimePackTargets(),
-    [{ platform: "darwin", arch: "arm64", nodeAbi: "127" }],
+    [
+      { platform: "darwin", arch: "arm64", nodeAbi: "127" },
+      { platform: "win32", arch: "x64", nodeAbi: "137" },
+    ],
   )
   assert.equal(expectations[0].target, "darwin-arm64-node-127")
+  assert.equal(expectations[1].target, "win32-x64-node-137")
   assert.deepEqual(platformOptionExpectations.map((expectation) => expectation.target), ["linux-arm64-node-127"])
   assert.equal(linuxHostExpectation.target, "linux-x64-node-127")
   assert.deepEqual(explicitTargetExpectations.map((expectation) => expectation.target), ["linux-x64-node-127"])
@@ -486,8 +493,12 @@ test("generated artifact verification uses explicit published targets instead of
   })
 
   assert.equal(result.ok, true)
-  assert.deepEqual(result.expectations.map((expectation) => expectation.target), ["darwin-arm64-node-127"])
+  assert.deepEqual(
+    result.expectations.map((expectation) => expectation.target),
+    ["darwin-arm64-node-127", "win32-x64-node-137"],
+  )
   assert.match(stdout.join(""), /darwin-arm64-node-127/u)
+  assert.match(stdout.join(""), /win32-x64-node-137/u)
   assert.equal(stderr.join(""), "")
 })
 
