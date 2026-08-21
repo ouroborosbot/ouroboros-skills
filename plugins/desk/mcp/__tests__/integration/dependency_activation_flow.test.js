@@ -234,7 +234,7 @@ test("cold rebuild imports committed production vector packs without embeddings"
   }
 })
 
-test("cold rebuild live-generates only production vectors missing from committed packs", async () => {
+test("cold rebuild rejects packs whose represented document changed and live-generates all vectors", async () => {
   const tempRoot = await tmpRoot("desk-dependency-flow-missing-vector-")
   try {
     const deskRoot = path.join(tempRoot, "desk")
@@ -272,23 +272,24 @@ test("cold rebuild live-generates only production vectors missing from committed
 
     assert.equal(result.built, true, JSON.stringify(result, null, 2))
     assert.equal(result.reason, "missing")
-    assert.equal(result.fallback, "vector_packs")
-    assert.equal(result.vector_packs?.import_state, "used_as_fallback")
-    assert.equal(result.vector_packs?.packs_imported, 1)
-    assert.equal(result.vector_packs?.rows_imported, 2)
+    assert.equal(result.fallback, undefined)
+    assert.equal(result.vector_packs?.import_state, "absent")
+    assert.equal(result.vector_packs?.packs_imported, 0)
+    assert.equal(result.vector_packs?.rows_imported, 0)
     assert.equal(result.semantic?.chunks_total, 3)
     assert.equal(result.semantic?.vectors_indexed, 3)
     assert.equal(result.semantic?.missing_vectors, 0)
 
-    assert.deepEqual(embeddingRequests, [
-      {
-        url: "http://127.0.0.1:9/api/embeddings",
-        body: {
-          model: "unit-24a3-production-missing-vector",
-          prompt: missingChunk,
-        },
-      },
-    ])
+    assert.equal(embeddingRequests.length, 3)
+    assert.ok(
+      embeddingRequests.every((request) =>
+        request.url === "http://127.0.0.1:9/api/embeddings" &&
+        request.body.model === "unit-24a3-production-missing-vector"
+      ),
+    )
+    assert.ok(
+      embeddingRequests.some((request) => request.body.prompt === missingChunk),
+    )
 
     const db = openDb(deskRoot)
     try {

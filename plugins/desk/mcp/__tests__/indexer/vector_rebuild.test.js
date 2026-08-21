@@ -10,6 +10,14 @@ import matter from "gray-matter"
 
 import { closeDb, openDb } from "../../src/db/init.js"
 import { chunkBody } from "../../src/indexer/chunk.js"
+import {
+  DISCOVERY_GRAMMAR_VERSION,
+  discover,
+} from "../../src/indexer/discover.js"
+import {
+  canonicalDocumentHash,
+  documentTreeHash,
+} from "../../src/indexer/document-tree.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
 import {
   ACTIVE_EMBEDDING_SPEC,
@@ -60,7 +68,7 @@ function docBody(raw) {
   return matter(raw).content ?? ""
 }
 
-async function writePack({ pluginRoot, packId, rows }) {
+async function writePack({ deskRoot, pluginRoot, packId, rows }) {
   const packDir = path.join(
     pluginRoot,
     "artifacts",
@@ -73,6 +81,14 @@ async function writePack({ pluginRoot, packId, rows }) {
   const checksumPath = path.join(packDir, `${packId}.sha256`)
   const jsonl = `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`
   const packSha = sha256(jsonl)
+  const representedDocuments = (await discover(deskRoot)).map((doc) => ({
+    path: doc.path,
+    hash: canonicalDocumentHash(doc.hash),
+  }))
+  const compatibility = resolveEnsureIndexOptions({
+    snapshots: false,
+    vectorPacks: { pluginRoot },
+  }, { deskRoot }).vectorPacks
   await fs.writeFile(packPath, jsonl, "utf8")
   await fs.writeFile(
     manifestPath,
@@ -84,6 +100,11 @@ async function writePack({ pluginRoot, packId, rows }) {
       encoding: "float32-json",
       row_count: rows.length,
       rows_sha256: packSha,
+      artifact_source_scope_hash:
+        compatibility.expectedArtifactSourceScopeHash,
+      document_tree_hash: documentTreeHash(representedDocuments),
+      discovery_grammar_version: DISCOVERY_GRAMMAR_VERSION,
+      represented_documents: representedDocuments,
       created_at: "2026-06-15T00:00:00.000Z",
       provenance: {
         builder: "artifact:vector-pack:build",
@@ -145,6 +166,7 @@ test("rebuildIndex imports fully covered vector packs without live embedding cal
   const body = "---\nstatus: processing\n---\ncovered semantic body"
   await writeFile(deskRoot, docPath, body)
   await writePack({
+    deskRoot,
     pluginRoot,
     packId: "covered",
     rows: [rowForDoc({ docPath, body, seed: 7 })],
@@ -182,6 +204,7 @@ test("rebuildIndex live-generates only chunks missing from vector packs", async 
   const body = "---\nstatus: processing\n---\ncovered semantic body\n\n## Missing\n\nmissing semantic body"
   await writeFile(deskRoot, docPath, body)
   await writePack({
+    deskRoot,
     pluginRoot,
     packId: "partial",
     rows: [rowForDoc({ docPath, body, chunkIndex: 0, seed: 3 })],
@@ -350,6 +373,7 @@ test("ensureIndex imports vector packs for chunks previously marked unembeddable
   assert.equal(before.semantic.repairable_missing_vectors, 0)
 
   await writePack({
+    deskRoot,
     pluginRoot,
     packId: "late-pack",
     rows: [rowForDoc({
@@ -409,6 +433,7 @@ test("ensureIndex skips repeated no-op vector-pack repair for unchanged known-un
   })
 
   await writePack({
+    deskRoot,
     pluginRoot: deskRoot,
     packId: "unmatched",
     rows: [rowForDoc({
@@ -460,6 +485,7 @@ test("ensureIndex skips repeated no-op vector-pack repair for unchanged known-un
   assert.equal(second.semantic.repairable_missing_vectors, 0)
 
   await writePack({
+    deskRoot,
     pluginRoot: deskRoot,
     packId: "unmatched",
     rows: [rowForDoc({
@@ -604,6 +630,7 @@ test("rebuildIndex with disabled embeddings still succeeds when vector packs cov
   const body = "---\nstatus: processing\n---\noffline covered semantic body"
   await writeFile(deskRoot, docPath, body)
   await writePack({
+    deskRoot,
     pluginRoot,
     packId: "offline-covered",
     rows: [rowForDoc({ docPath, body, seed: 5 })],
@@ -631,6 +658,7 @@ test("rebuildIndex reports validated vector packs when no rows match local chunk
   const body = "---\nstatus: processing\n---\nvalidated no-match semantic body"
   await writeFile(deskRoot, docPath, body)
   await writePack({
+    deskRoot,
     pluginRoot,
     packId: "validated-no-match",
     rows: [rowForDoc({
@@ -691,6 +719,7 @@ test("rebuildIndex forwards startup abort signal into vector-pack import", async
   const deskRoot = await tmpRoot()
   const pluginRoot = await tmpRoot("desk-plugin-vector-rebuild-")
   await writePack({
+    deskRoot,
     pluginRoot,
     packId: "abort-forwarding",
     rows: [],
@@ -732,6 +761,7 @@ test("ensureIndex repairs a fresh lexical-only DB from vector packs without prob
   await writeFile(deskRoot, docPath, body)
   await rebuildIndex(deskRoot, { skipEmbed: true })
   await writePack({
+    deskRoot,
     pluginRoot,
     packId: "fresh-repair",
     rows: [rowForDoc({ docPath, body, seed: 13 })],
@@ -866,6 +896,7 @@ test("ensureIndex calls embeddings only after vector-pack import leaves missing 
   await writeFile(deskRoot, docPath, body)
   await rebuildIndex(deskRoot, { skipEmbed: true })
   await writePack({
+    deskRoot,
     pluginRoot,
     packId: "fresh-partial-repair",
     rows: [rowForDoc({ docPath, body, chunkIndex: 0, seed: 17 })],
@@ -1144,6 +1175,7 @@ test("ensureIndex refreshes a stale lexical-only DB from vector packs without em
   const future = new Date(Date.now() + 5000)
   await fs.utimes(path.join(deskRoot, docPath), future, future)
   await writePack({
+    deskRoot,
     pluginRoot,
     packId: "stale-repair",
     rows: [rowForDoc({ docPath, body: newBody, seed: 23 })],
@@ -1181,6 +1213,7 @@ test("ensureIndex reports vector-pack fallback for cold covered rebuilds without
   const body = "---\nstatus: processing\n---\ncold covered startup body"
   await writeFile(deskRoot, docPath, body)
   await writePack({
+    deskRoot,
     pluginRoot,
     packId: "cold-covered-startup",
     rows: [rowForDoc({ docPath, body, seed: 29 })],
@@ -1218,6 +1251,7 @@ test("ensureIndex discovers repo-local vector packs from the desk root by defaul
   const body = "---\nstatus: processing\n---\nrepo local vector pack body"
   await writeFile(deskRoot, docPath, body)
   await writePack({
+    deskRoot,
     pluginRoot: deskRoot,
     packId: "workspace-pack",
     rows: [rowForDoc({ docPath, body, seed: 31 })],
@@ -1228,6 +1262,7 @@ test("ensureIndex discovers repo-local vector packs from the desk root by defaul
     [pluginRoot, "plugin-fallback-pack"],
   ]) {
     await writePack({
+      deskRoot,
       pluginRoot: root,
       packId,
       rows: [rowForDoc({ docPath, body, seed: 31 })],
@@ -1307,6 +1342,7 @@ test("ensureIndex skips corrupt auto-discovered workspace vector packs and uses 
   await writeFile(deskRoot, docPath, body)
   await writeFile(strictDeskRoot, docPath, body)
   await writePack({
+    deskRoot,
     pluginRoot: deskRoot,
     packId: "corrupt-workspace-pack",
     rows: [rowForDoc({ docPath, body, seed: 3 })],
@@ -1316,6 +1352,7 @@ test("ensureIndex skips corrupt auto-discovered workspace vector packs and uses 
     packId: "corrupt-workspace-pack",
   })
   await writePack({
+    deskRoot,
     pluginRoot,
     packId: "plugin-fallback-pack",
     rows: [rowForDoc({ docPath, body, seed: 37 })],
@@ -1368,6 +1405,7 @@ test("desk_reindex force rebuild restores vector packs with live embeddings disa
   await writeFile(deskRoot, docPath, body)
   await rebuildIndex(deskRoot, { skipEmbed: true })
   await writePack({
+    deskRoot,
     pluginRoot,
     packId: "force-repair",
     rows: [rowForDoc({ docPath, body, seed: 29 })],

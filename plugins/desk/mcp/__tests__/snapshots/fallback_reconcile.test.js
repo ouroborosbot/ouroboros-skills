@@ -12,7 +12,11 @@ import matter from "gray-matter"
 
 import { closeDb, getMeta, indexDbPath, openDb, setMeta } from "../../src/db/init.js"
 import { chunkBody } from "../../src/indexer/chunk.js"
-import { DISCOVERY_GRAMMAR_VERSION } from "../../src/indexer/discover.js"
+import {
+  DISCOVERY_GRAMMAR_VERSION,
+  discover,
+} from "../../src/indexer/discover.js"
+import { canonicalDocumentHash } from "../../src/indexer/document-tree.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
 import {
   ACTIVE_EMBEDDING_SPEC,
@@ -91,7 +95,7 @@ function rowForDoc({ docPath, body, chunkIndex = 0, seed = 1 }) {
   }
 }
 
-async function writePack({ pluginRoot, packId, rows }) {
+async function writePack({ deskRoot, pluginRoot, packId, rows }) {
   const packDir = path.join(
     pluginRoot,
     "artifacts",
@@ -104,6 +108,14 @@ async function writePack({ pluginRoot, packId, rows }) {
   const checksumPath = path.join(packDir, `${packId}.sha256`)
   const jsonl = `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`
   const rowsSha = sha256(jsonl)
+  const representedDocuments = (await discover(deskRoot)).map((doc) => ({
+    path: doc.path,
+    hash: canonicalDocumentHash(doc.hash),
+  }))
+  const compatibility = resolveEnsureIndexOptions({
+    snapshots: false,
+    vectorPacks: { pluginRoot },
+  }, { deskRoot }).vectorPacks
   await fs.writeFile(packPath, jsonl, "utf8")
   await fs.writeFile(
     manifestPath,
@@ -115,6 +127,11 @@ async function writePack({ pluginRoot, packId, rows }) {
       encoding: "float32-json",
       row_count: rows.length,
       rows_sha256: rowsSha,
+      artifact_source_scope_hash:
+        compatibility.expectedArtifactSourceScopeHash,
+      document_tree_hash: documentTreeHash(representedDocuments),
+      discovery_grammar_version: DISCOVERY_GRAMMAR_VERSION,
+      represented_documents: representedDocuments,
       created_at: "2026-06-15T00:00:00.000Z",
       provenance: {
         builder: "artifact:vector-pack:build",
@@ -558,6 +575,7 @@ test("ensureIndex falls back from corrupt snapshots to vector packs without live
   await writeFile(deskRoot, docPath, body)
   await writeCorruptSnapshot({ pluginRoot, snapshotId: "corrupt-snapshot" })
   await writePack({
+    deskRoot,
     pluginRoot,
     packId: "corrupt-fallback",
     rows: [rowForDoc({ docPath, body, seed: 5 })],
@@ -606,6 +624,7 @@ test("ensureIndex treats incompatible snapshots as cache misses before vector-pa
     manifestOverrides: { runtime: { ...RUNTIME, arch: "x64" } },
   })
   await writePack({
+    deskRoot,
     pluginRoot,
     packId: "incompatible-fallback",
     rows: [rowForDoc({ docPath, body, seed: 7 })],
@@ -695,6 +714,7 @@ test("desk_reindex uses runtime artifacts without artifact opts", async () => {
   await writeFile(deskRoot, docPath, body)
   await writeCorruptSnapshot({ pluginRoot, snapshotId: "default-corrupt" })
   await writePack({
+    deskRoot,
     pluginRoot,
     packId: "default-fallback",
     rows: [rowForDoc({ docPath, body, seed: 13 })],
@@ -934,6 +954,7 @@ test("ensureIndex repairs vectors before returning a fresh restored snapshot", a
   const old = new Date("2020-01-01T00:00:00.000Z")
   await fs.utimes(path.join(deskRoot, docPath), old, old)
   await writePack({
+    deskRoot,
     pluginRoot,
     packId: "fresh-restored-repair",
     rows: [rowForDoc({ docPath, body, seed: 17 })],

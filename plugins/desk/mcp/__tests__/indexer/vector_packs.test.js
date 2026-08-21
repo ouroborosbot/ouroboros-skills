@@ -920,7 +920,13 @@ test("vector pack import skips stale source, document tree, and grammar artifact
       pluginRoot,
       expectedSpec: ACTIVE_EMBEDDING_SPEC,
       expectedArtifactSourceScopeHash: SOURCE_SCOPE_HASH,
-      expectedDocumentTreeHash: currentTreeHash,
+      expectedDocuments: [
+        ...representedDocuments,
+        {
+          path: "trackA/task-2/task.md",
+          hash: `sha256:${"3".repeat(64)}`,
+        },
+      ],
       expectedDiscoveryGrammarVersion: DISCOVERY_GRAMMAR_VERSION,
     })
     assert.equal(imported.packs_considered, 3)

@@ -17,7 +17,6 @@ import { DISCOVERY_GRAMMAR_VERSION, discover } from "./discover.js"
 import { chunkBody } from "./chunk.js"
 import {
   canonicalDocumentPath,
-  documentTreeHash,
   documentTreesEqual,
 } from "./document-tree.js"
 import {
@@ -146,11 +145,15 @@ export async function rebuildIndex(deskRoot, opts = {}) {
     }
 
     if (opts.vectorPacks?.pluginRoot) {
+      const bindVectorPackFreshness =
+        opts.vectorPacks.expectedArtifactSourceScopeHash !== undefined ||
+        opts.vectorPacks.expectedDocumentTreeHash !== undefined ||
+        opts.vectorPacks.expectedDiscoveryGrammarVersion !== undefined
       summary.vector_packs = vectorPackImportStatus(await importVectorPackRoots({
         db,
         vectorPacks: {
           ...opts.vectorPacks,
-          expectedDocumentTreeHash: documentTreeHash(discovered),
+          ...(bindVectorPackFreshness ? { expectedDocuments: discovered } : {}),
         },
         signal: opts.signal,
       }))
@@ -198,6 +201,8 @@ async function importVectorPackRoots({ db, vectorPacks, signal }) {
           vectorPacks.expectedArtifactSourceScopeHash,
         expectedDocumentTreeHash:
           vectorPacks.expectedDocumentTreeHash,
+        expectedDocuments:
+          vectorPacks.expectedDocuments,
         expectedDiscoveryGrammarVersion:
           vectorPacks.expectedDiscoveryGrammarVersion,
       })

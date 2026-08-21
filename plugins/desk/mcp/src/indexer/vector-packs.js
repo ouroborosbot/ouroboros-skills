@@ -12,7 +12,11 @@ import {
   assertArtifactInputsDoNotContainTombstones,
 } from "../artifacts/tombstones.js"
 import { assertArtifactInputsAllowed } from "./exclusions.js"
-import { representedDocumentTreeHash } from "./document-tree.js"
+import {
+  canonicalDocumentHash,
+  canonicalDocumentPath,
+  representedDocumentTreeHash,
+} from "./document-tree.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./spec.js"
 
 const VECTOR_ENCODING = "float32-json"
@@ -95,6 +99,7 @@ export async function validateVectorPackFile({
   expectedSpec = ACTIVE_EMBEDDING_SPEC,
   expectedArtifactSourceScopeHash,
   expectedDocumentTreeHash,
+  expectedDocuments,
   expectedDiscoveryGrammarVersion,
   signal,
 } = {}) {
@@ -141,13 +146,25 @@ export async function validateVectorPackFile({
         ? "fresh"
         : "stale"
   }
+  const representedHash =
+    representedDocumentTreeHash(manifest.represented_documents)
   if (expectedDocumentTreeHash !== undefined) {
-    const representedHash =
-      representedDocumentTreeHash(manifest.represented_documents)
     freshness.document_tree =
       representedHash !== null &&
       representedHash === manifest.document_tree_hash &&
       representedHash === expectedDocumentTreeHash
+        ? "fresh"
+        : "stale"
+  }
+  if (expectedDocuments !== undefined) {
+    freshness.document_tree =
+      representedHash !== null &&
+      representedHash === manifest.document_tree_hash &&
+      representedDocumentsAreCurrent(
+        manifest.represented_documents,
+        expectedDocuments,
+        { requireRepresentedDocument: rows.length > 0 },
+      )
         ? "fresh"
         : "stale"
   }
@@ -167,6 +184,7 @@ export async function importVectorPacks({
   expectedSpec = ACTIVE_EMBEDDING_SPEC,
   expectedArtifactSourceScopeHash,
   expectedDocumentTreeHash,
+  expectedDocuments,
   expectedDiscoveryGrammarVersion,
   signal,
 } = {}) {
@@ -233,6 +251,7 @@ export async function importVectorPacks({
       expectedSpec,
       expectedArtifactSourceScopeHash,
       expectedDocumentTreeHash,
+      expectedDocuments,
       expectedDiscoveryGrammarVersion,
       signal,
     })
@@ -291,6 +310,26 @@ export async function importVectorPacks({
   }
 
   return summary
+}
+
+function representedDocumentsAreCurrent(
+  representedDocuments,
+  expectedDocuments,
+  { requireRepresentedDocument = false } = {},
+) {
+  if (!Array.isArray(representedDocuments)) return false
+  if (!Array.isArray(expectedDocuments)) return false
+  if (requireRepresentedDocument && representedDocuments.length === 0) {
+    return false
+  }
+  const expectedByPath = new Map(expectedDocuments.map((doc) => [
+    canonicalDocumentPath(doc.path),
+    canonicalDocumentHash(doc.hash),
+  ]))
+  return representedDocuments.every((doc) =>
+    expectedByPath.get(canonicalDocumentPath(doc.path)) ===
+      canonicalDocumentHash(doc.hash)
+  )
 }
 
 function validateManifestShape({ manifest, expectedSpec, label }) {
