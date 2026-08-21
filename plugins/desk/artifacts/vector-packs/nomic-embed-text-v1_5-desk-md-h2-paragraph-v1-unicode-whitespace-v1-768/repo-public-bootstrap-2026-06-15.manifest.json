@@ -6,21 +6,23 @@
   "encoding": "float32-json",
   "row_count": 2,
   "rows_sha256": "d0c07f02e1acda61962e4f2232fa68d7f5cc9802510c29aebb604cabfca1dfda",
-  "artifact_source_scope_hash": "sha256:0a910faf3f8f0eed98c270791bd08fb5b4e24caa6dcced6658b28b33083de84c",
+  "artifact_source_scope_hash": "sha256:bb07ee3a92c89a91fe5bd5c97ff88976415f356469fc0fad32d7b542ffea15b7",
   "document_tree_hash": "sha256:b8268841c4877dfe293de7c463eadf38339c741daa6416ffd5b1ec652087fba8",
+  "discovery_grammar_version": 2,
   "represented_documents": [
     {
       "path": "tasks/dependency-activation/task.md",
       "hash": "sha256:3886140d5ca53b11e39d670572bce11535d9f980e4d168dbdcbbd72bc10edf59"
     }
   ],
-  "created_at": "2026-08-21T02:25:41.760Z",
+  "created_at": "2026-08-21T02:47:47.147Z",
   "provenance": {
     "builder": "plugins/desk/mcp/scripts/build-vector-pack.js",
     "source": "local-db",
-    "commit": "ef8acb584101bb34aade846ef942a9ea5912bf9e"
+    "commit": "579a055c8761d5cad862c8a5edf8a6e766f96f4a"
   },
   "source_paths": [
+    "plugins/desk/mcp/src/indexer/discover.js",
     "plugins/desk/mcp/src/indexer/index.js",
     "plugins/desk/mcp/src/indexer/vector-packs.js",
     "plugins/desk/mcp/src/snapshots/manifest.js",
