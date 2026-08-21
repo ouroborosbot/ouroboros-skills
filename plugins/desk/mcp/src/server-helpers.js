@@ -100,6 +100,12 @@ export async function ensureIndex(deskRoot, opts = {}) {
           semanticBefore,
         )
         if (repair) return withSnapshot(repair, snapshot)
+        if (
+          semanticBefore.missing_vectors > 0 &&
+          semanticBefore.repairable_missing_vectors === 0
+        ) {
+          semanticBefore.embedding_available = true
+        }
         if (snapshot?.restored) {
           await markRestoredSnapshotFresh(deskRoot, db, effectiveOpts.signal)
           return withSnapshot(

@@ -987,7 +987,7 @@ test("ensureIndex preserves probe diagnostics when repair records a known unembe
   assert.equal(ensured.semantic.embedding_diagnostic.reason, "ok")
 })
 
-test("ensureIndex treats stale known-unembeddable-only coverage as semantically available", async () => {
+test("ensureIndex treats exact known-unembeddable-only coverage as fresh and semantically available", async () => {
   const deskRoot = await tmpRoot()
   const docPath = "trackA/task-oversize/task.md"
   const body = "---\nstatus: processing\n---\nstale known oversize body"
@@ -1018,10 +1018,9 @@ test("ensureIndex treats stale known-unembeddable-only coverage as semantically 
     },
   })
 
-  assert.equal(ensured.built, true)
-  assert.equal(ensured.reason, "stale")
-  assert.equal(ensured.summary.docs_skipped, 1)
-  assert.equal(ensured.summary.semantic_warnings, 0)
+  assert.equal(ensured.built, false)
+  assert.equal(ensured.reason, "fresh")
+  assert.equal(ensured.summary, undefined)
   assert.equal(ensured.semantic.missing_vectors, 1)
   assert.equal(ensured.semantic.known_unembeddable_vectors, 1)
   assert.equal(ensured.semantic.repairable_missing_vectors, 0)
@@ -1062,7 +1061,7 @@ test("ensureIndex preserves successful probe diagnostics after live embedding re
   assert.equal(ensured.semantic.embedding_diagnostic.reason, "ok")
 })
 
-test("ensureIndex preserves failed probe diagnostics when stale content is skipped", async () => {
+test("ensureIndex preserves failed probe diagnostics when exact content is fresh", async () => {
   const deskRoot = await tmpRoot()
   const docPath = "trackA/task-1/task.md"
   const body = "---\nstatus: processing\n---\nstale same-hash body"
@@ -1085,10 +1084,9 @@ test("ensureIndex preserves failed probe diagnostics when stale content is skipp
     },
   })
   assert.equal(calls, 1)
-  assert.equal(ensured.built, true)
-  assert.equal(ensured.reason, "stale")
-  assert.equal(ensured.summary.semantic_warnings, 0)
-  assert.equal(ensured.summary.docs_skipped, 1)
+  assert.equal(ensured.built, false)
+  assert.equal(ensured.reason, "fresh")
+  assert.equal(ensured.summary, undefined)
   assert.equal(ensured.semantic.missing_vectors, 1)
   assert.equal(ensured.semantic.embedding_available, false)
   assert.equal(ensured.semantic.embedding_diagnostic.reason, "network_error")
