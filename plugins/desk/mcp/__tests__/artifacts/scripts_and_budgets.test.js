@@ -298,6 +298,10 @@ function assertArtifactTreeUnchanged(pluginRoot, before) {
 function writeBudgetConfig(file, overrides = {}) {
   const base = {
     schema_version: 1,
+    search: {
+      semantic_repair_batch_chunks: 100,
+      semantic_repair_batch_ms: 5000,
+    },
     startup: {
       ensure_index_ms: 250,
       snapshot_restore_ms: 250,
@@ -317,6 +321,7 @@ function writeBudgetConfig(file, overrides = {}) {
     `${JSON.stringify({
       ...base,
       ...overrides,
+      search: { ...base.search, ...overrides.search },
       startup: { ...base.startup, ...overrides.startup },
       rebuild: { ...base.rebuild, ...overrides.rebuild },
       artifacts: { ...base.artifacts, ...overrides.artifacts },
@@ -806,11 +811,21 @@ test("artifact builders compare against the tombstone-filtered live tree", async
   }
 })
 
-test("performance budget config declares startup, rebuild, and artifact thresholds", () => {
+test("performance budget config declares search, startup, rebuild, and artifact thresholds", () => {
   assert.equal(existsSync(performanceBudgetsPath), true)
   const budgets = loadJson(performanceBudgetsPath)
 
   assert.equal(budgets.schema_version, 1)
+  assertPositiveIntegerBudget(
+    budgets.search?.semantic_repair_batch_chunks,
+    "search.semantic_repair_batch_chunks",
+  )
+  assert.equal(budgets.search.semantic_repair_batch_chunks, 100)
+  assertPositiveIntegerBudget(
+    budgets.search?.semantic_repair_batch_ms,
+    "search.semantic_repair_batch_ms",
+  )
+  assert.equal(budgets.search.semantic_repair_batch_ms, 5000)
   assertPositiveIntegerBudget(budgets.startup?.ensure_index_ms, "startup.ensure_index_ms")
   assert.equal(
     budgets.startup.ensure_index_ms,
@@ -830,6 +845,8 @@ test("performance budget loader fails closed for malformed, missing, or invalid 
   const explicitRoot = makeTempDir("desk-artifact-scripts-budget-invalid-")
   try {
     const fallback = await loadPerformanceBudgets({ mcpRoot: fallbackRoot })
+    assert.equal(fallback.search.semantic_repair_batch_chunks, 100)
+    assert.equal(fallback.search.semantic_repair_batch_ms, 5000)
     assert.equal(fallback.startup.ensure_index_ms, 250)
     fallback.startup.ensure_index_ms = 1
     assert.equal(
