@@ -287,3 +287,41 @@ test("desk_reindex — force:true on a fresh root with no DB still succeeds", as
   // No docs on disk → docs_indexed stays 0.
   assert.equal(res.docs_indexed, 0)
 })
+
+test("desk_reindex — omitted input defaults to non-force maintenance", async () => {
+  const root = await mkTempDeskRoot()
+  const calls = []
+  const maintenance = {
+    async runExplicitReindex(args) {
+      calls.push(args)
+      return {
+        built: false,
+        reason: "fresh",
+      }
+    },
+  }
+
+  const res = await desk_reindex({
+    deskRoot: root,
+    opts: { maintenance },
+  })
+
+  assert.deepEqual(calls, [
+    {
+      deskRoot: path.resolve(root),
+      force: false,
+      ensureOptions: {},
+    },
+  ])
+  assert.equal(res.status, "ok")
+  assert.equal(res.built, false)
+  assert.equal(res.reason, "fresh")
+  assert.equal(res.docs_indexed, 0)
+  assert.equal(res.docs_skipped, 0)
+  assert.equal(res.docs_pruned, 0)
+  assert.equal(res.chunks_total, 0)
+  assert.equal(res.vectors_indexed, 0)
+  assert.equal(res.missing_vectors, 0)
+  assert.equal(res.semantic_available, undefined)
+  assert.equal(res.semantic_diagnostic, undefined)
+})
