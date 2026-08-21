@@ -47,7 +47,13 @@ export function createSemanticRepairCoordinator({
 
   function status(deskRoot) {
     const root = canonicalRoot(deskRoot)
-    return statuses.get(root) ?? repairStatus("idle")
+    const current = statuses.get(root) ?? repairStatus("idle")
+    return {
+      ...current,
+      last_error: current.last_error === null
+        ? null
+        : { ...current.last_error },
+    }
   }
 
   function finish(entry, nextStatus) {
@@ -65,14 +71,8 @@ export function createSemanticRepairCoordinator({
   }
 
   function scheduleNext(entry) {
-    if (entry.settled || entry.controller.signal.aborted) {
-      finish(entry, repairStatus("idle"))
-      return
-    }
-
-    let handle
     try {
-      handle = schedule(() => {
+      const handle = schedule(() => {
         if (entry.settled || entry.controller.signal.aborted) {
           finish(entry, repairStatus("idle"))
           return undefined
@@ -91,13 +91,6 @@ export function createSemanticRepairCoordinator({
       entry.timer = handle
       handle?.unref?.()
     } catch (error) {
-      if (handle !== undefined) {
-        try {
-          clearScheduled(handle)
-        } catch {
-          // Preserve the scheduling failure as the reported error.
-        }
-      }
       entry.timer = undefined
       finish(entry, repairStatus("failed", compactError(error)))
     }
@@ -149,7 +142,7 @@ export function createSemanticRepairCoordinator({
     batchChunks = DEFAULT_BATCH_CHUNKS,
     batchMs = DEFAULT_BATCH_MS,
     ...repairOptions
-  }) {
+  } = {}) {
     const root = canonicalRoot(deskRoot)
     const existing = inFlight.get(root)
     if (existing) return existing.promise
@@ -322,9 +315,7 @@ export async function repairMissingVectorBatch({
     )
     const persistCandidateResult = database.transaction(
       (candidate, result) => {
-        if (signal?.aborted) return "cancelled"
         if (!currentRepairableCandidate.get(candidate)) return "stale"
-        if (signal?.aborted) return "cancelled"
 
         if (result.vector != null) {
           insertVector.run(
@@ -376,10 +367,6 @@ export async function repairMissingVectorBatch({
       }
 
       if (result?.vector == null) {
-        if (signal?.aborted) {
-          stoppedBy = "cancelled"
-          break
-        }
         if (!isChunkLocalEmbeddingFailure(result?.diagnostic)) {
           throw embeddingUnavailableError(result?.diagnostic)
         }
@@ -387,18 +374,10 @@ export async function repairMissingVectorBatch({
 
       // Lock writers before revalidation so reindex cannot replace the chunk between the identity check and persistence.
       const persistence = persistCandidateResult.immediate(candidate, result)
-      if (persistence === "cancelled") {
-        stoppedBy = "cancelled"
-        break
-      }
       if (persistence === "stale") continue
       processedChunks += 1
       if (persistence === "vector") vectorsIndexed += 1
 
-      if (signal?.aborted) {
-        stoppedBy = "cancelled"
-        break
-      }
       if (processedChunks >= batchChunks) {
         stoppedBy = "chunk_limit"
         break

@@ -198,6 +198,16 @@ function insertDocument(db, {
   }
 }
 
+function insertStoredVector(db, text, vector = deterministicRepairVector(1)) {
+  const chunk = db.prepare(
+    "SELECT id FROM chunks WHERE text = ?",
+  ).get(text)
+  assert.ok(chunk, `missing chunk for stored vector ${text}`)
+  db.prepare(
+    "INSERT INTO chunk_vecs (chunk_id, embedding) VALUES (?, ?)",
+  ).run(BigInt(chunk.id), new Float32Array(vector))
+}
+
 function createManualScheduler() {
   const cleared = []
   const queued = []
@@ -254,6 +264,130 @@ function createManualScheduler() {
     scheduled,
   }
 }
+
+test("semantic repair validates roots and positive batch limits", async () => {
+  const {
+    createSemanticRepairCoordinator,
+    repairMissingVectorBatch,
+  } = await loadSemanticRepair()
+  const coordinator = createSemanticRepairCoordinator()
+
+  assert.throws(() => coordinator.status(" \t"), /deskRoot is required/)
+  assert.throws(() => coordinator.start(), /deskRoot is required/)
+  assert.throws(
+    () => coordinator.start({ deskRoot: null }),
+    /deskRoot is required/,
+  )
+  await assert.rejects(
+    coordinator.cancel(undefined),
+    /deskRoot is required/,
+  )
+
+  for (const batchChunks of [0, 1.5]) {
+    await assert.rejects(
+      repairMissingVectorBatch({
+        deskRoot: path.resolve("invalid-batch-chunks"),
+        batchChunks,
+      }),
+      /batchChunks must be a positive integer/,
+    )
+  }
+  for (const batchMs of [-1, 2.5]) {
+    await assert.rejects(
+      repairMissingVectorBatch({
+        deskRoot: path.resolve("invalid-batch-ms"),
+        batchMs,
+      }),
+      /batchMs must be a positive integer/,
+    )
+  }
+  await assert.rejects(
+    repairMissingVectorBatch(),
+    /deskRoot is required/,
+  )
+})
+
+test("semantic repair default scheduling exposes isolated status snapshots and terminal cancellation", async () => {
+  const { createSemanticRepairCoordinator } = await loadSemanticRepair()
+  const root = await makeRoot("desk-semantic-repair-default-")
+  const cancelledRoot = await makeRoot(
+    "desk-semantic-repair-default-cancel-",
+  )
+  const coordinator = createSemanticRepairCoordinator()
+  const unknownRoot = path.join(root, "unknown")
+
+  try {
+    const unknown = coordinator.status(unknownRoot)
+    assert.deepEqual(unknown, {
+      state: "idle",
+      last_error: null,
+    })
+    unknown.state = "mutated"
+    assert.equal(coordinator.status(unknownRoot).state, "idle")
+    assert.deepEqual(await coordinator.cancel(unknownRoot), {
+      state: "idle",
+      last_error: null,
+      cancelled: false,
+    })
+
+    const pending = coordinator.start({ deskRoot: cancelledRoot })
+    const running = coordinator.status(cancelledRoot)
+    assert.equal(running.state, "running")
+    running.state = "mutated"
+    assert.equal(coordinator.status(cancelledRoot).state, "running")
+    assert.deepEqual(
+      await awaitBounded(
+        coordinator.cancel(cancelledRoot),
+        "default semantic repair pending cancellation did not settle",
+      ),
+      {
+        state: "idle",
+        last_error: null,
+        cancelled: true,
+      },
+    )
+    assert.deepEqual(
+      await awaitBounded(
+        pending,
+        "default semantic repair pending promise did not settle",
+      ),
+      {
+        state: "idle",
+        last_error: null,
+      },
+    )
+
+    const repair = coordinator.start({
+      deskRoot: root,
+      dbPath: path.join(root, "owned.sqlite"),
+    })
+    assert.equal(coordinator.status(root).state, "running")
+    assert.deepEqual(
+      await awaitBounded(
+        repair,
+        "default semantic repair completion did not settle",
+        { timeoutMs: TEST_SETTLEMENT_TIMEOUT_MS * 4 },
+      ),
+      {
+        state: "complete",
+        last_error: null,
+      },
+    )
+    assert.deepEqual(await fs.readdir(root), ["owned.sqlite"])
+
+    const completed = coordinator.status(root)
+    completed.state = "mutated"
+    assert.equal(coordinator.status(root).state, "complete")
+    assert.deepEqual(await coordinator.cancel(root), {
+      state: "complete",
+      last_error: null,
+      cancelled: false,
+    })
+  } finally {
+    await fs.rm(cancelledRoot, { recursive: true, force: true })
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
 
 test("semantic repair reuses one in-flight promise per root and evicts it after completion", async () => {
   const { createSemanticRepairCoordinator } = await loadSemanticRepair()
@@ -484,6 +618,104 @@ test("semantic repair schedules every batch at zero delay on an unref'ed timer",
   )
 })
 
+test("semantic repair compacts synchronous scheduling failures and preserves status snapshots", async () => {
+  const { createSemanticRepairCoordinator } = await loadSemanticRepair()
+  const root = path.resolve("desk-root-schedule-failure")
+  const error = new Error("private scheduler detail")
+  error.reason = "embedding_service_unavailable"
+  const coordinator = createSemanticRepairCoordinator({
+    schedule: () => {
+      throw error
+    },
+  })
+
+  const result = await awaitBounded(
+    coordinator.start({ deskRoot: root }),
+    "semantic repair scheduling failure did not settle",
+  )
+  assert.deepEqual(result, {
+    state: "failed",
+    last_error: {
+      reason: "embedding_service_unavailable",
+      message: "embedding endpoint unavailable",
+    },
+  })
+
+  const snapshot = coordinator.status(root)
+  snapshot.last_error.reason = "mutated"
+  assert.deepEqual(coordinator.status(root), result)
+})
+
+test("semantic repair preserves the active batch when a custom scheduler fires a reschedule synchronously", async () => {
+  const { createSemanticRepairCoordinator } = await loadSemanticRepair()
+  const root = path.resolve("desk-root-synchronous-reschedule")
+  const handles = []
+  const cleared = []
+  let calls = 0
+  let firstCallback
+  let nestedCallback
+  const schedule = (callback, delay) => {
+    const handle = {
+      delay,
+      unrefCalls: 0,
+      unref() {
+        this.unrefCalls += 1
+      },
+    }
+    handles.push(handle)
+    if (handles.length === 1) {
+      firstCallback = callback
+    } else {
+      nestedCallback = callback()
+    }
+    return handle
+  }
+  const coordinator = createSemanticRepairCoordinator({
+    repairBatch: async () => {
+      calls += 1
+      return {
+        processed_chunks: 1,
+        remaining_chunks: calls === 1 ? 1 : 0,
+      }
+    },
+    schedule,
+    clearScheduled: (handle) => {
+      cleared.push(handle)
+    },
+  })
+
+  const repair = coordinator.start({ deskRoot: root })
+  assert.equal(typeof firstCallback, "function")
+  await awaitBounded(
+    firstCallback(),
+    "semantic repair first synchronous-reschedule batch did not settle",
+  )
+  await awaitBounded(
+    nestedCallback,
+    "semantic repair nested synchronous-reschedule batch did not settle",
+  )
+  assert.deepEqual(
+    await awaitBounded(
+      repair,
+      "semantic repair synchronous-reschedule job did not settle",
+    ),
+    {
+      state: "complete",
+      last_error: null,
+    },
+  )
+  assert.equal(calls, 2)
+  assert.equal(handles.length, 2)
+  assert.deepEqual(handles.map(({ delay, unrefCalls }) => ({
+    delay,
+    unrefCalls,
+  })), [
+    { delay: 0, unrefCalls: 1 },
+    { delay: 0, unrefCalls: 1 },
+  ])
+  assert.deepEqual(cleared, [handles[1]])
+})
+
 test("semantic repair fails after a custom batch makes no progress", async () => {
   const { createSemanticRepairCoordinator } = await loadSemanticRepair()
   const scheduler = createManualScheduler()
@@ -602,6 +834,56 @@ test("semantic repair redacts private error details from status", async () => {
   assert.equal(serialized.includes("strategy.md"), false)
   assert.equal(serialized.includes(privatePath), false)
   assert.equal(serialized.includes("at /Users"), false)
+})
+
+test("semantic repair treats an active custom batch rejection after abort as cancellation", async () => {
+  const { createSemanticRepairCoordinator } = await loadSemanticRepair()
+  const scheduler = createManualScheduler()
+  const root = path.resolve("desk-root-active-rejection-cancellation")
+  let markStarted
+  const started = new Promise((resolve) => {
+    markStarted = resolve
+  })
+  const coordinator = createSemanticRepairCoordinator({
+    repairBatch: ({ signal }) => new Promise((_resolve, reject) => {
+      markStarted()
+      signal.addEventListener("abort", () => {
+        reject(new Error("private aborted batch detail"))
+      }, { once: true })
+    }),
+    schedule: scheduler.schedule,
+    clearScheduled: scheduler.clearScheduled,
+  })
+
+  const repair = coordinator.start({ deskRoot: root })
+  const activeBatch = scheduler.runNext()
+  await awaitBounded(
+    started,
+    "semantic repair active rejecting batch did not start",
+  )
+  assert.deepEqual(
+    await awaitBounded(
+      coordinator.cancel(root),
+      "semantic repair active rejecting batch cancellation did not settle",
+    ),
+    {
+      state: "idle",
+      last_error: null,
+      cancelled: true,
+    },
+  )
+  await awaitBounded(
+    activeBatch,
+    "semantic repair active rejecting scheduler callback did not settle",
+  )
+  assert.deepEqual(await repair, {
+    state: "idle",
+    last_error: null,
+  })
+  assert.deepEqual(coordinator.status(root), {
+    state: "idle",
+    last_error: null,
+  })
 })
 
 test("semantic repair cancellation settles across the reschedule cleanup boundary", async () => {
@@ -1036,6 +1318,53 @@ test("semantic repair discards a pending vector resolved after cancellation", as
   }
 })
 
+test("semantic repair leaves a changed-only stale batch resumable at the chunk limit", async () => {
+  const { repairMissingVectorBatch } = await loadSemanticRepair()
+  const root = await makeRoot()
+  const db = openDb(root)
+  try {
+    insertDocument(db, {
+      documentPath: "active/reference.md",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      texts: ["stale-chunk"],
+    })
+
+    const result = await repairMissingVectorBatch({
+      db,
+      deskRoot: root,
+      batchChunks: 1,
+      embedChunkDetailed: async (text) => {
+        assert.equal(text, "stale-chunk")
+        db.prepare(
+          `UPDATE chunks
+           SET text = 'replacement-chunk',
+               text_hash = 'text-hash:active/reference.md:replacement'
+           WHERE text = 'stale-chunk'`,
+        ).run()
+        return {
+          vector: deterministicRepairVector(504),
+          available: true,
+          diagnostic: null,
+        }
+      },
+    })
+
+    assert.deepEqual(result, {
+      processed_chunks: 0,
+      vectors_indexed: 0,
+      remaining_chunks: 1,
+      stopped_by: "chunk_limit",
+    })
+    assert.equal(
+      db.prepare("SELECT COUNT(*) AS count FROM chunk_vecs").get().count,
+      0,
+    )
+  } finally {
+    closeDb(db)
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
 test("semantic repair discards a pending vector for a concurrently replaced chunk", async () => {
   const { repairMissingVectorBatch } = await loadSemanticRepair()
   const root = await makeRoot()
@@ -1043,6 +1372,8 @@ test("semantic repair discards a pending vector for a concurrently replaced chun
   const writerDb = openDb(root)
   const staleVector = deterministicRepairVector(505)
   const replacementVector = deterministicRepairVector(506)
+  const nextVector = deterministicRepairVector(507)
+  let nowCalls = 0
   let markEmbeddingStarted
   let resolveEmbedding
   const embeddingStarted = new Promise((resolve) => {
@@ -1053,7 +1384,7 @@ test("semantic repair discards a pending vector for a concurrently replaced chun
     insertDocument(db, {
       documentPath: "active/reference.md",
       updatedAt: "2026-01-01T00:00:00.000Z",
-      texts: ["stale-chunk"],
+      texts: ["stale-chunk", "next-chunk"],
     })
     const stale = db.prepare(
       `SELECT
@@ -1068,8 +1399,12 @@ test("semantic repair discards a pending vector for a concurrently replaced chun
     const pendingBatch = repairMissingVectorBatch({
       db,
       deskRoot: root,
-      batchChunks: 1,
+      batchChunks: 2,
       batchMs: 5000,
+      now: () => {
+        nowCalls += 1
+        return nowCalls === 1 ? 0 : 5000
+      },
       embedChunkDetailed: (text) => {
         assert.equal(text, "stale-chunk")
         markEmbeddingStarted()
@@ -1143,29 +1478,33 @@ test("semantic repair discards a pending vector for a concurrently replaced chun
     assert.deepEqual(first, {
       processed_chunks: 0,
       vectors_indexed: 0,
-      remaining_chunks: 1,
-      stopped_by: "chunk_limit",
+      remaining_chunks: 2,
+      stopped_by: "time_limit",
     })
     assert.deepEqual(
       db.prepare(
         `SELECT c.text
          FROM chunks c
          LEFT JOIN chunk_vecs v ON v.chunk_id = c.id
-         WHERE v.chunk_id IS NULL`,
+         WHERE v.chunk_id IS NULL
+         ORDER BY c.chunk_index`,
       ).all().map(({ text }) => text),
-      ["replacement-chunk"],
+      ["replacement-chunk", "next-chunk"],
     )
 
+    const resumed = []
     const second = await awaitBounded(
       repairMissingVectorBatch({
         db,
         deskRoot: root,
-        batchChunks: 1,
+        batchChunks: 2,
         batchMs: 5000,
         embedChunkDetailed: async (text) => {
-          assert.equal(text, "replacement-chunk")
+          resumed.push(text)
           return {
-            vector: replacementVector,
+            vector: text === "replacement-chunk"
+              ? replacementVector
+              : nextVector,
             available: true,
             diagnostic: null,
           }
@@ -1175,12 +1514,14 @@ test("semantic repair discards a pending vector for a concurrently replaced chun
     )
 
     assert.deepEqual(second, {
-      processed_chunks: 1,
-      vectors_indexed: 1,
+      processed_chunks: 2,
+      vectors_indexed: 2,
       remaining_chunks: 0,
       stopped_by: "complete",
     })
+    assert.deepEqual(resumed, ["replacement-chunk", "next-chunk"])
     assertStoredVector(db, "replacement-chunk", replacementVector)
+    assertStoredVector(db, "next-chunk", nextVector)
     assert.equal(
       db.prepare(
         `SELECT COUNT(*) AS count
@@ -1259,6 +1600,11 @@ test("semantic repair cancellation clears a pending batch without running repair
     assert.deepEqual(scheduler.cleared, [pendingBatch.handle])
     assert.equal((await repairSettled).state, "idle")
     assert.equal(coordinator.status(root).state, "idle")
+    assert.equal(
+      await pendingBatch.callback(),
+      undefined,
+      "a late queued callback must remain inert after cancellation",
+    )
 
     await bound(
       scheduler.drain(),
@@ -1395,6 +1741,367 @@ test("semantic repair batch cancellation persists completed work and resumes the
   } finally {
     closeDb(db)
     await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
+test("semantic repair returns a cancelled zero-work batch for an already-aborted signal", async () => {
+  const { repairMissingVectorBatch } = await loadSemanticRepair()
+  const root = await makeRoot()
+  const db = openDb(root)
+  const controller = new AbortController()
+  let embedCalls = 0
+  try {
+    insertDocument(db, {
+      documentPath: "active/reference.md",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      texts: ["chunk-0"],
+    })
+    controller.abort()
+
+    const result = await repairMissingVectorBatch({
+      db,
+      deskRoot: root,
+      signal: controller.signal,
+      embedChunkDetailed: async () => {
+        embedCalls += 1
+        return {
+          vector: deterministicRepairVector(1),
+          available: true,
+          diagnostic: null,
+        }
+      },
+    })
+
+    assert.deepEqual(result, {
+      processed_chunks: 0,
+      vectors_indexed: 0,
+      remaining_chunks: 1,
+      stopped_by: "cancelled",
+      cancelled: true,
+    })
+    assert.equal(embedCalls, 0)
+  } finally {
+    closeDb(db)
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
+test("semantic repair closes owned databases after zero-work success and embedding errors", async () => {
+  const { repairMissingVectorBatch } = await loadSemanticRepair()
+  const emptyRoot = await makeRoot("desk-semantic-repair-owned-empty-")
+  const errorRoot = await makeRoot("desk-semantic-repair-owned-error-")
+  const emptyDbPath = path.join(emptyRoot, "owned.sqlite")
+  const errorDbPath = path.join(errorRoot, "owned.sqlite")
+  const expectedError = new Error("private embedding failure")
+
+  try {
+    assert.deepEqual(
+      await repairMissingVectorBatch({
+        deskRoot: emptyRoot,
+        dbPath: emptyDbPath,
+      }),
+      {
+        processed_chunks: 0,
+        vectors_indexed: 0,
+        remaining_chunks: 0,
+        stopped_by: "complete",
+      },
+    )
+    assert.deepEqual(await fs.readdir(emptyRoot), ["owned.sqlite"])
+
+    const seedDb = openDb(errorRoot, { dbPath: errorDbPath })
+    try {
+      insertDocument(seedDb, {
+        documentPath: "active/reference.md",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        texts: ["chunk-0"],
+      })
+    } finally {
+      closeDb(seedDb)
+    }
+
+    await assert.rejects(
+      repairMissingVectorBatch({
+        deskRoot: errorRoot,
+        dbPath: errorDbPath,
+        embedChunkDetailed: async () => {
+          throw expectedError
+        },
+      }),
+      (error) => error === expectedError,
+    )
+    assert.deepEqual(await fs.readdir(errorRoot), ["owned.sqlite"])
+  } finally {
+    await fs.rm(errorRoot, { recursive: true, force: true })
+    await fs.rm(emptyRoot, { recursive: true, force: true })
+  }
+})
+
+test("semantic repair treats an already-covered database as complete without embedding", async () => {
+  const { repairMissingVectorBatch } = await loadSemanticRepair()
+  const root = await makeRoot()
+  const db = openDb(root)
+  let embedCalls = 0
+  try {
+    insertDocument(db, {
+      documentPath: "active/reference.md",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      texts: ["covered-chunk"],
+    })
+    insertStoredVector(
+      db,
+      "covered-chunk",
+      deterministicRepairVector(601),
+    )
+
+    assert.deepEqual(
+      await repairMissingVectorBatch({
+        db,
+        deskRoot: root,
+        embedChunkDetailed: async () => {
+          embedCalls += 1
+          throw new Error("covered chunks must not be re-embedded")
+        },
+      }),
+      {
+        processed_chunks: 0,
+        vectors_indexed: 0,
+        remaining_chunks: 0,
+        stopped_by: "complete",
+      },
+    )
+    assert.equal(embedCalls, 0)
+    assertStoredVector(
+      db,
+      "covered-chunk",
+      deterministicRepairVector(601),
+    )
+  } finally {
+    closeDb(db)
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
+test("semantic repair tombstones chunk-local failures and retries changed failure identities", async () => {
+  const { repairMissingVectorBatch } = await loadSemanticRepair()
+  const root = await makeRoot()
+  const db = openDb(root)
+  const healthyVector = deterministicRepairVector(701)
+  const revisedVector = deterministicRepairVector(702)
+  const oversizeDiagnostic = {
+    endpoint: "http://127.0.0.1:11434/api/embeddings",
+    model: "nomic-embed-text",
+    reason: "http_400",
+    message: "the input length exceeds the context length",
+  }
+  const firstSeen = []
+  try {
+    insertDocument(db, {
+      documentPath: "active/reference.md",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      texts: ["oversize-chunk", "healthy-chunk"],
+    })
+
+    const first = await repairMissingVectorBatch({
+      db,
+      deskRoot: root,
+      embedChunkDetailed: async (text) => {
+        firstSeen.push(text)
+        if (text === "oversize-chunk") {
+          return {
+            vector: null,
+            available: true,
+            diagnostic: oversizeDiagnostic,
+          }
+        }
+        return {
+          vector: healthyVector,
+          available: true,
+          diagnostic: null,
+        }
+      },
+    })
+
+    assert.deepEqual(firstSeen, ["oversize-chunk", "healthy-chunk"])
+    assert.deepEqual(first, {
+      processed_chunks: 2,
+      vectors_indexed: 1,
+      remaining_chunks: 0,
+      stopped_by: "complete",
+    })
+    assertStoredVector(db, "healthy-chunk", healthyVector)
+    assert.deepEqual(
+      db.prepare(
+        `SELECT
+           chunk_key,
+           text_hash,
+           reason,
+           message
+         FROM chunk_embedding_failures`,
+      ).all(),
+      [{
+        chunk_key: "active/reference.md:0",
+        text_hash: "text-hash:active/reference.md:0",
+        reason: oversizeDiagnostic.reason,
+        message: oversizeDiagnostic.message,
+      }],
+    )
+
+    let repeatedCalls = 0
+    assert.deepEqual(
+      await repairMissingVectorBatch({
+        db,
+        deskRoot: root,
+        embedChunkDetailed: async () => {
+          repeatedCalls += 1
+          throw new Error("known chunk-local failures must stay tombstoned")
+        },
+      }),
+      {
+        processed_chunks: 0,
+        vectors_indexed: 0,
+        remaining_chunks: 0,
+        stopped_by: "complete",
+      },
+    )
+    assert.equal(repeatedCalls, 0)
+
+    db.prepare(
+      `UPDATE chunks
+       SET text = 'revised-chunk',
+           text_hash = 'text-hash:active/reference.md:revised'
+       WHERE text = 'oversize-chunk'`,
+    ).run()
+
+    assert.deepEqual(
+      await repairMissingVectorBatch({
+        db,
+        deskRoot: root,
+        embedChunkDetailed: async (text) => {
+          assert.equal(text, "revised-chunk")
+          return {
+            vector: revisedVector,
+            available: true,
+            diagnostic: null,
+          }
+        },
+      }),
+      {
+        processed_chunks: 1,
+        vectors_indexed: 1,
+        remaining_chunks: 0,
+        stopped_by: "complete",
+      },
+    )
+    assertStoredVector(db, "revised-chunk", revisedVector)
+    assert.equal(
+      db.prepare(
+        "SELECT COUNT(*) AS count FROM chunk_embedding_failures",
+      ).get().count,
+      1,
+    )
+  } finally {
+    closeDb(db)
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
+test("semantic repair rejects service-level and malformed embedding results without tombstones", async (t) => {
+  const { repairMissingVectorBatch } = await loadSemanticRepair()
+  const cases = [
+    {
+      name: "unavailable service",
+      expectedCode: "network_error",
+      expectedMessage: "Ollama is unavailable",
+      options: {
+        embed: {
+          endpoint: "http://127.0.0.1:11434/api/embeddings",
+          fetch: async () => {
+            throw new Error("Ollama is unavailable")
+          },
+        },
+      },
+    },
+    {
+      name: "wrong vector dimension",
+      expectedCode: "invalid_embedding",
+      expectedMessage: "expected 768 dimensions, got 1",
+      options: {
+        embed: {
+          endpoint: "http://127.0.0.1:11434/api/embeddings",
+          fetch: async () => ({
+            ok: true,
+            json: async () => ({ embedding: [1] }),
+          }),
+        },
+      },
+    },
+    {
+      name: "wrong vector shape",
+      expectedCode: "invalid_embedding",
+      expectedMessage: "expected 768 dimensions, got none",
+      options: {
+        embed: {
+          endpoint: "http://127.0.0.1:11434/api/embeddings",
+          fetch: async () => ({
+            ok: true,
+            json: async () => ({ embedding: "not-an-array" }),
+          }),
+        },
+      },
+    },
+    {
+      name: "missing diagnostic",
+      expectedCode: "semantic_unavailable",
+      expectedMessage: "semantic embedding is unavailable",
+      options: {
+        embedChunkDetailed: async () => ({
+          vector: null,
+          available: false,
+          diagnostic: {},
+        }),
+      },
+    },
+  ]
+
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      const root = await makeRoot()
+      const db = openDb(root)
+      try {
+        insertDocument(db, {
+          documentPath: "active/reference.md",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          texts: ["chunk-0"],
+        })
+
+        await assert.rejects(
+          repairMissingVectorBatch({
+            db,
+            deskRoot: root,
+            ...testCase.options,
+          }),
+          (error) => {
+            assert.equal(error.code, testCase.expectedCode)
+            assert.equal(error.message, testCase.expectedMessage)
+            return true
+          },
+        )
+        assert.equal(
+          db.prepare("SELECT COUNT(*) AS count FROM chunk_vecs").get().count,
+          0,
+        )
+        assert.equal(
+          db.prepare(
+            "SELECT COUNT(*) AS count FROM chunk_embedding_failures",
+          ).get().count,
+          0,
+        )
+      } finally {
+        closeDb(db)
+        await fs.rm(root, { recursive: true, force: true })
+      }
+    })
   }
 })
 
