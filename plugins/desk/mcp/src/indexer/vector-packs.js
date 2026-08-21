@@ -317,7 +317,6 @@ function representedDocumentsAreCurrent(
   expectedDocuments,
   { requireRepresentedDocument = false } = {},
 ) {
-  if (!Array.isArray(representedDocuments)) return false
   if (!Array.isArray(expectedDocuments)) return false
   if (requireRepresentedDocument && representedDocuments.length === 0) {
     return false
