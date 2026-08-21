@@ -79,6 +79,7 @@ function insertDocument(db, {
 }
 
 function createManualScheduler() {
+  const cleared = []
   const queued = []
   const scheduled = []
   const schedule = (callback, delay) => {
@@ -96,6 +97,7 @@ function createManualScheduler() {
   }
   const clearScheduled = (handle) => {
     handle.cancelled = true
+    cleared.push(handle)
   }
   const runNext = async () => {
     const entry = queued.shift()
@@ -112,6 +114,7 @@ function createManualScheduler() {
   }
   return {
     clearScheduled,
+    cleared,
     drain,
     queued,
     runNext,
@@ -277,6 +280,8 @@ test("semantic repair cancellation aborts the active batch and permits a later r
   const { createSemanticRepairCoordinator } = await loadSemanticRepair()
   const scheduler = createManualScheduler()
   let calls = 0
+  let abortCleanupFinished = false
+  let activeBatchSettled = false
   let batchStarted
   const started = new Promise((resolve) => {
     batchStarted = resolve
@@ -291,11 +296,16 @@ test("semantic repair cancellation aborts the active batch and permits a later r
         batchStarted()
         signal.addEventListener(
           "abort",
-          () => resolve({
-            processed_chunks: 0,
-            remaining_chunks: 1,
-            cancelled: true,
-          }),
+          () => {
+            setImmediate(() => {
+              abortCleanupFinished = true
+              resolve({
+                processed_chunks: 0,
+                remaining_chunks: 1,
+                cancelled: true,
+              })
+            })
+          },
           { once: true },
         )
       })
@@ -303,21 +313,61 @@ test("semantic repair cancellation aborts the active batch and permits a later r
     schedule: scheduler.schedule,
     clearScheduled: scheduler.clearScheduled,
   })
+  const root = path.resolve("/tmp/desk-root")
 
-  const first = coordinator.start({ deskRoot: "/tmp/desk-root" })
-  const activeBatch = scheduler.runNext()
+  const first = coordinator.start({ deskRoot: root })
+  const activeBatch = scheduler.runNext().finally(() => {
+    activeBatchSettled = true
+  })
   await started
-  const cancelled = coordinator.cancel("/tmp/desk-root")
+  const cancelled = await coordinator.cancel(root)
+  assert.equal(abortCleanupFinished, true)
+  assert.equal(activeBatchSettled, true)
+  assert.equal(cancelled.cancelled, true)
+  assert.equal(scheduler.queued.length, 0)
+  assert.equal(scheduler.scheduled.length, 1)
   await activeBatch
-  assert.equal((await cancelled).cancelled, true)
   assert.equal((await first).state, "idle")
-  assert.equal(coordinator.status("/tmp/desk-root").state, "idle")
+  assert.equal(coordinator.status(root).state, "idle")
 
-  const retry = coordinator.start({ deskRoot: "/tmp/desk-root" })
+  const retry = coordinator.start({ deskRoot: root })
   assert.notStrictEqual(retry, first)
   await scheduler.drain()
   assert.equal((await retry).state, "complete")
   assert.equal(calls, 2)
+})
+
+test("semantic repair cancellation clears a pending batch without running repair work", async () => {
+  const { createSemanticRepairCoordinator } = await loadSemanticRepair()
+  const scheduler = createManualScheduler()
+  let calls = 0
+  const coordinator = createSemanticRepairCoordinator({
+    repairBatch: async () => {
+      calls += 1
+      return { processed_chunks: 1, remaining_chunks: 0 }
+    },
+    schedule: scheduler.schedule,
+    clearScheduled: scheduler.clearScheduled,
+  })
+  const root = path.resolve("/tmp/desk-root")
+
+  const repair = coordinator.start({ deskRoot: root })
+  const pendingBatch = scheduler.queued[0]
+  assert.ok(pendingBatch)
+  assert.equal(scheduler.scheduled.length, 1)
+
+  const cancelled = await coordinator.cancel(root)
+  assert.equal(cancelled.cancelled, true)
+  assert.equal(pendingBatch.handle.cancelled, true)
+  assert.deepEqual(scheduler.cleared, [pendingBatch.handle])
+  assert.equal((await repair).state, "idle")
+  assert.equal(coordinator.status(root).state, "idle")
+
+  await scheduler.drain()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(calls, 0)
+  assert.equal(scheduler.queued.length, 0)
+  assert.equal(scheduler.scheduled.length, 1)
 })
 
 test("a new coordinator resumes persisted missing work after process interruption", async () => {

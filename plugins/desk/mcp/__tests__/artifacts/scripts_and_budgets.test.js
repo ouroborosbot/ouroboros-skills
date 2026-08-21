@@ -880,25 +880,84 @@ test("performance budget loader fails closed for malformed, missing, or invalid 
         /valid JSON/u.test(error.message),
     )
 
-    const missingSearch = performanceBudgetConfig()
-    delete missingSearch.search
-    for (const [body, expectedDiagnostic] of [
-      [null, "performance budget config must be an object"],
-      [{ schema_version: 2 }, "performance budget config schema_version must be 1"],
-      [missingSearch, "performance budget search must be an object"],
+    const validNonSearchBudgetSections = {
+      startup: {
+        ensure_index_ms: 250,
+        snapshot_restore_ms: 250,
+        vector_pack_import_ms: 250,
+      },
+      rebuild: {
+        vector_pack_rebuild_ms: 1000,
+        snapshot_build_ms: 1000,
+      },
+      artifacts: {
+        snapshot_verify_ms: 1000,
+        validate_ms: 1000,
+      },
+    }
+    for (const [caseName, body, expectedDiagnostic] of [
+      ["not-object", null, "performance budget config must be an object"],
       [
+        "schema-version",
+        { schema_version: 2 },
+        "performance budget config schema_version must be 1",
+      ],
+      [
+        "missing-search",
+        {
+          schema_version: 1,
+          ...validNonSearchBudgetSections,
+        },
+        "performance budget search must be an object",
+      ],
+      [
+        "missing-semantic-repair-batch-chunks",
+        {
+          schema_version: 1,
+          search: { semantic_repair_batch_ms: 5000 },
+          ...validNonSearchBudgetSections,
+        },
+        "performance budget search.semantic_repair_batch_chunks must be a positive integer",
+      ],
+      [
+        "missing-semantic-repair-batch-ms",
+        {
+          schema_version: 1,
+          search: { semantic_repair_batch_chunks: 100 },
+          ...validNonSearchBudgetSections,
+        },
+        "performance budget search.semantic_repair_batch_ms must be a positive integer",
+      ],
+      [
+        "zero-semantic-repair-batch-chunks",
         performanceBudgetConfig({
           search: { semantic_repair_batch_chunks: 0 },
         }),
         "performance budget search.semantic_repair_batch_chunks must be a positive integer",
       ],
       [
+        "fractional-semantic-repair-batch-chunks",
+        performanceBudgetConfig({
+          search: { semantic_repair_batch_chunks: 1.5 },
+        }),
+        "performance budget search.semantic_repair_batch_chunks must be a positive integer",
+      ],
+      [
+        "zero-semantic-repair-batch-ms",
+        performanceBudgetConfig({
+          search: { semantic_repair_batch_ms: 0 },
+        }),
+        "performance budget search.semantic_repair_batch_ms must be a positive integer",
+      ],
+      [
+        "fractional-semantic-repair-batch-ms",
         performanceBudgetConfig({
           search: { semantic_repair_batch_ms: 1.5 },
         }),
         "performance budget search.semantic_repair_batch_ms must be a positive integer",
       ],
       [
+        "startup-section",
         {
           ...performanceBudgetConfig(),
           startup: [],
@@ -906,18 +965,22 @@ test("performance budget loader fails closed for malformed, missing, or invalid 
         "performance budget startup must be an object",
       ],
       [
+        "startup-ensure-index",
         performanceBudgetConfig({
           startup: { ensure_index_ms: -1, snapshot_restore_ms: 1, vector_pack_import_ms: 1 },
         }),
         "performance budget startup.ensure_index_ms must be a non-negative integer",
       ],
     ]) {
-      const config = path.join(explicitRoot, `invalid-${expectedDiagnostic.split(" ").at(-1)}.json`)
+      const config = path.join(explicitRoot, `invalid-${caseName}.json`)
       writeFileSync(config, `${JSON.stringify(body)}\n`, "utf8")
       await assert.rejects(
         () => loadPerformanceBudgets({ configPath: config, mcpRoot: explicitRoot }),
-        (error) => error.code === "performance_budget_config_invalid" &&
-          error.diagnostics.includes(expectedDiagnostic),
+        (error) => {
+          assert.equal(error.code, "performance_budget_config_invalid")
+          assert.deepEqual(error.diagnostics, [expectedDiagnostic])
+          return true
+        },
       )
     }
 
