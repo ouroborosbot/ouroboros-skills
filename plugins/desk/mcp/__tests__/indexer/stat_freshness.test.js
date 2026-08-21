@@ -10,7 +10,6 @@ import {
   fileStatOrNull,
   isIndexFresh,
   rebuildIndex,
-  requiredStatInventoryHash,
 } from "../../src/indexer/index.js"
 import { ensureIndex } from "../../src/server-helpers.js"
 
@@ -81,6 +80,30 @@ test("warm no-op freshness performs zero Markdown body reads", async () => {
     const check = await captureMarkdownReads(root, () => isIndexFresh(root, db))
     assert.equal(check.value, true)
     assert.deepEqual(check.reads, [])
+  } finally {
+    closeDb(db)
+  }
+})
+
+test("literal backslash filenames do not collide with nested paths on POSIX", async (t) => {
+  if (path.sep !== "/") {
+    t.skip("POSIX-only filename case")
+    return
+  }
+  const root = await mkRoot()
+  const literalPath = "trackA\\task-1\\task.md"
+  const nestedPath = "trackA/task-1/task.md"
+  await writeFile(root, literalPath, "literal backslash body")
+  await writeFile(root, nestedPath, "nested path body")
+
+  await rebuildIndex(root, indexOpts)
+  const db = openDb(root)
+  try {
+    assert.deepEqual(
+      db.prepare("SELECT path FROM docs ORDER BY path").all(),
+      [{ path: nestedPath }, { path: literalPath }],
+    )
+    assert.equal(await isIndexFresh(root, db), true)
   } finally {
     closeDb(db)
   }
@@ -303,6 +326,89 @@ test("unstable stat inventories degrade to exact freshness without throwing", as
   assert.ok(second.reads.includes("references/context.md"))
 })
 
+test("readable documents survive transient absence from stat inventory", async (t) => {
+  const root = await mkRoot()
+  const docPath = await writeFile(root, "references/context.md", "context body")
+  await rebuildIndex(root, indexOpts)
+  const stat = fs.stat.bind(fs)
+  let calls = 0
+  t.mock.method(fs, "stat", async (file, ...args) => {
+    if (file !== docPath) return stat(file, ...args)
+    calls += 1
+    if (calls === 1 || calls === 4 || calls === 7) {
+      const error = new Error("transient metadata race")
+      error.code = "EACCES"
+      throw error
+    }
+    return stat(file, ...args)
+  })
+
+  const summary = await rebuildIndex(root, indexOpts)
+  assert.equal(summary.docs_removed, 0)
+  assert.equal(summary.docs_skipped, 1)
+
+  const db = openDb(root)
+  try {
+    assert.deepEqual(
+      db.prepare("SELECT path FROM docs").all(),
+      [{ path: "references/context.md" }],
+    )
+    assert.equal(getMeta(db, "document_stat_inventory_hash"), null)
+  } finally {
+    closeDb(db)
+  }
+})
+
+test("unstable rebuilds still purge tombstoned and disk-deleted documents", async (t) => {
+  const root = await mkRoot()
+  const pluginRoot = await mkRoot("desk-stat-unstable-purge-")
+  const writerPath = await writeFile(root, "references/writer.md", "writer body")
+  await writeFile(root, "references/redacted.md", "redacted body")
+  const deletedPath = await writeFile(root, "references/deleted.md", "deleted body")
+  await rebuildIndex(root, indexOpts)
+  const redactedDoc = (await discover(root))
+    .find((doc) => doc.path === "references/redacted.md")
+  await writeTombstone(pluginRoot, redactedDoc)
+  await fs.unlink(deletedPath)
+
+  const stat = fs.stat.bind(fs)
+  let calls = 0
+  const generations = [1, 1, 1, 2, 2, 2, 3]
+  t.mock.method(fs, "stat", async (file, ...args) => {
+    const value = await stat(file, ...args)
+    if (file !== writerPath) return value
+    const generation = generations[calls % generations.length]
+    calls += 1
+    return {
+      dev: value.dev,
+      ino: value.ino,
+      size: value.size,
+      mtimeMs: value.mtimeMs + generation,
+      ctimeMs: value.ctimeMs + generation,
+    }
+  })
+
+  const result = await ensureIndex(root, {
+    ...indexOpts,
+    tombstones: { pluginRoot },
+  })
+  assert.equal(result.built, true)
+  assert.equal(result.reason, "stale")
+  assert.equal(result.summary.docs_removed, 2)
+  assert.equal(result.summary.docs_tombstoned, 1)
+
+  const db = openDb(root)
+  try {
+    assert.deepEqual(
+      db.prepare("SELECT path FROM docs ORDER BY path").all(),
+      [{ path: "references/writer.md" }],
+    )
+    assert.equal(getMeta(db, "document_stat_inventory_hash"), null)
+  } finally {
+    closeDb(db)
+  }
+})
+
 test("ignored Markdown stat drift does not invalidate a warm index", async () => {
   const root = await mkRoot()
   await writeFile(root, ".gitignore", "_secrets/\n")
@@ -458,12 +564,7 @@ test("freshness metadata remains parseable after stat-only checks", async () => 
   }
 })
 
-test("freshness fingerprint helpers fail explicitly for invalid internal state", async (t) => {
-  assert.throws(
-    () => requiredStatInventoryHash([{ path: "invalid.md", mtime: 1 }]),
-    /document stat inventory requires unique path\/stat entries/u,
-  )
-
+test("storage fingerprint errors remain explicit", async (t) => {
   t.mock.method(fs, "stat", async () => {
     const error = new Error("blocked")
     error.code = "EACCES"

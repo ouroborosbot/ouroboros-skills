@@ -496,7 +496,7 @@ test("isIndexedDocumentTreeCurrent rejects count, path, and hash drift", async (
   }
 })
 
-test("isIndexedDocumentTreeCurrent is ordering-independent and path-portable", async () => {
+test("isIndexedDocumentTreeCurrent stores portable document separators", async () => {
   const root = await mkRoot()
   await w(root, "README.md", "root document")
   await w(root, "_meta/friction.md", "metadata document")
@@ -504,10 +504,10 @@ test("isIndexedDocumentTreeCurrent is ordering-independent and path-portable", a
   const db = openDb(root)
   try {
     assert.equal(await isIndexedDocumentTreeCurrent(root, db), true)
-    db.prepare(
-      "UPDATE docs SET path = REPLACE(path, '/', '\\') WHERE path LIKE '%/%'",
-    ).run()
-    assert.equal(await isIndexedDocumentTreeCurrent(root, db), true)
+    assert.deepEqual(
+      db.prepare("SELECT path FROM docs ORDER BY path").all(),
+      [{ path: "README.md" }, { path: "_meta/friction.md" }],
+    )
   } finally {
     closeDb(db)
   }

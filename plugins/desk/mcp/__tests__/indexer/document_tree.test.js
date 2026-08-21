@@ -1,10 +1,12 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { createHash } from "node:crypto"
+import * as path from "node:path"
 
 import {
   canonicalDocumentHash,
   canonicalDocumentPath,
+  canonicalFilesystemDocumentPath,
   compareDocumentPaths,
   documentStatInventoryHash,
   documentTreeHash,
@@ -23,6 +25,15 @@ function expectedHash(docs) {
 test("document tree canonicalization is portable and deterministic", () => {
   assert.equal(canonicalDocumentPath("track\\task.md"), "track/task.md")
   assert.equal(canonicalDocumentPath(null), "")
+  assert.equal(
+    canonicalFilesystemDocumentPath("track\\task.md"),
+    path.sep === "\\" ? "track/task.md" : "track\\task.md",
+  )
+  assert.equal(
+    canonicalFilesystemDocumentPath("track\\task.md", "\\"),
+    "track/task.md",
+  )
+  assert.equal(canonicalFilesystemDocumentPath(null), "")
   assert.equal(canonicalDocumentHash("a".repeat(64)), `sha256:${"a".repeat(64)}`)
   assert.equal(
     canonicalDocumentHash(`sha256:${"b".repeat(64)}`),
@@ -31,10 +42,10 @@ test("document tree canonicalization is portable and deterministic", () => {
   assert.equal(canonicalDocumentHash(null), "sha256:")
   assert.equal(compareDocumentPaths("a.md", "b.md"), -1)
   assert.equal(compareDocumentPaths("b.md", "a.md"), 1)
-  assert.equal(compareDocumentPaths("a\\b.md", "a/b.md"), 0)
+  assert.equal(compareDocumentPaths("a/b.md", "a/b.md"), 0)
 
   const docs = [
-    { path: "z\\doc.md", hash: "a".repeat(64) },
+    { path: "z/doc.md", hash: "a".repeat(64) },
     { path: "a.md", hash: `sha256:${"b".repeat(64)}` },
   ]
   const expected = expectedHash([
@@ -55,7 +66,7 @@ test("represented document tree hashing rejects malformed and duplicate entries"
     [{ path: "a.md", hash: 1 }],
     [
       { path: "a/b.md", hash: "a" },
-      { path: "a\\b.md", hash: "a" },
+      { path: "a/b.md", hash: "a" },
     ],
   ]) {
     assert.equal(representedDocumentTreeHash(docs), null)
@@ -66,7 +77,7 @@ test("represented document tree hashing rejects malformed and duplicate entries"
   )
 })
 
-test("stat inventory hashing is canonical across ordering and separators", () => {
+test("stat inventory hashing is canonical across ordering", () => {
   const expected = createHash("sha256")
     .update(
       `a.md\0${10}\0${10.1}\0${11.1}\0${12}\0` +
@@ -77,7 +88,7 @@ test("stat inventory hashing is canonical across ordering and separators", () =>
   assert.equal(
     documentStatInventoryHash([
       {
-        path: "z\\doc.md",
+        path: "z/doc.md",
         mtime: 20,
         mtime_ms: 20.9,
         ctime_ms: 21.9,
@@ -113,16 +124,16 @@ test("stat inventory hashing rejects malformed and duplicate entries", () => {
     [{ path: "a.md", mtime: 1, mtime_ms: 1, ctime_ms: 1, size: Number.NaN }],
     [
       { path: "a/b.md", mtime: 1, mtime_ms: 1, ctime_ms: 1, size: 1 },
-      { path: "a\\b.md", mtime: 2, mtime_ms: 2, ctime_ms: 2, size: 2 },
+      { path: "a/b.md", mtime: 2, mtime_ms: 2, ctime_ms: 2, size: 2 },
     ],
   ]) {
     assert.equal(documentStatInventoryHash(docs), null)
   }
 })
 
-test("document tree equality ignores ordering and separators but rejects drift", () => {
+test("document tree equality ignores ordering but rejects drift", () => {
   const left = [
-    { path: "z\\doc.md", hash: "a".repeat(64) },
+    { path: "z/doc.md", hash: "a".repeat(64) },
     { path: "a.md", hash: `sha256:${"b".repeat(64)}` },
   ]
   const right = [

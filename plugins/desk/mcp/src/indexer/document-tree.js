@@ -1,7 +1,15 @@
 import { createHash } from "node:crypto"
+import * as path from "node:path"
 
 export function canonicalDocumentPath(value) {
-  return String(value ?? "").replace(/\\/gu, "/")
+  return String(value ?? "").split("\\").join("/")
+}
+
+export function canonicalFilesystemDocumentPath(value, separator = path.sep) {
+  const documentPath = String(value ?? "")
+  return separator === "/"
+    ? documentPath
+    : documentPath.split(separator).join("/")
 }
 
 export function canonicalDocumentHash(value) {
@@ -10,8 +18,8 @@ export function canonicalDocumentHash(value) {
 }
 
 export function compareDocumentPaths(left, right) {
-  const leftPath = canonicalDocumentPath(left)
-  const rightPath = canonicalDocumentPath(right)
+  const leftPath = canonicalFilesystemDocumentPath(left)
+  const rightPath = canonicalFilesystemDocumentPath(right)
   if (leftPath < rightPath) return -1
   if (leftPath > rightPath) return 1
   return 0
@@ -52,18 +60,20 @@ export function documentStatInventoryHash(docs) {
     ) {
       return null
     }
-    const path = canonicalDocumentPath(doc.path)
-    if (!path || paths.has(path)) return null
-    paths.add(path)
+    const documentPath = doc.path
+    if (!documentPath || paths.has(documentPath)) return null
+    paths.add(documentPath)
     normalized.push({
-      path,
+      path: documentPath,
       mtime: Math.floor(doc.mtime),
       mtime_ms: doc.mtime_ms,
       ctime_ms: doc.ctime_ms,
       size: doc.size,
     })
   }
-  normalized.sort((left, right) => compareDocumentPaths(left.path, right.path))
+  normalized.sort((left, right) =>
+    left.path < right.path ? -1 : left.path > right.path ? 1 : 0
+  )
   const hash = createHash("sha256")
   for (const doc of normalized) {
     hash.update(
@@ -97,7 +107,7 @@ function normalizeDocuments(docs) {
     ) {
       return null
     }
-    const path = canonicalDocumentPath(doc.path)
+    const path = canonicalFilesystemDocumentPath(doc.path)
     if (paths.has(path)) return null
     paths.add(path)
     normalized.push({

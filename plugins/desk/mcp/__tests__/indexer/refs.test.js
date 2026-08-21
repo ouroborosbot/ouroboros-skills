@@ -29,7 +29,7 @@ test("computeRefs covers structural, historical, missing, and duplicate edges", 
     },
     {
       id: "planning-a",
-      path: "track-a\\task-a\\planning.md",
+      path: "track-a/task-a/planning.md",
       kind: "planning",
       track: "track-a",
       task_slug: "task-a",

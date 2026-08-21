@@ -14,7 +14,7 @@ import {
 import { assertArtifactInputsAllowed } from "./exclusions.js"
 import {
   canonicalDocumentHash,
-  canonicalDocumentPath,
+  canonicalFilesystemDocumentPath,
   representedDocumentTreeHash,
 } from "./document-tree.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./spec.js"
@@ -322,11 +322,11 @@ function representedDocumentsAreCurrent(
     return false
   }
   const expectedByPath = new Map(expectedDocuments.map((doc) => [
-    canonicalDocumentPath(doc.path),
+    canonicalFilesystemDocumentPath(doc.path),
     canonicalDocumentHash(doc.hash),
   ]))
   return representedDocuments.every((doc) =>
-    expectedByPath.get(canonicalDocumentPath(doc.path)) ===
+    expectedByPath.get(canonicalFilesystemDocumentPath(doc.path)) ===
       canonicalDocumentHash(doc.hash)
   )
 }

@@ -22,7 +22,7 @@ import {
   exclusionForPath,
   loadExclusionRules,
 } from "./exclusions.js"
-import { canonicalDocumentPath } from "./document-tree.js"
+import { canonicalFilesystemDocumentPath } from "./document-tree.js"
 
 export const DISCOVERY_GRAMMAR_VERSION = 2
 
@@ -111,7 +111,7 @@ async function walk(deskRoot, dir, out, signal, exclusionRules, describe) {
       // is_archived=true in describeDoc and per-tool search defaults
       // decide whether to include them.
       const sub = path.join(dir, name)
-      const relDir = canonicalDocumentPath(path.relative(deskRoot, sub))
+      const relDir = canonicalFilesystemDocumentPath(path.relative(deskRoot, sub))
       if (shouldSkipDirectory(relDir, exclusionRules)) continue
       await walk(deskRoot, sub, out, signal, exclusionRules, describe)
       continue
@@ -121,7 +121,7 @@ async function walk(deskRoot, dir, out, signal, exclusionRules, describe) {
     if (!name.endsWith(".md")) continue
 
     const abs = path.join(dir, name)
-    const rel = canonicalDocumentPath(path.relative(deskRoot, abs))
+    const rel = canonicalFilesystemDocumentPath(path.relative(deskRoot, abs))
     if (isExcluded(rel, exclusionRules)) continue
 
     const desc = await describe(deskRoot, abs, rel, signal)
