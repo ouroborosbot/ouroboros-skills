@@ -167,6 +167,48 @@ test("semantic repair reuses one in-flight promise per root and evicts it after 
   ])
 })
 
+test("semantic repair reuses the same promise while a same-root batch is active", async () => {
+  const { createSemanticRepairCoordinator } = await loadSemanticRepair()
+  const scheduler = createManualScheduler()
+  const root = path.resolve("desk-root-active")
+  let calls = 0
+  let markStarted
+  let releaseBatch
+  const started = new Promise((resolve) => {
+    markStarted = resolve
+  })
+  const batchGate = new Promise((resolve) => {
+    releaseBatch = resolve
+  })
+  const coordinator = createSemanticRepairCoordinator({
+    repairBatch: () => {
+      calls += 1
+      markStarted()
+      return batchGate
+    },
+    schedule: scheduler.schedule,
+    clearScheduled: scheduler.clearScheduled,
+  })
+
+  const first = coordinator.start({ deskRoot: root })
+  const activeBatch = scheduler.runNext()
+  await started
+  try {
+    const second = coordinator.start({ deskRoot: `${root}${path.sep}.` })
+    assert.strictEqual(second, first)
+    assert.equal(calls, 1)
+    assert.equal(scheduler.scheduled.length, 1)
+    assert.equal(scheduler.queued.length, 0)
+  } finally {
+    releaseBatch({ processed_chunks: 1, remaining_chunks: 0 })
+    await activeBatch
+  }
+
+  assert.equal((await first).state, "complete")
+  assert.equal(calls, 1)
+  assert.equal(scheduler.scheduled.length, 1)
+})
+
 test("semantic repair runs different roots independently", async () => {
   const { createSemanticRepairCoordinator } = await loadSemanticRepair()
   const scheduler = createManualScheduler()
@@ -382,39 +424,107 @@ test("semantic repair cancellation clears a pending batch without running repair
 })
 
 test("a new coordinator resumes persisted missing work after process interruption", async () => {
-  const { createSemanticRepairCoordinator } = await loadSemanticRepair()
+  const {
+    createSemanticRepairCoordinator,
+    repairMissingVectorBatch,
+  } = await loadSemanticRepair()
+  const root = await makeRoot()
   const interruptedScheduler = createManualScheduler()
   const resumedScheduler = createManualScheduler()
-  let remaining = 2
-  const repairBatch = async () => {
-    remaining -= 1
+  const embeddedTexts = []
+  const embedChunkDetailed = async (text) => {
+    embeddedTexts.push(text)
     return {
-      processed_chunks: 1,
-      remaining_chunks: remaining,
+      vector: vector(embeddedTexts.length),
+      available: true,
+      diagnostic: null,
     }
   }
-  const interrupted = createSemanticRepairCoordinator({
-    repairBatch,
-    schedule: interruptedScheduler.schedule,
-    clearScheduled: interruptedScheduler.clearScheduled,
-  })
+  let interruptedDb = openDb(root)
+  let resumedDb
+  let interrupted
+  let abandoned
+  try {
+    insertDocument(interruptedDb, {
+      documentPath: "active/reference.md",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      texts: ["chunk-0", "chunk-1", "chunk-2"],
+    })
+    interrupted = createSemanticRepairCoordinator({
+      repairBatch: (options) => repairMissingVectorBatch({
+        ...options,
+        db: interruptedDb,
+        embedChunkDetailed,
+      }),
+      schedule: interruptedScheduler.schedule,
+      clearScheduled: interruptedScheduler.clearScheduled,
+    })
 
-  const abandoned = interrupted.start({ deskRoot: "/tmp/desk-root" })
-  assert.equal(interruptedScheduler.queued.length, 1)
-  assert.equal(remaining, 2)
+    abandoned = interrupted.start({
+      deskRoot: root,
+      batchChunks: 1,
+      batchMs: 5000,
+    })
+    await interruptedScheduler.runNext()
 
-  const resumed = createSemanticRepairCoordinator({
-    repairBatch,
-    schedule: resumedScheduler.schedule,
-    clearScheduled: resumedScheduler.clearScheduled,
-  })
-  const resumedRepair = resumed.start({ deskRoot: "/tmp/desk-root" })
-  await resumedScheduler.drain()
-  assert.equal((await resumedRepair).state, "complete")
-  assert.equal(remaining, 0)
+    assert.equal(
+      interruptedDb.prepare("SELECT COUNT(*) AS count FROM chunk_vecs").get().count,
+      1,
+    )
+    assert.deepEqual(embeddedTexts, ["chunk-0"])
+    assert.equal(interruptedScheduler.queued.length, 1)
+    assert.equal(interruptedScheduler.scheduled.length, 2)
+    assert.equal(interruptedScheduler.queued[0].delay, 0)
+    assert.equal(interruptedScheduler.queued[0].handle.unrefCalls, 1)
 
-  await interrupted.cancel("/tmp/desk-root")
-  assert.equal((await abandoned).state, "idle")
+    closeDb(interruptedDb)
+    resumedDb = openDb(root)
+    const resumed = createSemanticRepairCoordinator({
+      repairBatch: (options) => repairMissingVectorBatch({
+        ...options,
+        db: resumedDb,
+        embedChunkDetailed,
+      }),
+      schedule: resumedScheduler.schedule,
+      clearScheduled: resumedScheduler.clearScheduled,
+    })
+    const resumedRepair = resumed.start({
+      deskRoot: root,
+      batchChunks: 1,
+      batchMs: 5000,
+    })
+    await resumedScheduler.drain()
+
+    assert.equal((await resumedRepair).state, "complete")
+    assert.equal(
+      resumedDb.prepare("SELECT COUNT(*) AS count FROM chunk_vecs").get().count,
+      3,
+    )
+    assert.equal(
+      resumedDb.prepare(
+        `SELECT COUNT(*) AS count
+         FROM chunks c
+         LEFT JOIN chunk_vecs v ON v.chunk_id = c.id
+         WHERE v.chunk_id IS NULL`,
+      ).get().count,
+      0,
+    )
+    assert.deepEqual(embeddedTexts, ["chunk-0", "chunk-1", "chunk-2"])
+
+    const cancelled = await interrupted.cancel(root)
+    await interruptedScheduler.drain()
+    assert.equal(cancelled.cancelled, true)
+    assert.equal((await abandoned).state, "idle")
+    interrupted = null
+  } finally {
+    if (interrupted !== null && interrupted !== undefined) {
+      await interrupted.cancel(root)
+      await interruptedScheduler.drain()
+    }
+    closeDb(interruptedDb)
+    closeDb(resumedDb)
+    await fs.rm(root, { recursive: true, force: true })
+  }
 })
 
 test("semantic repair batch prioritizes active recent documents, chunk ordinal, and path", async () => {

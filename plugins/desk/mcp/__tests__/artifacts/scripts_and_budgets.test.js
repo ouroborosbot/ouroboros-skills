@@ -943,6 +943,18 @@ test("performance budget loader fails closed for malformed, missing, or invalid 
         "performance budget search.semantic_repair_batch_chunks must be a positive integer",
       ],
       [
+        "negative-semantic-repair-batch-chunks",
+        {
+          schema_version: 1,
+          search: {
+            semantic_repair_batch_chunks: -1,
+            semantic_repair_batch_ms: 5000,
+          },
+          ...validNonSearchBudgetSections,
+        },
+        "performance budget search.semantic_repair_batch_chunks must be a positive integer",
+      ],
+      [
         "zero-semantic-repair-batch-ms",
         performanceBudgetConfig({
           search: { semantic_repair_batch_ms: 0 },
@@ -954,6 +966,18 @@ test("performance budget loader fails closed for malformed, missing, or invalid 
         performanceBudgetConfig({
           search: { semantic_repair_batch_ms: 1.5 },
         }),
+        "performance budget search.semantic_repair_batch_ms must be a positive integer",
+      ],
+      [
+        "negative-semantic-repair-batch-ms",
+        {
+          schema_version: 1,
+          search: {
+            semantic_repair_batch_chunks: 100,
+            semantic_repair_batch_ms: -1,
+          },
+          ...validNonSearchBudgetSections,
+        },
         "performance budget search.semantic_repair_batch_ms must be a positive integer",
       ],
       [
