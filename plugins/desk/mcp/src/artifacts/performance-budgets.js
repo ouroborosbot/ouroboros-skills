@@ -3,6 +3,10 @@ import * as path from "node:path"
 
 export const DEFAULT_PERFORMANCE_BUDGETS = Object.freeze({
   schema_version: 1,
+  search: Object.freeze({
+    semantic_repair_batch_chunks: 100,
+    semantic_repair_batch_ms: 5000,
+  }),
   startup: Object.freeze({
     ensure_index_ms: 250,
     snapshot_restore_ms: 250,
@@ -42,7 +46,13 @@ export async function loadPerformanceBudgets({
   }
 
   validateBudgets(parsed)
-  return parsed
+  return {
+    ...parsed,
+    search: {
+      ...DEFAULT_PERFORMANCE_BUDGETS.search,
+      ...parsed.search,
+    },
+  }
 }
 
 export function budgetValue(budgets, section, key) {
@@ -71,6 +81,28 @@ function validateBudgets(budgets) {
   } else if (budgets.schema_version !== 1) {
     diagnostics.push("performance budget config schema_version must be 1")
   } else {
+    if (
+      budgets.search !== undefined &&
+      (!budgets.search ||
+        typeof budgets.search !== "object" ||
+        Array.isArray(budgets.search))
+    ) {
+      diagnostics.push("performance budget search must be an object")
+    } else if (budgets.search) {
+      for (const key of [
+        "semantic_repair_batch_chunks",
+        "semantic_repair_batch_ms",
+      ]) {
+        if (
+          budgets.search[key] !== undefined &&
+          (!Number.isInteger(budgets.search[key]) || budgets.search[key] <= 0)
+        ) {
+          diagnostics.push(
+            `performance budget search.${key} must be a positive integer`,
+          )
+        }
+      }
+    }
     for (const [section, keys] of Object.entries({
       startup: ["ensure_index_ms", "snapshot_restore_ms", "vector_pack_import_ms"],
       rebuild: ["vector_pack_rebuild_ms", "snapshot_build_ms"],
