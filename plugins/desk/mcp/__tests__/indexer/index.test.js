@@ -536,6 +536,16 @@ test("isIndexedContentCurrent rejects duplicate canonical and missing indexed pa
   } finally {
     closeDb(db)
   }
+
+  const duplicateDb = {
+    prepare: () => ({
+      all: () => [
+        { id: 1, path: "duplicate.md" },
+        { id: 2, path: "duplicate.md" },
+      ],
+    }),
+  }
+  assert.equal(isIndexedContentCurrent(duplicateDb, []), false)
 })
 
 test("isIndexFresh rejects missing chunk and refs index contents", async () => {
