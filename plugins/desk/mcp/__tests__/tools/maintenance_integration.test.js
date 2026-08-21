@@ -1091,6 +1091,8 @@ test("non-force desk_reindex cancels active repair before one locked full repair
       "background-repair:cleanup",
       "background-repair:end",
       "cancel:done",
+      "cancel:start",
+      "cancel:done",
       "nonforce-reindex:start",
     ])
     assert.deepEqual(resetCalls, [])
@@ -1142,7 +1144,10 @@ test("non-force desk_reindex cancels active repair before one locked full repair
         ensureOptions: explicitEnsureOptions,
       },
     ])
-    assert.deepEqual(cancelCalls, [path.resolve(root)])
+    assert.deepEqual(cancelCalls, [
+      path.resolve(root),
+      path.resolve(root),
+    ])
     assert.deepEqual(resetCalls, [])
     assert.deepEqual(ensureCalls, [
       {
@@ -1195,6 +1200,8 @@ test("non-force desk_reindex cancels active repair before one locked full repair
       "background-repair:abort",
       "background-repair:cleanup",
       "background-repair:end",
+      "cancel:done",
+      "cancel:start",
       "cancel:done",
       "nonforce-reindex:start",
       "nonforce-reindex:end",
@@ -1384,10 +1391,12 @@ test("shared maintenance prevents SQLITE_BUSY overlap from leaking to search or 
 test("maintenance integration preserves the exact 15 tools and current search/reindex result schemas", async () => {
   const root = await mkTempDeskRoot()
   const maintenance = {
-    async ensureSearchFreshness() {
-      return {
-        index: completeIndexResult(),
-        repair: Promise.resolve({ state: "complete", last_error: null }),
+    async runFreshRead({ deskRoot, read }) {
+      const db = openDb(deskRoot)
+      try {
+        return await read(db, completeIndexResult())
+      } finally {
+        closeDb(db)
       }
     },
     async runExplicitReindex() {

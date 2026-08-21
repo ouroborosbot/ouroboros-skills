@@ -526,7 +526,7 @@ test("cold rebuild remains fresh and searchable in degraded lexical mode", async
       )
       assert.equal(productionResult.score_breakdown.semantic, 0)
       assert.ok(productionResult.score_breakdown.bm25 > 0)
-      assert.equal(embeddingCalls, 4)
+      assert.equal(embeddingCalls, 3)
     } finally {
       configureRuntimeArtifacts({ pluginRoot: null })
     }

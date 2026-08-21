@@ -364,7 +364,7 @@ test("desk_search — returns a partial result from a lexical-only index before 
   let maintenanceCalls = 0
   let repairPromise = null
   const maintenance = {
-    async ensureSearchFreshness({ deskRoot, ensureOptions }) {
+    async runFreshRead({ deskRoot, ensureOptions, read }) {
       maintenanceCalls += 1
       const index = await awaitBounded(
         ensureIndex(deskRoot, {
@@ -373,6 +373,13 @@ test("desk_search — returns a partial result from a lexical-only index before 
         }),
         "direct search freshness maintenance did not settle",
       )
+      const db = openDb(deskRoot)
+      let result
+      try {
+        result = await read(db, index)
+      } finally {
+        closeDb(db)
+      }
       if (!repairPromise && index.semantic?.missing_vectors > 0) {
         repairPromise = (async () => {
           repairStarted.resolve()
@@ -390,12 +397,7 @@ test("desk_search — returns a partial result from a lexical-only index before 
           )
         })()
       }
-      return {
-        index,
-        repair:
-          repairPromise ??
-          Promise.resolve({ state: "complete", last_error: null }),
-      }
+      return result
     },
   }
 

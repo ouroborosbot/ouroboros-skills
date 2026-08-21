@@ -1,7 +1,11 @@
 import { existsSync, rmSync } from "node:fs"
 import * as path from "node:path"
 
-import { indexDbPath } from "../db/init.js"
+import {
+  closeDb as defaultCloseDb,
+  indexDbPath,
+  openDb as defaultOpenDb,
+} from "../db/init.js"
 import { ensureIndex as defaultEnsureIndex } from "../server-helpers.js"
 import {
   createSemanticRepairCoordinator,
@@ -40,34 +44,88 @@ export function createMaintenanceCoordinator({
   createRepairCoordinator = createSemanticRepairCoordinator,
   resetIndex = resetIndexFiles,
   rootQueue = createRootMaintenanceQueue(),
+  openIndex = defaultOpenDb,
+  closeIndex = defaultCloseDb,
 } = {}) {
+  const reindexGenerations = new Map()
   const repairCoordinator = createRepairCoordinator({
     repairBatch: (options) =>
       rootQueue.run(options.deskRoot, () => repairBatch(options)),
   })
 
-  async function ensureSearchFreshness({
-    deskRoot,
-    ensureOptions = {},
-  } = {}) {
-    const root = canonicalRoot(deskRoot)
-    const index = await rootQueue.run(root, () =>
-      ensureIndex(root, {
-        ...ensureOptions,
-        skipEmbed: true,
-      }),
-    )
+  function currentReindexGeneration(root) {
+    return reindexGenerations.get(root) ?? 0
+  }
+
+  function registerBackgroundRepair({
+    root,
+    index,
+    ensureOptions,
+    readGeneration,
+  }) {
+    if (readGeneration !== currentReindexGeneration(root)) {
+      return Promise.resolve({ ...COMPLETE_REPAIR })
+    }
     const repairableMissing =
       index?.semantic?.repairable_missing_vectors ??
       index?.semantic?.missing_vectors ??
       0
-    const repair = repairableMissing > 0
+    return repairableMissing > 0
       ? repairCoordinator.start({
           deskRoot: root,
           embed: ensureOptions.embed ?? {},
         })
       : Promise.resolve({ ...COMPLETE_REPAIR })
-    return { index, repair }
+  }
+
+  function ensureSearchFreshness({
+    deskRoot,
+    ensureOptions = {},
+  } = {}) {
+    const root = canonicalRoot(deskRoot)
+    const readGeneration = currentReindexGeneration(root)
+    return rootQueue.run(root, async () => {
+      const index = await ensureIndex(root, {
+        ...ensureOptions,
+        skipEmbed: true,
+      })
+      const repair = registerBackgroundRepair({
+        root,
+        index,
+        ensureOptions,
+        readGeneration,
+      })
+      return { index, repair }
+    })
+  }
+
+  function runFreshRead({
+    deskRoot,
+    ensureOptions = {},
+    read,
+  } = {}) {
+    const root = canonicalRoot(deskRoot)
+    const readGeneration = currentReindexGeneration(root)
+    return rootQueue.run(root, async () => {
+      const index = await ensureIndex(root, {
+        ...ensureOptions,
+        skipEmbed: true,
+      })
+      const db = openIndex(root)
+      let result
+      try {
+        result = await read(db, index)
+      } finally {
+        closeIndex(db)
+      }
+      registerBackgroundRepair({
+        root,
+        index,
+        ensureOptions,
+        readGeneration,
+      })
+      return result
+    })
   }
 
   async function runExplicitReindex({
@@ -76,8 +134,10 @@ export function createMaintenanceCoordinator({
     ensureOptions = {},
   } = {}) {
     const root = canonicalRoot(deskRoot)
+    reindexGenerations.set(root, currentReindexGeneration(root) + 1)
     await repairCoordinator.cancel(root)
     return rootQueue.run(root, async () => {
+      await repairCoordinator.cancel(root)
       if (force) await resetIndex({ deskRoot: root })
       return ensureIndex(root, ensureOptions)
     })
@@ -91,6 +151,7 @@ export function createMaintenanceCoordinator({
     cancelBackgroundRepair,
     ensureSearchFreshness,
     runExplicitReindex,
+    runFreshRead,
   }
 }
 

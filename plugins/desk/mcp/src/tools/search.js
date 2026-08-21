@@ -19,9 +19,7 @@
 
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
-import { openDb, closeDb } from "../db/init.js"
 import { maintenanceCoordinator } from "../indexer/maintenance.js"
-import { ensureIndex } from "../server-helpers.js"
 import { embedQuery } from "../util/embed-query.js"
 import {
   clipCosine,
@@ -444,112 +442,107 @@ export async function desk_search({ deskRoot, input, opts }) {
   const scope = input?.scope
   const now = opts?.now ?? Date.now()
 
+  const {
+    vector: queryVec,
+    available: semanticAvailable,
+    diagnostic: semanticDiagnostic,
+  } = await embedQuery(
+    query,
+    opts?.embed ?? {},
+  )
   const maintenance = opts?.maintenance ?? maintenanceCoordinator
-  await maintenance.ensureSearchFreshness({
+  return maintenance.runFreshRead({
     deskRoot: path.resolve(deskRoot),
     ensureOptions: { embed: opts?.embed ?? {} },
-  })
-  const db = openDb(deskRoot)
-  try {
-    const { matchExpr, terms } = buildFtsQuery(query)
-    const filter = buildDocsFilter(filters)
-    // desk_search default: active. Day-to-day signal; archive on opt-in.
-    const scopeFilter = resolveScopeFilter(scope, "active")
+    async read(db) {
+      const { matchExpr, terms } = buildFtsQuery(query)
+      const filter = buildDocsFilter(filters)
+      // desk_search default: active. Day-to-day signal; archive on opt-in.
+      const scopeFilter = resolveScopeFilter(scope, "active")
 
-    // Embed the query (with caller-injectable opts for tests).
-    const {
-      vector: queryVec,
-      available: semanticAvailable,
-      diagnostic: semanticDiagnostic,
-    } = await embedQuery(
-      query,
-      opts?.embed ?? {},
-    )
+      // Gather candidates from both backends. Over-fetch — we'll re-rank in JS.
+      const ftsCandidates = gatherFtsCandidates(
+        db,
+        matchExpr,
+        filter.sql + scopeFilter.sql,
+        [...filter.params, ...scopeFilter.params],
+        limit * 4,
+      )
+      const vecCandidates = semanticAvailable
+        ? gatherVecCandidates(db, queryVec, limit * 4)
+        : []
 
-    // Gather candidates from both backends. Over-fetch — we'll re-rank in JS.
-    const ftsCandidates = gatherFtsCandidates(
-      db,
-      matchExpr,
-      filter.sql + scopeFilter.sql,
-      [...filter.params, ...scopeFilter.params],
-      limit * 4,
-    )
-    const vecCandidates = semanticAvailable
-      ? gatherVecCandidates(db, queryVec, limit * 4)
-      : []
+      // Union the chunk_ids; hydrate once.
+      const idSet = new Set()
+      for (const r of ftsCandidates) idSet.add(r.chunk_id)
+      for (const r of vecCandidates) idSet.add(r.chunk_id)
+      const chunkIds = [...idSet]
+      const hydrated = hydrateChunks(db, chunkIds)
 
-    // Union the chunk_ids; hydrate once.
-    const idSet = new Set()
-    for (const r of ftsCandidates) idSet.add(r.chunk_id)
-    for (const r of vecCandidates) idSet.add(r.chunk_id)
-    const chunkIds = [...idSet]
-    const hydrated = hydrateChunks(db, chunkIds)
+      // Normalize BM25 over the FTS candidate set.
+      const bm25ByChunk = new Map()
+      const bm25Raw = ftsCandidates.map((r) => r.raw_bm25)
+      const bm25Norm = normalizeBm25(bm25Raw)
+      ftsCandidates.forEach((r, i) => bm25ByChunk.set(r.chunk_id, bm25Norm[i]))
 
-    // Normalize BM25 over the FTS candidate set.
-    const bm25ByChunk = new Map()
-    const bm25Raw = ftsCandidates.map((r) => r.raw_bm25)
-    const bm25Norm = normalizeBm25(bm25Raw)
-    ftsCandidates.forEach((r, i) => bm25ByChunk.set(r.chunk_id, bm25Norm[i]))
+      // Compute true cosine for each candidate that has an embedding.
+      const cosByChunk = new Map()
+      if (semanticAvailable) {
+        for (const [id, row] of hydrated) {
+          cosByChunk.set(id, clipCosine(cosine(queryVec, row.embedding)))
+        }
+      }
 
-    // Compute true cosine for each candidate that has an embedding.
-    const cosByChunk = new Map()
-    if (semanticAvailable) {
+      // Active-iteration pin.
+      const featuredTrack = await readFeaturedTrack(deskRoot)
+      const pinPrefixes = computePinPrefixes(db, featuredTrack)
+
+      // Score every candidate and pick top-N. We dedupe by doc_id so a single
+      // doc with many matching chunks doesn't crowd out the result list — keep
+      // the best chunk per doc.
+      const bestByDoc = new Map()
       for (const [id, row] of hydrated) {
-        cosByChunk.set(id, clipCosine(cosine(queryVec, row.embedding)))
+        if (!passesFilter(row, filters)) continue
+        if (!passesScope(row, scope, "active")) continue
+        const parts = {
+          semantic: cosByChunk.get(id) ?? 0,
+          bm25: bm25ByChunk.get(id) ?? 0,
+          recency: recencyDecay(row.updated_at, now),
+          state: stateBias(row.status),
+          pin: isPinned(row.doc_path, pinPrefixes),
+          semanticAvailable,
+        }
+        const { score, breakdown } = combineScore(parts)
+        const existing = bestByDoc.get(row.doc_id)
+        if (shouldReplaceBest(existing, score)) {
+          bestByDoc.set(row.doc_id, {
+            path: row.doc_path,
+            kind: row.kind,
+            track: row.track,
+            task_slug: row.task_slug,
+            status: row.status,
+            updated_at: row.updated_at,
+            snippet: makeSnippet(row.text, terms),
+            score,
+            score_breakdown: breakdown,
+          })
+        }
       }
-    }
 
-    // Active-iteration pin.
-    const featuredTrack = await readFeaturedTrack(deskRoot)
-    const pinPrefixes = computePinPrefixes(db, featuredTrack)
+      const results = [...bestByDoc.values()]
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit)
 
-    // Score every candidate and pick top-N. We dedupe by doc_id so a single
-    // doc with many matching chunks doesn't crowd out the result list — keep
-    // the best chunk per doc.
-    const bestByDoc = new Map()
-    for (const [id, row] of hydrated) {
-      if (!passesFilter(row, filters)) continue
-      if (!passesScope(row, scope, "active")) continue
-      const parts = {
-        semantic: cosByChunk.get(id) ?? 0,
-        bm25: bm25ByChunk.get(id) ?? 0,
-        recency: recencyDecay(row.updated_at, now),
-        state: stateBias(row.status),
-        pin: isPinned(row.doc_path, pinPrefixes),
-        semanticAvailable,
+      return {
+        query,
+        results,
+        search_mode: semanticAvailable ? "hybrid" : "lexical",
+        semantic_unavailable: !semanticAvailable,
+        latency_ms: Date.now() - t0,
+        ...(!semanticAvailable ? semanticUnavailableFields(semanticDiagnostic) : {}),
       }
-      const { score, breakdown } = combineScore(parts)
-      const existing = bestByDoc.get(row.doc_id)
-      if (shouldReplaceBest(existing, score)) {
-        bestByDoc.set(row.doc_id, {
-          path: row.doc_path,
-          kind: row.kind,
-          track: row.track,
-          task_slug: row.task_slug,
-          status: row.status,
-          updated_at: row.updated_at,
-          snippet: makeSnippet(row.text, terms),
-          score,
-          score_breakdown: breakdown,
-        })
-      }
-    }
-
-    const results = [...bestByDoc.values()]
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit)
-
-    return {
-      query,
-      results,
-      search_mode: semanticAvailable ? "hybrid" : "lexical",
-      semantic_unavailable: !semanticAvailable,
-      latency_ms: Date.now() - t0,
-      ...(!semanticAvailable ? semanticUnavailableFields(semanticDiagnostic) : {}),
-    }
-  } finally {
-    closeDb(db)
-  }
+    },
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -578,62 +571,63 @@ export async function desk_recall({ deskRoot, input, opts }) {
   const limit = clampLimit(input?.limit)
   const scope = input?.scope
 
-  await ensureIndex(deskRoot, { embed: opts?.embed ?? {} })
-  const db = openDb(deskRoot)
-  try {
-    const {
-      vector: queryVec,
-      available,
-      diagnostic: semanticDiagnostic,
-    } = await embedQuery(topic, opts?.embed ?? {})
-    if (!available) {
+  const {
+    vector: queryVec,
+    available,
+    diagnostic: semanticDiagnostic,
+  } = await embedQuery(topic, opts?.embed ?? {})
+  const maintenance = opts?.maintenance ?? maintenanceCoordinator
+  return maintenance.runFreshRead({
+    deskRoot: path.resolve(deskRoot),
+    ensureOptions: { embed: opts?.embed ?? {} },
+    read(db) {
+      if (!available) {
+        return {
+          error: "semantic_unavailable",
+          note: "Recall requires semantic search; the embedding service is unavailable.",
+          ...semanticUnavailableFields(semanticDiagnostic),
+          latency_ms: Date.now() - t0,
+        }
+      }
+
+      // Over-fetch a wider net (limit * 3 per spec) — clustering would dedupe
+      // down; MVP just dedupes by doc_id and takes top-limit. desk_recall
+      // default: "all" — this IS the historical/lookback tool; archive
+      // should be searched by default.
+      const vecRows = gatherVecCandidates(db, queryVec, limit * 3)
+      const chunkIds = vecRows.map((r) => r.chunk_id)
+      const hydrated = hydrateChunks(db, chunkIds)
+
+      const bestByDoc = new Map()
+      for (const row of hydrated.values()) {
+        if (!passesScope(row, scope, "all")) continue
+        const score = clipCosine(cosine(queryVec, row.embedding))
+        const existing = bestByDoc.get(row.doc_id)
+        if (shouldReplaceBest(existing, score)) {
+          bestByDoc.set(row.doc_id, {
+            path: row.doc_path,
+            kind: row.kind,
+            snippet: makeSnippet(row.text, [topic]),
+            score,
+          })
+        }
+      }
+
+      const results = [...bestByDoc.values()]
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit)
+
       return {
-        error: "semantic_unavailable",
-        note: "Recall requires semantic search; the embedding service is unavailable.",
-        ...semanticUnavailableFields(semanticDiagnostic),
+        topic,
+        results,
+        cluster_count: results.length, // MVP: 1:1 with results
         latency_ms: Date.now() - t0,
+        note:
+          "clustering deferred to a follow-up — see desk-search-design §6 #4. " +
+          "cluster_count equals results.length until HDBSCAN lands.",
       }
-    }
-
-    // Over-fetch a wider net (limit * 3 per spec) — clustering would dedupe
-    // down; MVP just dedupes by doc_id and takes top-limit. desk_recall
-    // default: "all" — this IS the historical/lookback tool; archive
-    // should be searched by default.
-    const vecRows = gatherVecCandidates(db, queryVec, limit * 3)
-    const chunkIds = vecRows.map((r) => r.chunk_id)
-    const hydrated = hydrateChunks(db, chunkIds)
-
-    const bestByDoc = new Map()
-    for (const row of hydrated.values()) {
-      if (!passesScope(row, scope, "all")) continue
-      const score = clipCosine(cosine(queryVec, row.embedding))
-      const existing = bestByDoc.get(row.doc_id)
-      if (shouldReplaceBest(existing, score)) {
-        bestByDoc.set(row.doc_id, {
-          path: row.doc_path,
-          kind: row.kind,
-          snippet: makeSnippet(row.text, [topic]),
-          score,
-        })
-      }
-    }
-
-    const results = [...bestByDoc.values()]
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit)
-
-    return {
-      topic,
-      results,
-      cluster_count: results.length, // MVP: 1:1 with results
-      latency_ms: Date.now() - t0,
-      note:
-        "clustering deferred to a follow-up — see desk-search-design §6 #4. " +
-        "cluster_count equals results.length until HDBSCAN lands.",
-    }
-  } finally {
-    closeDb(db)
-  }
+    },
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -662,92 +656,93 @@ export async function desk_similar({ deskRoot, input, opts }) {
   const limit = clampLimit(input?.limit)
   const scope = input?.scope
 
-  await ensureIndex(deskRoot, { embed: opts?.embed ?? {} })
-  const db = openDb(deskRoot)
-  try {
-    const seedDoc = db
-      .prepare("SELECT id, path, kind, track, task_slug FROM docs WHERE path = ?")
-      .get(seedPath)
-    if (!seedDoc) {
+  const maintenance = opts?.maintenance ?? maintenanceCoordinator
+  return maintenance.runFreshRead({
+    deskRoot: path.resolve(deskRoot),
+    ensureOptions: { embed: opts?.embed ?? {} },
+    read(db) {
+      const seedDoc = db
+        .prepare("SELECT id, path, kind, track, task_slug FROM docs WHERE path = ?")
+        .get(seedPath)
+      if (!seedDoc) {
+        return {
+          error: "not_found",
+          note: `path not in index: ${seedPath}`,
+          latency_ms: Date.now() - t0,
+        }
+      }
+
+      // Pull seed embeddings.
+      const seedRows = db
+        .prepare(
+          `SELECT v.chunk_id, v.embedding
+           FROM chunks c
+           JOIN chunk_vecs v ON v.chunk_id = c.id
+           WHERE c.doc_id = ?`,
+        )
+        .all(seedDoc.id)
+      const seedEmbeddings = seedRows
+        .map((r) => decodeEmbedding(r.embedding))
+        .filter((e) => e != null)
+      if (!seedEmbeddings.length) {
+        return {
+          error: "semantic_unavailable",
+          note:
+            "seed doc has no embeddings; the index was built while semantic embeddings were unavailable.",
+          semantic_repair: SEMANTIC_REPAIR_COMMAND,
+          latency_ms: Date.now() - t0,
+        }
+      }
+
+      const dim = seedEmbeddings[0].length
+      const centroid = new Array(dim).fill(0)
+      for (const e of seedEmbeddings) {
+        for (let i = 0; i < dim; i++) centroid[i] += e[i]
+      }
+      for (let i = 0; i < dim; i++) centroid[i] /= seedEmbeddings.length
+
+      // Set of seed chunk_ids to exclude.
+      const seedChunkIds = new Set(seedRows.map((r) => r.chunk_id))
+
+      // KNN — over-fetch since we drop seed chunks + dedupe by doc.
+      const vecRows = gatherVecCandidates(db, centroid, (limit + seedChunkIds.size + 5) * 3)
+      const chunkIds = vecRows
+        .map((r) => r.chunk_id)
+        .filter((id) => !seedChunkIds.has(id))
+      const hydrated = hydrateChunks(db, chunkIds)
+
+      const bestByDoc = new Map()
+      for (const row of hydrated.values()) {
+        // desk_similar default: "all" — similarity has no time/status semantic;
+        // when asking "what's like this doc" we want the full corpus.
+        if (!passesScope(row, scope, "all")) continue
+        const score = clipCosine(cosine(centroid, row.embedding))
+        const existing = bestByDoc.get(row.doc_id)
+        if (shouldReplaceBest(existing, score)) {
+          bestByDoc.set(row.doc_id, {
+            path: row.doc_path,
+            kind: row.kind,
+            track: row.track,
+            task_slug: row.task_slug,
+            status: row.status,
+            updated_at: row.updated_at,
+            snippet: makeSnippet(row.text, []),
+            score,
+          })
+        }
+      }
+
+      const results = [...bestByDoc.values()]
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit)
+
       return {
-        error: "not_found",
-        note: `path not in index: ${seedPath}`,
+        seed: seedPath,
+        results,
         latency_ms: Date.now() - t0,
       }
-    }
-
-    // Pull seed embeddings.
-    const seedRows = db
-      .prepare(
-        `SELECT v.chunk_id, v.embedding
-         FROM chunks c
-         JOIN chunk_vecs v ON v.chunk_id = c.id
-         WHERE c.doc_id = ?`,
-      )
-      .all(seedDoc.id)
-    const seedEmbeddings = seedRows
-      .map((r) => decodeEmbedding(r.embedding))
-      .filter((e) => e != null)
-    if (!seedEmbeddings.length) {
-      return {
-        error: "semantic_unavailable",
-        note:
-          "seed doc has no embeddings; the index was built while semantic embeddings were unavailable.",
-        semantic_repair: SEMANTIC_REPAIR_COMMAND,
-        latency_ms: Date.now() - t0,
-      }
-    }
-
-    const dim = seedEmbeddings[0].length
-    const centroid = new Array(dim).fill(0)
-    for (const e of seedEmbeddings) {
-      for (let i = 0; i < dim; i++) centroid[i] += e[i]
-    }
-    for (let i = 0; i < dim; i++) centroid[i] /= seedEmbeddings.length
-
-    // Set of seed chunk_ids to exclude.
-    const seedChunkIds = new Set(seedRows.map((r) => r.chunk_id))
-
-    // KNN — over-fetch since we drop seed chunks + dedupe by doc.
-    const vecRows = gatherVecCandidates(db, centroid, (limit + seedChunkIds.size + 5) * 3)
-    const chunkIds = vecRows
-      .map((r) => r.chunk_id)
-      .filter((id) => !seedChunkIds.has(id))
-    const hydrated = hydrateChunks(db, chunkIds)
-
-    const bestByDoc = new Map()
-    for (const row of hydrated.values()) {
-      // desk_similar default: "all" — similarity has no time/status semantic;
-      // when asking "what's like this doc" we want the full corpus.
-      if (!passesScope(row, scope, "all")) continue
-      const score = clipCosine(cosine(centroid, row.embedding))
-      const existing = bestByDoc.get(row.doc_id)
-      if (shouldReplaceBest(existing, score)) {
-        bestByDoc.set(row.doc_id, {
-          path: row.doc_path,
-          kind: row.kind,
-          track: row.track,
-          task_slug: row.task_slug,
-          status: row.status,
-          updated_at: row.updated_at,
-          snippet: makeSnippet(row.text, []),
-          score,
-        })
-      }
-    }
-
-    const results = [...bestByDoc.values()]
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit)
-
-    return {
-      seed: seedPath,
-      results,
-      latency_ms: Date.now() - t0,
-    }
-  } finally {
-    closeDb(db)
-  }
+    },
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -771,148 +766,149 @@ export async function desk_timeline({ deskRoot, input, opts }) {
   const scope = input?.scope
   const now = opts?.now ?? Date.now()
 
-  await ensureIndex(deskRoot, { embed: opts?.embed ?? {} })
-  const db = openDb(deskRoot)
-  try {
-    // Window filter clauses for the docs table + scope filter.
-    // desk_timeline default: "all" — timeline is already temporally bounded;
-    // archive items in the window are legitimate timeline entries.
-    const params = []
-    const clauses = []
-    if (from) {
-      clauses.push("d.updated_at >= ?")
-      params.push(from)
-    }
-    if (to) {
-      clauses.push("d.updated_at <= ?")
-      params.push(to)
-    }
-    const scopeFilter = resolveScopeFilter(scope, "all")
-    const windowSql = (clauses.length ? " AND " + clauses.join(" AND ") : "") + scopeFilter.sql
-    params.push(...scopeFilter.params)
-
-    let semanticAvailable = false
-    let semanticDiagnostic = null
-    let queryVec = null
-    if (query) {
-      const r = await embedQuery(query, opts?.embed ?? {})
-      semanticAvailable = r.available
-      queryVec = r.vector
-      semanticDiagnostic = r.diagnostic
-    }
-
-    let candidateChunks = []
-    if (query) {
-      // Hybrid path: FTS within the window + semantic over candidates.
-      const { matchExpr, terms } = buildFtsQuery(query)
-      const ftsRows = matchExpr
-        ? db
-            .prepare(
-              `SELECT c.id AS chunk_id, c.doc_id, bm25(chunks_fts) AS raw_bm25
-               FROM chunks_fts
-               JOIN chunks c ON c.id = chunks_fts.rowid
-               JOIN docs d ON d.id = c.doc_id
-               WHERE chunks_fts MATCH ? ${windowSql}
-               ORDER BY raw_bm25
-               LIMIT ?`,
-            )
-            .all(matchExpr, ...params, limit * 4)
-        : []
-      const vecRows = semanticAvailable
-        ? gatherVecCandidates(db, queryVec, limit * 4)
-        : []
-      const idSet = new Set()
-      for (const r of ftsRows) idSet.add(r.chunk_id)
-      for (const r of vecRows) idSet.add(r.chunk_id)
-      const chunkIds = [...idSet]
-      const hydrated = hydrateChunks(db, chunkIds)
-
-      const bm25ByChunk = new Map()
-      const bm25Norm = normalizeBm25(ftsRows.map((r) => r.raw_bm25))
-      ftsRows.forEach((r, i) => bm25ByChunk.set(r.chunk_id, bm25Norm[i]))
-
-      const cosByChunk = new Map()
-      if (semanticAvailable) {
-        for (const [id, row] of hydrated) {
-          cosByChunk.set(id, clipCosine(cosine(queryVec, row.embedding)))
-        }
-      }
-
-      const bestByDoc = new Map()
-      for (const [id, row] of hydrated) {
-        // Re-apply window + scope checks (vec candidates aren't filtered upstream).
-        if (from && row.updated_at && row.updated_at < from) continue
-        if (to && row.updated_at && row.updated_at > to) continue
-        if (!passesScope(row, scope, "all")) continue
-        const parts = {
-          semantic: cosByChunk.get(id) ?? 0,
-          bm25: bm25ByChunk.get(id) ?? 0,
-          recency: recencyDecay(row.updated_at, now),
-          state: stateBias(row.status),
-          pin: false, // timeline doesn't pin
-          semanticAvailable,
-        }
-        const { score, breakdown } = combineScore(parts)
-        const existing = bestByDoc.get(row.doc_id)
-        if (shouldReplaceBest(existing, score)) {
-          bestByDoc.set(row.doc_id, {
-            path: row.doc_path,
-            kind: row.kind,
-            track: row.track,
-            task_slug: row.task_slug,
-            status: row.status,
-            updated_at: row.updated_at,
-            snippet: makeSnippet(row.text, terms),
-            score,
-            score_breakdown: breakdown,
-          })
-        }
-      }
-      candidateChunks = [...bestByDoc.values()]
-        // Within timeline, sort by updated_at DESC per spec (recency
-        // dominates inside an explicit window — score-driven ordering
-        // makes more sense for desk_search where the window is implicit).
-        .sort((a, b) => comparableUpdatedAt(b).localeCompare(comparableUpdatedAt(a)))
-        .slice(0, limit)
-    } else {
-      // No query — straight chronological listing within the window.
-      const rows = db
-        .prepare(
-          `SELECT d.id AS doc_id, d.path AS doc_path, d.kind, d.track,
-                  d.task_slug, d.status, d.updated_at,
-                  (SELECT text FROM chunks WHERE doc_id = d.id ORDER BY chunk_index LIMIT 1) AS text
-           FROM docs d
-           WHERE 1=1 ${windowSql}
-           ORDER BY d.updated_at DESC
-           LIMIT ?`,
-        )
-        .all(...params, limit)
-      candidateChunks = rows.map((r) => ({
-        path: r.doc_path,
-        kind: r.kind,
-        track: r.track,
-        task_slug: r.task_slug,
-        status: r.status,
-        updated_at: r.updated_at,
-        snippet: makeSnippet(firstChunkText(r), []),
-      }))
-    }
-
-    return {
-      from,
-      to,
-      query: query || null,
-      results: candidateChunks,
-      search_mode: query ? (semanticAvailable ? "hybrid" : "lexical") : "temporal",
-      semantic_unavailable: query ? !semanticAvailable : false,
-      latency_ms: Date.now() - t0,
-      ...(query && !semanticAvailable
-        ? semanticUnavailableFields(semanticDiagnostic)
-        : {}),
-    }
-  } finally {
-    closeDb(db)
+  let semanticAvailable = false
+  let semanticDiagnostic = null
+  let queryVec = null
+  if (query) {
+    const r = await embedQuery(query, opts?.embed ?? {})
+    semanticAvailable = r.available
+    queryVec = r.vector
+    semanticDiagnostic = r.diagnostic
   }
+
+  const maintenance = opts?.maintenance ?? maintenanceCoordinator
+  return maintenance.runFreshRead({
+    deskRoot: path.resolve(deskRoot),
+    ensureOptions: { embed: opts?.embed ?? {} },
+    read(db) {
+      // Window filter clauses for the docs table + scope filter.
+      // desk_timeline default: "all" — timeline is already temporally bounded;
+      // archive items in the window are legitimate timeline entries.
+      const params = []
+      const clauses = []
+      if (from) {
+        clauses.push("d.updated_at >= ?")
+        params.push(from)
+      }
+      if (to) {
+        clauses.push("d.updated_at <= ?")
+        params.push(to)
+      }
+      const scopeFilter = resolveScopeFilter(scope, "all")
+      const windowSql = (clauses.length ? " AND " + clauses.join(" AND ") : "") + scopeFilter.sql
+      params.push(...scopeFilter.params)
+
+      let candidateChunks = []
+      if (query) {
+        // Hybrid path: FTS within the window + semantic over candidates.
+        const { matchExpr, terms } = buildFtsQuery(query)
+        const ftsRows = matchExpr
+          ? db
+              .prepare(
+                `SELECT c.id AS chunk_id, c.doc_id, bm25(chunks_fts) AS raw_bm25
+                 FROM chunks_fts
+                 JOIN chunks c ON c.id = chunks_fts.rowid
+                 JOIN docs d ON d.id = c.doc_id
+                 WHERE chunks_fts MATCH ? ${windowSql}
+                 ORDER BY raw_bm25
+                 LIMIT ?`,
+              )
+              .all(matchExpr, ...params, limit * 4)
+          : []
+        const vecRows = semanticAvailable
+          ? gatherVecCandidates(db, queryVec, limit * 4)
+          : []
+        const idSet = new Set()
+        for (const r of ftsRows) idSet.add(r.chunk_id)
+        for (const r of vecRows) idSet.add(r.chunk_id)
+        const chunkIds = [...idSet]
+        const hydrated = hydrateChunks(db, chunkIds)
+
+        const bm25ByChunk = new Map()
+        const bm25Norm = normalizeBm25(ftsRows.map((r) => r.raw_bm25))
+        ftsRows.forEach((r, i) => bm25ByChunk.set(r.chunk_id, bm25Norm[i]))
+
+        const cosByChunk = new Map()
+        if (semanticAvailable) {
+          for (const [id, row] of hydrated) {
+            cosByChunk.set(id, clipCosine(cosine(queryVec, row.embedding)))
+          }
+        }
+
+        const bestByDoc = new Map()
+        for (const [id, row] of hydrated) {
+          // Re-apply window + scope checks (vec candidates aren't filtered upstream).
+          if (from && row.updated_at && row.updated_at < from) continue
+          if (to && row.updated_at && row.updated_at > to) continue
+          if (!passesScope(row, scope, "all")) continue
+          const parts = {
+            semantic: cosByChunk.get(id) ?? 0,
+            bm25: bm25ByChunk.get(id) ?? 0,
+            recency: recencyDecay(row.updated_at, now),
+            state: stateBias(row.status),
+            pin: false, // timeline doesn't pin
+            semanticAvailable,
+          }
+          const { score, breakdown } = combineScore(parts)
+          const existing = bestByDoc.get(row.doc_id)
+          if (shouldReplaceBest(existing, score)) {
+            bestByDoc.set(row.doc_id, {
+              path: row.doc_path,
+              kind: row.kind,
+              track: row.track,
+              task_slug: row.task_slug,
+              status: row.status,
+              updated_at: row.updated_at,
+              snippet: makeSnippet(row.text, terms),
+              score,
+              score_breakdown: breakdown,
+            })
+          }
+        }
+        candidateChunks = [...bestByDoc.values()]
+          // Within timeline, sort by updated_at DESC per spec (recency
+          // dominates inside an explicit window — score-driven ordering
+          // makes more sense for desk_search where the window is implicit).
+          .sort((a, b) => comparableUpdatedAt(b).localeCompare(comparableUpdatedAt(a)))
+          .slice(0, limit)
+      } else {
+        // No query — straight chronological listing within the window.
+        const rows = db
+          .prepare(
+            `SELECT d.id AS doc_id, d.path AS doc_path, d.kind, d.track,
+                    d.task_slug, d.status, d.updated_at,
+                    (SELECT text FROM chunks WHERE doc_id = d.id ORDER BY chunk_index LIMIT 1) AS text
+             FROM docs d
+             WHERE 1=1 ${windowSql}
+             ORDER BY d.updated_at DESC
+             LIMIT ?`,
+          )
+          .all(...params, limit)
+        candidateChunks = rows.map((r) => ({
+          path: r.doc_path,
+          kind: r.kind,
+          track: r.track,
+          task_slug: r.task_slug,
+          status: r.status,
+          updated_at: r.updated_at,
+          snippet: makeSnippet(firstChunkText(r), []),
+        }))
+      }
+
+      return {
+        from,
+        to,
+        query: query || null,
+        results: candidateChunks,
+        search_mode: query ? (semanticAvailable ? "hybrid" : "lexical") : "temporal",
+        semantic_unavailable: query ? !semanticAvailable : false,
+        latency_ms: Date.now() - t0,
+        ...(query && !semanticAvailable
+          ? semanticUnavailableFields(semanticDiagnostic)
+          : {}),
+      }
+    },
+  })
 }
 
 export const __searchInternalsForTests = {

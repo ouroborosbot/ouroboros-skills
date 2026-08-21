@@ -360,7 +360,7 @@ test("pending reindex intent suppresses repair registration from an older fresh 
     reindex = maintenance.runExplicitReindex({
       deskRoot: root,
       force: false,
-      ensureOptions: { skipEmbed: true },
+      ensureOptions: { marker: "explicit-reindex" },
     })
     await flushAsyncWork(
       "reindex intent did not reach its initial cancellation",
@@ -493,6 +493,85 @@ test("fresh read closes its database handle before registering background repair
     await awaitBounded(
       maintenance.cancelBackgroundRepair(root),
       "fresh-read close maintenance did not settle during cleanup",
+    ).catch(() => {})
+    await removeRoots(root)
+  }
+})
+
+test("fresh read handles missing semantic metadata, default repair options, and invalid roots", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const root = await makeRoot("desk-maintenance-fresh-read-defaults-")
+  const repairOptions = []
+  let ensureCalls = 0
+
+  const maintenance = createMaintenanceCoordinator({
+    ensureIndex: async () => {
+      ensureCalls += 1
+      if (ensureCalls === 1) return { built: false, reason: "fresh" }
+      return {
+        built: false,
+        reason: "fresh",
+        semantic: {
+          chunks_total: 1,
+          vectors_indexed: 0,
+          missing_vectors: 1,
+        },
+      }
+    },
+    openIndex: () => ({ open: true }),
+    closeIndex: (db) => {
+      db.open = false
+    },
+    createRepairCoordinator: () => ({
+      start(options) {
+        repairOptions.push(options)
+        return Promise.resolve({ state: "complete", last_error: null })
+      },
+      async cancel() {
+        return { state: "idle", last_error: null, cancelled: true }
+      },
+      status() {
+        return { state: "idle", last_error: null }
+      },
+    }),
+  })
+
+  try {
+    const first = await maintenance.runFreshRead({
+      deskRoot: root,
+      read: () => "without-semantic",
+    })
+    const second = await maintenance.runFreshRead({
+      deskRoot: root,
+      read: () => "default-embed",
+    })
+
+    assert.equal(first, "without-semantic")
+    assert.equal(second, "default-embed")
+    assert.deepEqual(repairOptions, [
+      {
+        deskRoot: path.resolve(root),
+        embed: {},
+      },
+    ])
+    assert.throws(
+      () => maintenance.runFreshRead({
+        deskRoot: "",
+        read: () => null,
+      }),
+      /deskRoot is required/u,
+    )
+    assert.throws(
+      () => maintenance.runFreshRead({
+        deskRoot: null,
+        read: () => null,
+      }),
+      /deskRoot is required/u,
+    )
+  } finally {
+    await awaitBounded(
+      maintenance.cancelBackgroundRepair(root),
+      "fresh-read defaults maintenance did not settle during cleanup",
     ).catch(() => {})
     await removeRoots(root)
   }
