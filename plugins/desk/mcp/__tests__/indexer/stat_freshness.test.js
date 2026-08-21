@@ -86,6 +86,54 @@ test("warm no-op freshness performs zero Markdown body reads", async () => {
   }
 })
 
+test("statable unreadable Markdown does not disable warm freshness", async () => {
+  const root = await mkRoot()
+  await writeFile(root, "trackA/task-1/task.md", "visible body")
+  const lockedPath = await writeFile(root, "references/locked.md", "locked body")
+  const originalReadFile = fs.readFile
+  let markdownReads = []
+  fs.readFile = async (file, ...args) => {
+    const resolved = path.resolve(String(file))
+    if (resolved.toLowerCase().endsWith(".md")) {
+      markdownReads.push(path.relative(root, resolved).split(path.sep).join("/"))
+    }
+    if (resolved === lockedPath) {
+      const error = new Error("unreadable")
+      error.code = "EACCES"
+      throw error
+    }
+    return originalReadFile(file, ...args)
+  }
+  try {
+    await rebuildIndex(root, indexOpts)
+    markdownReads = []
+    const first = await ensureIndex(root, indexOpts)
+    assert.equal(first.built, false)
+    assert.equal(first.reason, "fresh")
+    assert.deepEqual(markdownReads, [])
+
+    const stat = await fs.stat(lockedPath)
+    await fs.utimes(
+      lockedPath,
+      new Date(stat.atimeMs + 1000),
+      new Date(stat.mtimeMs + 1000),
+    )
+    markdownReads = []
+    const refreshed = await ensureIndex(root, indexOpts)
+    assert.equal(refreshed.built, false)
+    assert.equal(refreshed.reason, "fresh")
+    assert.ok(markdownReads.includes("references/locked.md"))
+    assert.ok(markdownReads.includes("trackA/task-1/task.md"))
+
+    markdownReads = []
+    const settled = await ensureIndex(root, indexOpts)
+    assert.equal(settled.built, false)
+    assert.deepEqual(markdownReads, [])
+  } finally {
+    fs.readFile = originalReadFile
+  }
+})
+
 test("mtime-only drift triggers one exact refresh and then returns to stat-only freshness", async () => {
   const root = await mkRoot()
   const docPath = await writeFile(root, "trackA/task-1/task.md", "same task body")
@@ -187,6 +235,34 @@ test("transient stat failures fall back to exact discovery", async (t) => {
   } finally {
     closeDb(db)
   }
+})
+
+test("rebuild fails explicitly when the stat inventory never settles", async (t) => {
+  const root = await mkRoot()
+  const docPath = await writeFile(root, "references/context.md", "context body")
+  const stat = fs.stat.bind(fs)
+  let calls = 0
+  t.mock.method(fs, "stat", async (file, ...args) => {
+    const value = await stat(file, ...args)
+    if (file !== docPath) return value
+    calls += 1
+    const generation = calls <= 3 ? 0 : calls <= 6 ? 1 : 2
+    return {
+      dev: value.dev,
+      ino: value.ino,
+      size: value.size,
+      mtimeMs: value.mtimeMs + generation,
+      ctimeMs: value.ctimeMs + generation,
+    }
+  })
+
+  await assert.rejects(
+    rebuildIndex(root, indexOpts),
+    (error) =>
+      error.code === "ERR_DESK_STAT_INVENTORY_UNSTABLE" &&
+      error.message ===
+        "document stat inventory changed repeatedly during discovery",
+  )
 })
 
 test("ignored Markdown stat drift does not invalidate a warm index", async () => {

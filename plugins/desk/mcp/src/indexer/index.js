@@ -88,7 +88,12 @@ export async function rebuildIndex(deskRoot, opts = {}) {
   try {
     throwIfAborted(opts.signal)
     writeActiveEmbeddingSpec(db, setMeta)
-    const discoveredRaw = await discover(deskRoot, { signal: opts.signal })
+    const {
+      docs: discoveredRaw,
+      statInventoryHash,
+    } = await discoverStableDocumentState(deskRoot, {
+      signal: opts.signal,
+    })
     const tombstoneFilter = await filterTombstonedDocuments({
       pluginRoot: opts.tombstones?.pluginRoot,
       docs: discoveredRaw,
@@ -182,11 +187,7 @@ export async function rebuildIndex(deskRoot, opts = {}) {
     repairFtsIndex(db)
 
     setMeta(db, "discovery_grammar_version", String(DISCOVERY_GRAMMAR_VERSION))
-    setMeta(
-      db,
-      STAT_INVENTORY_META_KEY,
-      requiredStatInventoryHash(discoveredRaw),
-    )
+    setMeta(db, STAT_INVENTORY_META_KEY, statInventoryHash)
     setMeta(
       db,
       TOMBSTONE_LEDGER_META_KEY,
@@ -197,7 +198,7 @@ export async function rebuildIndex(deskRoot, opts = {}) {
     setMeta(db, "embedding_model", opts.embed?.model ?? "nomic-embed-text")
     const checkpoint = db.pragma("wal_checkpoint(PASSIVE)")[0]
     await rememberFreshIndex(deskRoot, db, {
-      statInventoryHash: requiredStatInventoryHash(discoveredRaw),
+      statInventoryHash,
       tombstoneLedgerFingerprint: tombstoneFilter.ledger_fingerprint,
       ignoreWal:
         checkpoint.busy === 0 &&
@@ -721,9 +722,8 @@ export async function isIndexFresh(deskRoot, db, { signal, tombstones } = {}) {
   const tombstoneMetadataDrift =
     getMeta(db, TOMBSTONE_LEDGER_META_KEY) !==
     tombstoneStatus.ledger_fingerprint
-  const statInventoryHash = requiredStatInventoryHash(
-    await discoverStatInventory(deskRoot, { signal }),
-  )
+  const statInventory = await discoverStatInventory(deskRoot, { signal })
+  const statInventoryHash = requiredStatInventoryHash(statInventory)
   const statInventoryMetadataDrift =
     getMeta(db, STAT_INVENTORY_META_KEY) !== statInventoryHash
   if (
@@ -736,13 +736,18 @@ export async function isIndexFresh(deskRoot, db, { signal, tombstones } = {}) {
   ) {
     return true
   }
-  const discovered = await discover(deskRoot, { signal })
+  const {
+    docs: discovered,
+    statInventoryHash: exactStatInventoryHash,
+  } = await discoverStableDocumentState(deskRoot, {
+    signal,
+    initialStatInventory: statInventory,
+  })
   const tombstoneFilter = await filterTombstonedDocuments({
     pluginRoot: tombstones?.pluginRoot,
     docs: discovered,
   })
   const docs = tombstoneFilter.docs
-  const exactStatInventoryHash = requiredStatInventoryHash(discovered)
   if (!await isIndexedDocumentTreeCurrent(deskRoot, db, { signal, docs })) {
     forgetFreshIndex(deskRoot)
     return false
@@ -774,6 +779,27 @@ export async function isIndexFresh(deskRoot, db, { signal, tombstones } = {}) {
     ignoreWal,
   })
   return true
+}
+
+async function discoverStableDocumentState(
+  deskRoot,
+  { signal, initialStatInventory } = {},
+) {
+  const before = initialStatInventory ??
+    await discoverStatInventory(deskRoot, { signal })
+  let beforeHash = requiredStatInventoryHash(before)
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const docs = await discover(deskRoot, { signal })
+    const after = await discoverStatInventory(deskRoot, { signal })
+    const afterHash = requiredStatInventoryHash(after)
+    if (beforeHash === afterHash) {
+      return { docs, statInventoryHash: afterHash }
+    }
+    beforeHash = afterHash
+  }
+  const error = new Error("document stat inventory changed repeatedly during discovery")
+  error.code = "ERR_DESK_STAT_INVENTORY_UNSTABLE"
+  throw error
 }
 
 export function requiredStatInventoryHash(docs) {
