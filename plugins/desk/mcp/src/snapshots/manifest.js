@@ -183,14 +183,17 @@ export function validateSnapshotManifest({
   assertProvenance(manifest.provenance)
   assertSourcePaths(manifest.source_paths)
 
+  const representedDocumentTreeHash =
+    hashRepresentedDocuments(manifest.represented_documents)
   const freshness = {
     artifact_source_scope:
       manifest.artifact_source_scope_hash === expectedArtifactSourceScopeHash
         ? "fresh"
         : "stale",
     document_tree:
-      Array.isArray(manifest.represented_documents) &&
-      manifest.document_tree_hash === expectedDocumentTreeHash
+      representedDocumentTreeHash !== null &&
+      representedDocumentTreeHash === manifest.document_tree_hash &&
+      representedDocumentTreeHash === expectedDocumentTreeHash
         ? "fresh"
         : "stale",
   }
@@ -218,6 +221,29 @@ function assertObjectEqual(actual, expected, label) {
   if (stableStringify(actual) !== stableStringify(expected)) {
     throw new Error(`snapshot manifest ${label} must match expected ${label}`)
   }
+}
+
+function hashRepresentedDocuments(docs) {
+  if (!Array.isArray(docs)) return null
+  if (docs.some((doc) =>
+    !doc ||
+    typeof doc !== "object" ||
+    Array.isArray(doc) ||
+    typeof doc.path !== "string" ||
+    typeof doc.hash !== "string"
+  )) {
+    return null
+  }
+  const hash = createHash("sha256")
+  for (const doc of [...docs].sort((left, right) =>
+    left.path.localeCompare(right.path)
+  )) {
+    const documentHash = doc.hash.startsWith("sha256:")
+      ? doc.hash
+      : `sha256:${doc.hash}`
+    hash.update(`${normalizePath(doc.path)}\0${documentHash}\0`)
+  }
+  return `sha256:${hash.digest("hex")}`
 }
 
 function assertArtifact(manifest, artifactSha256) {

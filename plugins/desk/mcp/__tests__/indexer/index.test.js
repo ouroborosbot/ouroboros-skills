@@ -407,8 +407,10 @@ test("default embedding options use global fetch and archive docs keep archive m
 test("isIndexFresh covers missing, invalid, stale, and fresh metadata states", async () => {
   const root = await mkRoot()
   await w(root, "trackA/task-1/task.md", "---\nstatus: processing\n---\nfreshness body")
+  await rebuildIndex(root, indexOpts)
   const db = openDb(root)
   try {
+    db.prepare("DELETE FROM meta WHERE key = 'last_indexed_at'").run()
     setMeta(
       db,
       "discovery_grammar_version",
@@ -435,10 +437,12 @@ test("isIndexFresh rejects missing and stale discovery grammar metadata", async 
   await w(root, "trackA/task-1/task.md", "---\nstatus: processing\n---\ngrammar freshness body")
   const old = new Date("2000-01-01T00:00:00.000Z")
   await fs.utimes(docPath, old, old)
+  await rebuildIndex(root, indexOpts)
 
   const db = openDb(root)
   try {
     setMeta(db, "last_indexed_at", "2999-01-01T00:00:00.000Z")
+    db.prepare("DELETE FROM meta WHERE key = 'discovery_grammar_version'").run()
     assert.equal(await isIndexFresh(root, db), false)
 
     setMeta(db, "discovery_grammar_version", "1")

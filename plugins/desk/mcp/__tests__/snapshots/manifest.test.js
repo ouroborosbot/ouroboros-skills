@@ -15,7 +15,11 @@ const repoRoot = path.resolve(mcpRoot, "..", "..", "..")
 const deskPluginRoot = path.join(repoRoot, "plugins", "desk")
 const SNAPSHOT_ID = "desk-base-20260615T000000Z"
 const SOURCE_SCOPE_HASH = `sha256:${"a".repeat(64)}`
-const DOCUMENT_TREE_HASH = `sha256:${"b".repeat(64)}`
+const REPRESENTED_DOCUMENTS = Object.freeze([{
+  path: "trackA/task-1/task.md",
+  hash: `sha256:${"e".repeat(64)}`,
+}])
+const DOCUMENT_TREE_HASH = documentTreeHash(REPRESENTED_DOCUMENTS)
 const DISCOVERY_GRAMMAR_VERSION = 2
 const DB_SCHEMA = { id: "desk-index-sqlite-v1", version: 1 }
 const SQLITE_VEC = { package: "sqlite-vec", version: "0.1.6", table: "vec0" }
@@ -34,6 +38,14 @@ function sha256(value) {
   return createHash("sha256").update(value).digest("hex")
 }
 
+function documentTreeHash(docs) {
+  const hash = createHash("sha256")
+  for (const doc of [...docs].sort((left, right) => left.path.localeCompare(right.path))) {
+    hash.update(`${doc.path}\0${doc.hash}\0`)
+  }
+  return `sha256:${hash.digest("hex")}`
+}
+
 function validManifest({ artifactSha, snapshotId = SNAPSHOT_ID } = {}) {
   return {
     schema_version: 1,
@@ -47,10 +59,7 @@ function validManifest({ artifactSha, snapshotId = SNAPSHOT_ID } = {}) {
     runtime: RUNTIME,
     artifact_source_scope_hash: SOURCE_SCOPE_HASH,
     document_tree_hash: DOCUMENT_TREE_HASH,
-    represented_documents: [{
-      path: "trackA/task-1/task.md",
-      hash: `sha256:${"e".repeat(64)}`,
-    }],
+    represented_documents: REPRESENTED_DOCUMENTS.map((doc) => ({ ...doc })),
     included_pack_ids: ["desk-base-pack"],
     created_at: "2026-06-15T00:00:00.000Z",
     artifact: {
@@ -265,6 +274,28 @@ test("older snapshot grammar versions report stale freshness", async () => {
     document_tree: "fresh",
     discovery_grammar: "stale",
   })
+})
+
+test("snapshot freshness rejects represented documents that do not match the claimed tree", async () => {
+  const { validateSnapshotManifest } = await loadManifestModule()
+  const artifactSha = `sha256:${"d".repeat(64)}`
+  const manifest = {
+    ...validManifest({ artifactSha }),
+    represented_documents: [],
+  }
+
+  const result = validateSnapshotManifest({
+    manifest,
+    artifactSha256: artifactSha,
+    expectedSpec: ACTIVE_EMBEDDING_SPEC,
+    expectedDbSchema: DB_SCHEMA,
+    expectedSqliteVec: SQLITE_VEC,
+    expectedRuntime: RUNTIME,
+    expectedArtifactSourceScopeHash: SOURCE_SCOPE_HASH,
+    expectedDocumentTreeHash: DOCUMENT_TREE_HASH,
+  })
+
+  assert.equal(result.freshness.document_tree, "stale")
 })
 
 test("snapshot manifest rejects compatibility and provenance drift", async () => {

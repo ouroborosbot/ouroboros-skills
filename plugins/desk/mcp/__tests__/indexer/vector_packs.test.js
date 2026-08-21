@@ -464,6 +464,39 @@ test("vector-pack document-tree drift reports stale freshness", async () => {
   })
 })
 
+test("vector-pack freshness rejects represented documents that do not match the claimed tree", async () => {
+  const { validateVectorPackFile } = await loadVectorPackModule()
+  const root = await tmpRoot()
+  const pluginRoot = path.join(root, "plugins", "desk")
+  const identity = chunkIdentity({
+    docPath: "trackA/task-1/task.md",
+    chunk: { text: "forged represented document tree chunk" },
+  })
+  const documentTreeHash = `sha256:${"b".repeat(64)}`
+  const paths = await writePack({
+    pluginRoot,
+    packId: "forged-document-tree-pack",
+    rows: [rowFor(identity)],
+    manifest: {
+      document_tree_hash: documentTreeHash,
+      represented_documents: [],
+    },
+  })
+
+  const result = await validateVectorPackFile({
+    pluginRoot,
+    packPath: paths.packPath,
+    manifestPath: paths.manifestPath,
+    checksumPath: paths.checksumPath,
+    expectedSpec: ACTIVE_EMBEDDING_SPEC,
+    expectedDocumentTreeHash: documentTreeHash,
+  })
+
+  assert.deepEqual(result.freshness, {
+    document_tree: "stale",
+  })
+})
+
 test("vector pack validation rejects wrong specs, dimensions, hashes, and malformed vectors", async () => {
   const { validateVectorPackFile } = await loadVectorPackModule()
   const root = await tmpRoot()

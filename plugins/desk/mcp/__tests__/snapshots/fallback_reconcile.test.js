@@ -29,7 +29,11 @@ const require = createRequire(import.meta.url)
 const packageLock = require("../../package-lock.json")
 const SOURCE_SCOPE_HASH = `sha256:${"a".repeat(64)}`
 const STALE_SOURCE_SCOPE_HASH = `sha256:${"d".repeat(64)}`
-const CURRENT_DOCUMENT_TREE_HASH = `sha256:${"b".repeat(64)}`
+const CURRENT_REPRESENTED_DOCUMENTS = Object.freeze([{
+  path: "trackA/task-1/task.md",
+  hash: `sha256:${"e".repeat(64)}`,
+}])
+const CURRENT_DOCUMENT_TREE_HASH = documentTreeHash(CURRENT_REPRESENTED_DOCUMENTS)
 const STALE_DOCUMENT_TREE_HASH = `sha256:${"c".repeat(64)}`
 const DB_SCHEMA = { id: "desk-index-sqlite-v1", version: 1 }
 const SQLITE_VEC = {
@@ -55,6 +59,14 @@ async function writeFile(root, rel, body) {
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex")
+}
+
+function documentTreeHash(docs) {
+  const hash = createHash("sha256")
+  for (const doc of [...docs].sort((left, right) => left.path.localeCompare(right.path))) {
+    hash.update(`${doc.path}\0${doc.hash}\0`)
+  }
+  return `sha256:${hash.digest("hex")}`
 }
 
 function vector(seed, dimension = ACTIVE_EMBEDDING_SPEC.dimension) {
@@ -146,7 +158,7 @@ function validManifest({
     artifact_source_scope_hash: SOURCE_SCOPE_HASH,
     document_tree_hash: documentTreeHash,
     discovery_grammar_version: DISCOVERY_GRAMMAR_VERSION,
-    represented_documents: [],
+    represented_documents: CURRENT_REPRESENTED_DOCUMENTS.map((doc) => ({ ...doc })),
     included_pack_ids: ["desk-base-pack"],
     created_at: createdAt,
     artifact: {
@@ -793,6 +805,44 @@ test("ensureIndex reconciles a restored DB with stale discovery grammar exactly 
   })
   assert.equal(second.built, false)
   assert.equal(second.reason, "fresh")
+})
+
+test("ensureIndex reconciles a restored snapshot whose embedded document tree is stale", async () => {
+  const deskRoot = await tmpRoot("desk-snapshot-embedded-tree-desk-")
+  const pluginRoot = await tmpRoot("desk-snapshot-embedded-tree-plugin-")
+  const snapshotSourceRoot = await tmpRoot("desk-snapshot-embedded-tree-source-")
+  const docPath = "trackA/task-1/task.md"
+  const body = "---\nstatus: processing\n---\nembedded tree body"
+  await writeFile(snapshotSourceRoot, docPath, body)
+  await writeSnapshotFromDesk({
+    pluginRoot,
+    snapshotId: "stale-embedded-tree",
+    sourceDeskRoot: snapshotSourceRoot,
+    mutateDb: (db) => db.prepare("DELETE FROM docs").run(),
+  })
+  await writeFile(deskRoot, docPath, body)
+  const old = new Date("2020-01-01T00:00:00.000Z")
+  await fs.utimes(path.join(deskRoot, docPath), old, old)
+
+  const ensured = await ensureIndex(deskRoot, {
+    snapshots: snapshotContext(pluginRoot),
+    skipEmbed: true,
+  })
+
+  assert.equal(ensured.built, true)
+  assert.equal(ensured.reason, "stale_snapshot_reconciled")
+  assert.equal(ensured.snapshot.restored, true)
+  assert.equal(ensured.snapshot.reconciled, true)
+
+  const db = openDb(deskRoot)
+  try {
+    assert.equal(
+      db.prepare("SELECT count(*) AS count FROM docs WHERE path = ?").get(docPath).count,
+      1,
+    )
+  } finally {
+    closeDb(db)
+  }
 })
 
 test("ensureIndex does not take the clean fast path for an older snapshot grammar", async () => {

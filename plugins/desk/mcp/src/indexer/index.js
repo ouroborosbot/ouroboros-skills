@@ -561,6 +561,25 @@ export function isDiscoveryGrammarCurrent(db) {
   return getMeta(db, "discovery_grammar_version") === String(DISCOVERY_GRAMMAR_VERSION)
 }
 
+export async function isIndexedDocumentTreeCurrent(
+  deskRoot,
+  db,
+  { signal, docs } = {},
+) {
+  const currentDocs = docs ?? await discover(deskRoot, { signal })
+  const indexedDocs = db
+    .prepare("SELECT path, hash FROM docs ORDER BY path")
+    .all()
+  const sortedCurrentDocs = [...currentDocs].sort((left, right) =>
+    left.path.localeCompare(right.path)
+  )
+  if (indexedDocs.length !== sortedCurrentDocs.length) return false
+  return indexedDocs.every((doc, index) =>
+    doc.path === sortedCurrentDocs[index].path &&
+    doc.hash === sortedCurrentDocs[index].hash
+  )
+}
+
 export async function isIndexFresh(deskRoot, db, { signal, tombstones } = {}) {
   if (!isDiscoveryGrammarCurrent(db)) return false
   const row = db
@@ -576,6 +595,9 @@ export async function isIndexFresh(deskRoot, db, { signal, tombstones } = {}) {
   if (tombstoneStatus.tombstoned) return false
   // Walk discover() targets and bail on the first newer mtime.
   const docs = await discover(deskRoot, { signal })
+  if (!await isIndexedDocumentTreeCurrent(deskRoot, db, { signal, docs })) {
+    return false
+  }
   for (const d of docs) {
     throwIfAborted(signal)
     if (d.mtime > indexedMs) return false

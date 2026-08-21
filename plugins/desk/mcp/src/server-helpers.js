@@ -11,7 +11,6 @@ import { fileURLToPath } from "node:url"
 import { closeDb, getMeta, indexDbPath, openDb, setMeta } from "./db/init.js"
 import { DISCOVERY_GRAMMAR_VERSION, discover } from "./indexer/discover.js"
 import {
-  isDiscoveryGrammarCurrent,
   isIndexFresh,
   rebuildIndex,
 } from "./indexer/index.js"
@@ -90,11 +89,11 @@ export async function ensureIndex(deskRoot, opts = {}) {
     const semanticBefore = getSemanticCoverage(db)
     let repairMissing = false
     if (dbExisted) {
-      if (
-        snapshot?.restored &&
-        !snapshotNeedsReconcile(snapshot) &&
-        isDiscoveryGrammarCurrent(db)
-      ) {
+      const fresh = await isIndexFresh(deskRoot, db, {
+        signal: effectiveOpts.signal,
+        tombstones: effectiveOpts.tombstones,
+      })
+      if (fresh && !snapshotNeedsReconcile(snapshot)) {
         const repair = await maybeRepairMissingEmbeddings(
           deskRoot,
           db,
@@ -102,30 +101,17 @@ export async function ensureIndex(deskRoot, opts = {}) {
           semanticBefore,
         )
         if (repair) return withSnapshot(repair, snapshot)
-        await markRestoredSnapshotFresh(deskRoot, db, effectiveOpts.signal)
-        return withSnapshot(
-          { built: false, reason: "snapshot_restored", semantic: semanticBefore },
-          snapshot,
-        )
-      }
-      const fresh = await isIndexFresh(deskRoot, db, {
-        signal: effectiveOpts.signal,
-        tombstones: effectiveOpts.tombstones,
-      })
-      if (fresh) {
-        if (!snapshotNeedsReconcile(snapshot)) {
-          const repair = await maybeRepairMissingEmbeddings(
-            deskRoot,
-            db,
-            effectiveOpts,
-            semanticBefore,
-          )
-          if (repair) return withSnapshot(repair, snapshot)
+        if (snapshot?.restored) {
+          await markRestoredSnapshotFresh(deskRoot, db, effectiveOpts.signal)
           return withSnapshot(
-            { built: false, reason: "fresh", semantic: semanticBefore },
+            { built: false, reason: "snapshot_restored", semantic: semanticBefore },
             snapshot,
           )
         }
+        return withSnapshot(
+          { built: false, reason: "fresh", semantic: semanticBefore },
+          snapshot,
+        )
       }
       repairMissing = await shouldRepairMissingEmbeddings(db, effectiveOpts, semanticBefore)
     }
