@@ -19,7 +19,7 @@
     "arch": "portable",
     "node_abi": "portable"
   },
-  "artifact_source_scope_hash": "sha256:0be0436d8286ccec853a1ddf432767934b646aff93d74c6206a9a3855ff61fcf",
+  "artifact_source_scope_hash": "sha256:bad8fd53d998cb1359d9e80d390d82d40440d0ed41b8a2668b3c5e4fb8f62f36",
   "document_tree_hash": "sha256:b8268841c4877dfe293de7c463eadf38339c741daa6416ffd5b1ec652087fba8",
   "discovery_grammar_version": 2,
   "included_pack_ids": [
@@ -31,17 +31,17 @@
       "hash": "sha256:3886140d5ca53b11e39d670572bce11535d9f980e4d168dbdcbbd72bc10edf59"
     }
   ],
-  "created_at": "2026-08-21T06:47:10.536Z",
+  "created_at": "2026-08-21T07:11:58.902Z",
   "artifact": {
     "file": "repo-public-bootstrap-2026-06-15.sqlite.zst",
     "format": "sqlite-zstd",
-    "sha256": "sha256:cf0c5e58c7d9f217693b59ecbff8c31ebc248a137c1f99729778215dca596515",
+    "sha256": "sha256:194098dedd2bb4cba45a686e1161730415b9bcf3f5919e28da56a3f603e9863e",
     "compressed": true
   },
   "provenance": {
     "builder": "plugins/desk/mcp/scripts/build-snapshot.js",
     "source": "local-db",
-    "commit": "0e63d02242989e61a01c58a6639e9f8c3152cc76"
+    "commit": "8af891f7d5e1cfdb9a7985d44e6ff665c11324e7"
   },
   "source_paths": [
     "plugins/desk/mcp/src/artifacts/tombstones.js",
