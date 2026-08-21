@@ -574,11 +574,15 @@ test("production artifact checksums can be validated from string git blobs", asy
   try {
     const sourceHash = artifactSourceScopeHash()
     const currentDocs = [{ path: "tasks/dependency-activation/task.md", hash: sha256("current") }]
+    let validationArgs
     const expectation = await tempExpectation({
       tempDir,
       modules: {
         activeEmbeddingSpec: { id: "unit-spec" },
-        validateArtifacts: async () => greenValidation(),
+        validateArtifacts: async (args) => {
+          validationArgs = args
+          return greenValidation()
+        },
       },
     })
     writeFile(
@@ -632,6 +636,7 @@ test("production artifact checksums can be validated from string git blobs", asy
     })
 
     assert.equal(result.ok, true, result.errors.join("\n"))
+    assert.equal(validationArgs.deskRoot, expectation.deskRoot)
   } finally {
     rmSync(tempDir, { recursive: true, force: true })
   }

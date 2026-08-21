@@ -47,6 +47,10 @@ function validManifest({ artifactSha, snapshotId = SNAPSHOT_ID } = {}) {
     runtime: RUNTIME,
     artifact_source_scope_hash: SOURCE_SCOPE_HASH,
     document_tree_hash: DOCUMENT_TREE_HASH,
+    represented_documents: [{
+      path: "trackA/task-1/task.md",
+      hash: `sha256:${"e".repeat(64)}`,
+    }],
     included_pack_ids: ["desk-base-pack"],
     created_at: "2026-06-15T00:00:00.000Z",
     artifact: {

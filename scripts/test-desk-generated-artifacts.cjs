@@ -466,6 +466,7 @@ async function verifyProductionSharedArtifacts({
   let validation = { vector_packs: { count: vectorPackFiles.length, artifacts: [] }, snapshots: { count: snapshotFiles.length, artifacts: [] } };
   try {
     validation = await expectation.modules.validateArtifacts({
+      deskRoot: expectation.deskRoot,
       pluginRoot: expectation.pluginRoot,
       mcpRoot: expectation.mcpRoot,
     });

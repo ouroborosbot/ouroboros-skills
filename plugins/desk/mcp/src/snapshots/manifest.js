@@ -189,6 +189,7 @@ export function validateSnapshotManifest({
         ? "fresh"
         : "stale",
     document_tree:
+      Array.isArray(manifest.represented_documents) &&
       manifest.document_tree_hash === expectedDocumentTreeHash
         ? "fresh"
         : "stale",

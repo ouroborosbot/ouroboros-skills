@@ -6,8 +6,13 @@ import * as path from "node:path"
 import * as zlib from "node:zlib"
 import { fileURLToPath } from "node:url"
 
-import { closeDb, indexDbPath, openDb } from "../db/init.js"
-import { DISCOVERY_GRAMMAR_VERSION } from "../indexer/discover.js"
+import { closeDb, getMeta, indexDbPath, openDb } from "../db/init.js"
+import { assertArtifactInputsDoNotContainTombstones } from "./tombstones.js"
+import {
+  DISCOVERY_GRAMMAR_VERSION,
+  discover,
+} from "../indexer/discover.js"
+import { assertArtifactInputsAllowed } from "../indexer/exclusions.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 import {
   deriveVectorPackPaths,
@@ -90,6 +95,9 @@ export async function runSnapshotVerifyCli(options = {}) {
     helpText: snapshotVerifyHelp(),
     run: (args) => verifySnapshotArtifact({
       mcpRoot: DEFAULT_MCP_ROOT,
+      deskRoot: optionalString(args["desk-root"])
+        ? resolvePath(args["desk-root"])
+        : undefined,
       pluginRoot: resolvePath(args["plugin-root"] ?? DEFAULT_PLUGIN_ROOT),
       snapshotId: optionalString(args["snapshot-id"]),
       budgetConfig: args["budget-config"],
@@ -125,6 +133,13 @@ export async function buildVectorPackFromLocalDb({
   const db = openDb(requiredPath(deskRoot, "deskRoot"))
   try {
     const sourceDocs = representedDocuments(db)
+    await assertCurrentArtifactIndex({
+      db,
+      deskRoot,
+      pluginRoot,
+      artifactType: "vector-pack",
+      sourceDocs,
+    })
     const rows = vectorPackRows(db)
     const packBytes = Buffer.from(rows.map((row) => JSON.stringify(row)).join("\n") + (rows.length ? "\n" : ""), "utf8")
     const packSha = sha256Hex(packBytes)
@@ -196,6 +211,13 @@ export async function buildSnapshotFromLocalDb({
   try {
     checkpointDb(db)
     const sourceDocs = representedDocuments(db)
+    await assertCurrentArtifactIndex({
+      db,
+      deskRoot,
+      pluginRoot,
+      artifactType: "snapshot",
+      sourceDocs,
+    })
     const sqliteBytes = await fs.readFile(indexDbPath(deskRoot))
     const snapshotBytes = compressSnapshotBytes(sqliteBytes)
     const artifactSha = `sha256:${sha256Hex(snapshotBytes)}`
@@ -258,6 +280,7 @@ export async function buildSnapshotFromLocalDb({
 }
 
 export async function verifySnapshotArtifact({
+  deskRoot,
   pluginRoot = DEFAULT_PLUGIN_ROOT,
   mcpRoot = DEFAULT_MCP_ROOT,
   snapshotId,
@@ -268,8 +291,15 @@ export async function verifySnapshotArtifact({
   const budgetMs = budgetValue(budgets, "artifacts", "snapshot_verify_ms")
   assertBudgetAllowsStart({ budgetMs, label: "snapshot verify" })
   const startedAt = now()
+  const currentDocs = hasText(deskRoot)
+    ? await currentDeskDocuments(deskRoot)
+    : undefined
   if (!hasText(snapshotId)) {
-    const snapshots = await validateAllSnapshots({ pluginRoot, mcpRoot })
+    const snapshots = await validateAllSnapshots({
+      pluginRoot,
+      mcpRoot,
+      currentDocs,
+    })
     const elapsedMs = assertWithinBudget({
       startedAt,
       budgetMs,
@@ -287,7 +317,7 @@ export async function verifySnapshotArtifact({
   const manifest = await readJson(paths.manifestPath)
   const context = snapshotCompatibilityContext({
     mcpRoot,
-    docs: manifest.represented_documents ?? [],
+    docs: currentDocs ?? manifest.represented_documents ?? [],
   })
   const validation = await validateSnapshotArtifact({
     pluginRoot,
@@ -324,8 +354,17 @@ export async function validateArtifacts({
   const budgetMs = budgetValue(budgets, "artifacts", "validate_ms")
   assertBudgetAllowsStart({ budgetMs, label: "artifact validation" })
   const startedAt = now()
-  const vectorPacks = await validateAllVectorPacks({ pluginRoot, mcpRoot })
-  const snapshots = await validateAllSnapshots({ pluginRoot, mcpRoot })
+  const currentDocs = await currentDeskDocuments(deskRoot)
+  const vectorPacks = await validateAllVectorPacks({
+    pluginRoot,
+    mcpRoot,
+    currentDocs,
+  })
+  const snapshots = await validateAllSnapshots({
+    pluginRoot,
+    mcpRoot,
+    currentDocs,
+  })
   const elapsedMs = assertWithinBudget({
     startedAt,
     budgetMs,
@@ -376,17 +415,15 @@ function representedDocuments(db) {
   }))
 }
 
-async function validateAllVectorPacks({ pluginRoot, mcpRoot }) {
+async function validateAllVectorPacks({ pluginRoot, mcpRoot, currentDocs }) {
   const dir = path.join(pluginRoot, "artifacts", "vector-packs", ACTIVE_EMBEDDING_SPEC.id)
   const files = await filesWithSuffix(dir, ".jsonl")
   const out = []
+  const context = snapshotCompatibilityContext({
+    mcpRoot,
+    docs: currentDocs,
+  })
   for (const packPath of files) {
-    const manifestPath = packPath.replace(/\.jsonl$/u, ".manifest.json")
-    const manifest = await readJson(manifestPath)
-    const context = snapshotCompatibilityContext({
-      mcpRoot,
-      docs: manifest.represented_documents ?? [],
-    })
     const validation = await validateVectorPackFile({
       pluginRoot,
       packPath,
@@ -406,7 +443,7 @@ async function validateAllVectorPacks({ pluginRoot, mcpRoot }) {
   }
 }
 
-async function validateAllSnapshots({ pluginRoot, mcpRoot }) {
+async function validateAllSnapshots({ pluginRoot, mcpRoot, currentDocs }) {
   const dir = path.join(pluginRoot, "artifacts", "snapshots", ACTIVE_EMBEDDING_SPEC.id)
   const files = await filesWithSuffix(dir, ".sqlite.zst")
   const out = []
@@ -415,7 +452,7 @@ async function validateAllSnapshots({ pluginRoot, mcpRoot }) {
     const manifest = await readJson(manifestPath)
     const context = snapshotCompatibilityContext({
       mcpRoot,
-      docs: manifest.represented_documents ?? [],
+      docs: currentDocs ?? manifest.represented_documents ?? [],
     })
     const validation = await validateSnapshotArtifact({
       pluginRoot,
@@ -446,6 +483,45 @@ function snapshotCompatibilityContext({ mcpRoot = DEFAULT_MCP_ROOT, docs = [] } 
     expectedArtifactSourceScopeHash: artifactSourceScopeHash(mcpRoot),
     expectedDocumentTreeHash: documentTreeHash(docs),
     expectedDiscoveryGrammarVersion: DISCOVERY_GRAMMAR_VERSION,
+  }
+}
+
+async function currentDeskDocuments(deskRoot) {
+  return (await discover(requiredPath(deskRoot, "deskRoot"))).map((doc) => ({
+    path: doc.path,
+    hash: canonicalSha(doc.hash),
+  }))
+}
+
+async function assertCurrentArtifactIndex({
+  db,
+  deskRoot,
+  pluginRoot,
+  artifactType,
+  sourceDocs,
+}) {
+  await assertArtifactInputsAllowed({
+    deskRoot,
+    artifact_type: artifactType,
+    docs: sourceDocs,
+  })
+  await assertArtifactInputsDoNotContainTombstones({
+    pluginRoot,
+    artifact_type: artifactType,
+    sourceDocs,
+  })
+  const actualGrammar = getMeta(db, "discovery_grammar_version")
+  const expectedGrammar = String(DISCOVERY_GRAMMAR_VERSION)
+  if (actualGrammar !== expectedGrammar) {
+    throw new Error(
+      `local Desk index discovery grammar version ${actualGrammar ?? "missing"} is stale; run desk_reindex before building artifacts`,
+    )
+  }
+  const currentDocs = await currentDeskDocuments(deskRoot)
+  if (documentTreeHash(sourceDocs) !== documentTreeHash(currentDocs)) {
+    throw new Error(
+      "local Desk index document tree is stale; run desk_reindex before building artifacts",
+    )
   }
 }
 
@@ -686,7 +762,7 @@ Usage: npm run artifact:snapshot:build -- --desk-root <path> --snapshot-id <id> 
 function snapshotVerifyHelp() {
   return `Verify a Desk snapshot artifact for release maintenance.
 
-Usage: npm run artifact:snapshot:verify -- --plugin-root <path> [--snapshot-id <id>] [--budget-config <path>]
+Usage: npm run artifact:snapshot:verify -- --plugin-root <path> [--desk-root <path>] [--snapshot-id <id>] [--budget-config <path>]
 `
 }
 

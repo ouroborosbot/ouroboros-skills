@@ -142,6 +142,7 @@ export async function validateVectorPackFile({
   }
   if (expectedDocumentTreeHash !== undefined) {
     freshness.document_tree =
+      Array.isArray(manifest.represented_documents) &&
       manifest.document_tree_hash === expectedDocumentTreeHash
         ? "fresh"
         : "stale"

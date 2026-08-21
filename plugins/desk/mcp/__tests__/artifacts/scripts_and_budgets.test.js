@@ -33,6 +33,7 @@ import {
   budgetValue,
   loadPerformanceBudgets,
 } from "../../src/artifacts/performance-budgets.js"
+import { closeDb, openDb, setMeta } from "../../src/db/init.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
 
@@ -904,6 +905,55 @@ test("artifact validation output does not leak resolved local roots", async () =
   })
 })
 
+test("artifact builders reject stale discovery grammar DBs", async () => {
+  const deskRoot = makeTempDir("desk-artifact-scripts-stale-grammar-desk-")
+  const pluginRoot = makeTempDir("desk-artifact-scripts-stale-grammar-plugin-")
+  try {
+    writeApprovedPolicy(pluginRoot)
+    writeFile(
+      deskRoot,
+      path.join("trackA", "task-1", "task.md"),
+      "---\nstatus: processing\n---\nstale grammar artifact body",
+    )
+    await rebuildIndex(deskRoot, { skipEmbed: true })
+    const db = openDb(deskRoot)
+    try {
+      setMeta(db, "discovery_grammar_version", "1")
+    } finally {
+      closeDb(db)
+    }
+
+    for (const [run, idFlag, id] of [
+      [runVectorPackBuildCli, "--pack-id", "stale-grammar-pack"],
+      [runSnapshotBuildCli, "--snapshot-id", "stale-grammar-snapshot"],
+    ]) {
+      const captured = captureIo()
+      assert.equal(
+        await run({
+          argv: [
+            "--desk-root",
+            deskRoot,
+            "--plugin-root",
+            pluginRoot,
+            idFlag,
+            id,
+            "--from-local-db",
+          ],
+          io: captured.io,
+        }),
+        1,
+      )
+      assert.match(
+        captured.stderr.join(""),
+        /discovery grammar version 1 is stale.*desk_reindex/u,
+      )
+    }
+  } finally {
+    rmSync(deskRoot, { recursive: true, force: true })
+    rmSync(pluginRoot, { recursive: true, force: true })
+  }
+})
+
 test("artifact script CLIs cover help, usage errors, repeated args, and targeted snapshot verification", async () => {
   for (const [run, pattern] of [
     [runVectorPackBuildCli, /Build a Desk vector-pack artifact/u],
@@ -1054,6 +1104,8 @@ test("artifact script CLIs cover help, usage errors, repeated args, and targeted
         ),
         (body) => {
           delete body.represented_documents
+          body.document_tree_hash =
+            __artifactScriptInternalsForTests.documentTreeHash([])
         },
       )
     }
@@ -1067,6 +1119,8 @@ test("artifact script CLIs cover help, usage errors, repeated args, and targeted
       ),
       (body) => {
         delete body.represented_documents
+        body.document_tree_hash =
+          __artifactScriptInternalsForTests.documentTreeHash([])
       },
     )
 
