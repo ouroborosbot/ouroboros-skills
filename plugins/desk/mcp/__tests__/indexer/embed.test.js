@@ -32,6 +32,198 @@ function mockNetworkErrorFetch() {
   }
 }
 
+function makeAbortError(message = "embedding response body aborted") {
+  const error = new Error(message)
+  error.name = "AbortError"
+  return error
+}
+
+function createTrackedAbortController() {
+  const controller = new AbortController()
+  const { signal } = controller
+  const addEventListener = signal.addEventListener.bind(signal)
+  const removeEventListener = signal.removeEventListener.bind(signal)
+  const listeners = new Set()
+  let added = 0
+  let removed = 0
+  signal.addEventListener = (type, listener, options) => {
+    if (type === "abort") {
+      added += 1
+      listeners.add(listener)
+    }
+    return addEventListener(type, listener, options)
+  }
+  signal.removeEventListener = (type, listener, options) => {
+    if (type === "abort") {
+      removed += 1
+      listeners.delete(listener)
+    }
+    return removeEventListener(type, listener, options)
+  }
+  return {
+    abort: () => controller.abort(),
+    signal,
+    stats() {
+      return { added, removed, listeners: listeners.size }
+    },
+  }
+}
+
+function installManualTimers() {
+  const originalSetTimeout = globalThis.setTimeout
+  const originalClearTimeout = globalThis.clearTimeout
+  const handles = []
+  globalThis.setTimeout = (callback, delay, ...args) => {
+    const handle = {
+      args,
+      callback,
+      clearCalls: 0,
+      delay,
+      fired: false,
+    }
+    handles.push(handle)
+    return handle
+  }
+  globalThis.clearTimeout = (handle) => {
+    if (!handles.includes(handle)) {
+      originalClearTimeout(handle)
+      return
+    }
+    handle.clearCalls += 1
+  }
+  return {
+    fire(handle) {
+      assert.ok(handle)
+      assert.equal(handle.clearCalls, 0)
+      assert.equal(handle.fired, false)
+      handle.fired = true
+      handle.callback(...handle.args)
+    },
+    handles,
+    pendingCount() {
+      return handles.filter(
+        (handle) => !handle.fired && handle.clearCalls === 0,
+      ).length
+    },
+    restore() {
+      globalThis.setTimeout = originalSetTimeout
+      globalThis.clearTimeout = originalClearTimeout
+    },
+  }
+}
+
+function createHeadersThenAbortFetch(response = {}) {
+  let call
+  let forceRejectBody
+  let markBodyStarted
+  const bodyStarted = new Promise((resolve) => {
+    markBodyStarted = resolve
+  })
+  const fetch = async (url, request) => {
+    call = { request, url }
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      ...response,
+      json: () => {
+        markBodyStarted()
+        return new Promise((_resolve, reject) => {
+          const rejectForAbort = () => {
+            reject(makeAbortError())
+          }
+          forceRejectBody = () => {
+            reject(makeAbortError("test cleanup"))
+          }
+          if (request.signal?.aborted) rejectForAbort()
+          else {
+            request.signal?.addEventListener("abort", rejectForAbort, {
+              once: true,
+            })
+          }
+        })
+      },
+    }
+  }
+  return {
+    bodyStarted,
+    fetch,
+    forceRejectBody() {
+      forceRejectBody?.()
+    },
+    get call() {
+      return call
+    },
+  }
+}
+
+async function assertPendingBodyAbortLifecycle({
+  response,
+  timeoutMs,
+  trigger,
+}) {
+  const endpoint = "http://127.0.0.1:11434/api/embeddings"
+  const model = "body-read-model"
+  const caller = createTrackedAbortController()
+  const timers = installManualTimers()
+  const pendingResponse = createHeadersThenAbortFetch(response)
+  const embedding = embedChunkDetailed("body-read-prompt", {
+    endpoint,
+    fetch: pendingResponse.fetch,
+    model,
+    signal: caller.signal,
+    timeoutMs,
+  })
+
+  try {
+    await pendingResponse.bodyStarted
+    const [timer] = timers.handles
+    assert.equal(pendingResponse.call.url, endpoint)
+    assert.equal(pendingResponse.call.request.method, "POST")
+    assert.deepEqual(pendingResponse.call.request.headers, {
+      "content-type": "application/json",
+    })
+    assert.deepEqual(JSON.parse(pendingResponse.call.request.body), {
+      model,
+      prompt: "body-read-prompt",
+    })
+    assert.equal(timers.handles.length, 1)
+    assert.equal(timer.delay, timeoutMs)
+    assert.equal(timer.clearCalls, 0)
+    assert.deepEqual(caller.stats(), {
+      added: 1,
+      removed: 0,
+      listeners: 1,
+    })
+
+    if (trigger === "caller") caller.abort()
+    else timers.fire(timer)
+    assert.equal(pendingResponse.call.request.signal.aborted, true)
+    assert.deepEqual(await embedding, {
+      available: false,
+      diagnostic: {
+        endpoint,
+        message: "embedding response body aborted",
+        model,
+        reason: "timeout",
+      },
+      vector: null,
+    })
+    assert.deepEqual(caller.stats(), {
+      added: 1,
+      removed: 1,
+      listeners: 0,
+    })
+    assert.equal(timer.clearCalls, 1)
+    assert.equal(timers.pendingCount(), 0)
+  } finally {
+    caller.abort()
+    pendingResponse.forceRejectBody()
+    await Promise.allSettled([embedding])
+    timers.restore()
+  }
+}
+
 test("embedChunk returns a 768-dim array on success", async () => {
   const vec = Array.from({ length: EMBEDDING_DIM }, (_, i) => i / EMBEDDING_DIM)
   const out = await embedChunk("hello world", { fetch: mockOkFetch(vec) })
@@ -125,6 +317,25 @@ test("embedChunkDetailed reports timeout diagnostics", async () => {
   assert.equal(res.diagnostic.reason, "timeout")
 })
 
+test("embedChunkDetailed keeps caller abort active through successful body JSON", async () => {
+  await assertPendingBodyAbortLifecycle({
+    timeoutMs: 10000,
+    trigger: "caller",
+  })
+})
+
+test("embedChunkDetailed keeps timeout active through error body JSON", async () => {
+  await assertPendingBodyAbortLifecycle({
+    response: {
+      ok: false,
+      status: 503,
+      statusText: "Service Unavailable",
+    },
+    timeoutMs: 25,
+    trigger: "timeout",
+  })
+})
+
 test("embedChunkDetailed propagates caller cancellation to the outgoing request", async () => {
   const controller = new AbortController()
   let capturedRequest
@@ -178,7 +389,7 @@ test("embedChunkDetailed sends an already-aborted caller signal", async () => {
   assert.equal(res.available, true)
 })
 
-test("embedChunkDetailed removes the caller abort listener after fetch settles", async () => {
+test("embedChunkDetailed removes the caller abort listener after response body settles", async () => {
   const listeners = new Set()
   let added = 0
   let removed = 0

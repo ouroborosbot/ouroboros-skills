@@ -96,13 +96,23 @@ function compactDiagnostic(diagnostic) {
   }
 }
 
+function requestFailureDiagnostic(endpoint, model, error) {
+  return {
+    endpoint,
+    model,
+    reason: error?.name === "AbortError" ? "timeout" : "network_error",
+    message: error?.message ?? String(error),
+  }
+}
+
 async function parseErrorMessage(response) {
   try {
     const payload = await response.json()
     if (typeof payload?.error === "string" && payload.error.length) {
       return payload.error
     }
-  } catch {
+  } catch (error) {
+    if (error?.name === "AbortError") throw error
     // Ignore JSON parse failures; status text is good enough.
   }
   return response.statusText || `HTTP ${response.status}`
@@ -116,8 +126,8 @@ async function postEmbedding({
   timeoutMs,
   signal,
 }) {
-  let timeout = null
   let removeExternalAbort = null
+  let timeout = null
   const controller =
     typeof AbortController === "function" ? new AbortController() : null
   const request = {
@@ -141,11 +151,19 @@ async function postEmbedding({
     request.signal = signal
   }
 
-  try {
-    return await fetchImpl(endpoint, request)
-  } finally {
-    if (timeout) clearTimeout(timeout)
+  const cleanup = () => {
+    if (timeout !== null) clearTimeout(timeout)
     removeExternalAbort?.()
+  }
+
+  try {
+    return {
+      cleanup,
+      response: await fetchImpl(endpoint, request),
+    }
+  } catch (error) {
+    cleanup()
+    throw error
   }
 }
 
@@ -194,9 +212,9 @@ export async function embedChunkDetailed(text, opts = {}) {
   let lastDiagnostic = null
   let chunkLocalDiagnostic = null
   for (const endpoint of endpoints) {
-    let response
+    let requestResult
     try {
-      response = await postEmbedding({
+      requestResult = await postEmbedding({
         endpoint,
         model,
         text,
@@ -205,57 +223,67 @@ export async function embedChunkDetailed(text, opts = {}) {
         signal: opts.signal,
       })
     } catch (err) {
-      lastDiagnostic = {
-        endpoint,
-        model,
-        reason: err?.name === "AbortError" ? "timeout" : "network_error",
-        message: err?.message ?? String(err),
-      }
+      lastDiagnostic = requestFailureDiagnostic(endpoint, model, err)
       continue
     }
 
-    if (!response || !response.ok) {
-      lastDiagnostic = {
-        endpoint,
-        model,
-        reason: `http_${response?.status ?? "error"}`,
-        message: response ? await parseErrorMessage(response) : "no response",
-      }
-      if (isChunkLocalEmbeddingFailure(lastDiagnostic)) {
-        chunkLocalDiagnostic = lastDiagnostic
-      }
-      continue
-    }
-
-    let payload
+    const { cleanup, response } = requestResult
     try {
-      payload = await response.json()
-    } catch (err) {
-      lastDiagnostic = {
-        endpoint,
-        model,
-        reason: "invalid_json",
-        message: err?.message ?? "embedding response was not JSON",
+      if (!response || !response.ok) {
+        let message
+        try {
+          message = response ? await parseErrorMessage(response) : "no response"
+        } catch (err) {
+          lastDiagnostic = requestFailureDiagnostic(endpoint, model, err)
+          continue
+        }
+        lastDiagnostic = {
+          endpoint,
+          model,
+          reason: `http_${response?.status ?? "error"}`,
+          message,
+        }
+        if (isChunkLocalEmbeddingFailure(lastDiagnostic)) {
+          chunkLocalDiagnostic = lastDiagnostic
+        }
+        continue
       }
-      continue
-    }
 
-    const vec = payload?.embedding
-    if (!Array.isArray(vec) || vec.length !== EMBEDDING_DIM) {
-      lastDiagnostic = {
-        endpoint,
-        model,
-        reason: "invalid_embedding",
-        message: `expected ${EMBEDDING_DIM} dimensions, got ${
-          Array.isArray(vec) ? vec.length : "none"
-        }`,
+      let payload
+      try {
+        payload = await response.json()
+      } catch (err) {
+        lastDiagnostic =
+          err?.name === "AbortError"
+            ? requestFailureDiagnostic(endpoint, model, err)
+            : {
+                endpoint,
+                model,
+                reason: "invalid_json",
+                message: err?.message ?? "embedding response was not JSON",
+              }
+        continue
       }
-      continue
-    }
-    return {
-      vector: vec.map((v) => (typeof v === "number" ? v : 0)),
-      available: true,
-      diagnostic: compactDiagnostic({ endpoint, model, reason: "ok" }),
+
+      const vec = payload?.embedding
+      if (!Array.isArray(vec) || vec.length !== EMBEDDING_DIM) {
+        lastDiagnostic = {
+          endpoint,
+          model,
+          reason: "invalid_embedding",
+          message: `expected ${EMBEDDING_DIM} dimensions, got ${
+            Array.isArray(vec) ? vec.length : "none"
+          }`,
+        }
+        continue
+      }
+      return {
+        vector: vec.map((v) => (typeof v === "number" ? v : 0)),
+        available: true,
+        diagnostic: compactDiagnostic({ endpoint, model, reason: "ok" }),
+      }
+    } finally {
+      cleanup()
     }
   }
 
