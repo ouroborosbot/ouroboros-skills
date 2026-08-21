@@ -844,13 +844,13 @@ test("performance budget config declares search, startup, rebuild, and artifact 
   assertPositiveIntegerBudget(budgets.artifacts?.validate_ms, "artifacts.validate_ms")
 })
 
-test("performance budget loader fails closed for malformed, missing, or invalid configs", async () => {
+test("performance budget loader preserves schema-version 1 compatibility and fails closed for invalid configs", async () => {
   const fallbackRoot = makeTempDir("desk-artifact-scripts-budget-fallback-")
   const explicitRoot = makeTempDir("desk-artifact-scripts-budget-invalid-")
   try {
     const fallback = await loadPerformanceBudgets({ mcpRoot: fallbackRoot })
-    assert.equal(fallback.search.semantic_repair_batch_chunks, 100)
-    assert.equal(fallback.search.semantic_repair_batch_ms, 5000)
+    assert.equal(fallback.search?.semantic_repair_batch_chunks, 100)
+    assert.equal(fallback.search?.semantic_repair_batch_ms, 5000)
     assert.equal(fallback.startup.ensure_index_ms, 250)
     fallback.startup.ensure_index_ms = 1
     assert.equal(
@@ -895,6 +895,62 @@ test("performance budget loader fails closed for malformed, missing, or invalid 
         validate_ms: 1000,
       },
     }
+
+    const legacyConfig = path.join(explicitRoot, "legacy-schema-version-1.json")
+    writeFileSync(
+      legacyConfig,
+      `${JSON.stringify({
+        schema_version: 1,
+        ...validNonSearchBudgetSections,
+      })}\n`,
+      "utf8",
+    )
+    const legacyBudgets = await loadPerformanceBudgets({
+      configPath: legacyConfig,
+      mcpRoot: explicitRoot,
+    })
+    assert.deepEqual(legacyBudgets.search, {
+      semantic_repair_batch_chunks: 100,
+      semantic_repair_batch_ms: 5000,
+    })
+
+    for (const [caseName, search, expectedSearch] of [
+      [
+        "partial-chunks",
+        { semantic_repair_batch_chunks: 25 },
+        {
+          semantic_repair_batch_chunks: 25,
+          semantic_repair_batch_ms: 5000,
+        },
+      ],
+      [
+        "partial-ms",
+        { semantic_repair_batch_ms: 750 },
+        {
+          semantic_repair_batch_chunks: 100,
+          semantic_repair_batch_ms: 750,
+        },
+      ],
+    ]) {
+      const config = path.join(explicitRoot, `${caseName}.json`)
+      writeFileSync(
+        config,
+        `${JSON.stringify({
+          schema_version: 1,
+          search,
+          ...validNonSearchBudgetSections,
+        })}\n`,
+        "utf8",
+      )
+      assert.deepEqual(
+        (await loadPerformanceBudgets({
+          configPath: config,
+          mcpRoot: explicitRoot,
+        })).search,
+        expectedSearch,
+      )
+    }
+
     for (const [caseName, body, expectedDiagnostic] of [
       ["not-object", null, "performance budget config must be an object"],
       [
@@ -903,82 +959,13 @@ test("performance budget loader fails closed for malformed, missing, or invalid 
         "performance budget config schema_version must be 1",
       ],
       [
-        "missing-search",
+        "search-section",
         {
           schema_version: 1,
+          search: [],
           ...validNonSearchBudgetSections,
         },
         "performance budget search must be an object",
-      ],
-      [
-        "missing-semantic-repair-batch-chunks",
-        {
-          schema_version: 1,
-          search: { semantic_repair_batch_ms: 5000 },
-          ...validNonSearchBudgetSections,
-        },
-        "performance budget search.semantic_repair_batch_chunks must be a positive integer",
-      ],
-      [
-        "missing-semantic-repair-batch-ms",
-        {
-          schema_version: 1,
-          search: { semantic_repair_batch_chunks: 100 },
-          ...validNonSearchBudgetSections,
-        },
-        "performance budget search.semantic_repair_batch_ms must be a positive integer",
-      ],
-      [
-        "zero-semantic-repair-batch-chunks",
-        performanceBudgetConfig({
-          search: { semantic_repair_batch_chunks: 0 },
-        }),
-        "performance budget search.semantic_repair_batch_chunks must be a positive integer",
-      ],
-      [
-        "fractional-semantic-repair-batch-chunks",
-        performanceBudgetConfig({
-          search: { semantic_repair_batch_chunks: 1.5 },
-        }),
-        "performance budget search.semantic_repair_batch_chunks must be a positive integer",
-      ],
-      [
-        "negative-semantic-repair-batch-chunks",
-        {
-          schema_version: 1,
-          search: {
-            semantic_repair_batch_chunks: -1,
-            semantic_repair_batch_ms: 5000,
-          },
-          ...validNonSearchBudgetSections,
-        },
-        "performance budget search.semantic_repair_batch_chunks must be a positive integer",
-      ],
-      [
-        "zero-semantic-repair-batch-ms",
-        performanceBudgetConfig({
-          search: { semantic_repair_batch_ms: 0 },
-        }),
-        "performance budget search.semantic_repair_batch_ms must be a positive integer",
-      ],
-      [
-        "fractional-semantic-repair-batch-ms",
-        performanceBudgetConfig({
-          search: { semantic_repair_batch_ms: 1.5 },
-        }),
-        "performance budget search.semantic_repair_batch_ms must be a positive integer",
-      ],
-      [
-        "negative-semantic-repair-batch-ms",
-        {
-          schema_version: 1,
-          search: {
-            semantic_repair_batch_chunks: 100,
-            semantic_repair_batch_ms: -1,
-          },
-          ...validNonSearchBudgetSections,
-        },
-        "performance budget search.semantic_repair_batch_ms must be a positive integer",
       ],
       [
         "startup-section",
@@ -1006,6 +993,46 @@ test("performance budget loader fails closed for malformed, missing, or invalid 
           return true
         },
       )
+    }
+
+    for (const [key, expectedDiagnostic] of [
+      [
+        "semantic_repair_batch_chunks",
+        "performance budget search.semantic_repair_batch_chunks must be a positive integer",
+      ],
+      [
+        "semantic_repair_batch_ms",
+        "performance budget search.semantic_repair_batch_ms must be a positive integer",
+      ],
+    ]) {
+      for (const [caseName, value] of [
+        ["zero", 0],
+        ["fractional", 1.5],
+        ["negative", -1],
+        ["wrong-type", "100"],
+      ]) {
+        const config = path.join(explicitRoot, `invalid-${key}-${caseName}.json`)
+        writeFileSync(
+          config,
+          `${JSON.stringify({
+            schema_version: 1,
+            search: { [key]: value },
+            ...validNonSearchBudgetSections,
+          })}\n`,
+          "utf8",
+        )
+        await assert.rejects(
+          () => loadPerformanceBudgets({
+            configPath: config,
+            mcpRoot: explicitRoot,
+          }),
+          (error) => {
+            assert.equal(error.code, "performance_budget_config_invalid")
+            assert.deepEqual(error.diagnostics, [expectedDiagnostic])
+            return true
+          },
+        )
+      }
     }
 
     assert.throws(

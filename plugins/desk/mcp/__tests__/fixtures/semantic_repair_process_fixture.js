@@ -11,6 +11,19 @@ const semanticRepairModuleUrl = new URL(
   "../../src/indexer/semantic-repair.js",
   import.meta.url,
 )
+const BATCH_SETTLEMENT_TIMEOUT_MS = 1000
+
+async function awaitBounded(promise, message) {
+  let timeout
+  const timedOut = new Promise((_, reject) => {
+    timeout = setTimeout(() => reject(new Error(message)), BATCH_SETTLEMENT_TIMEOUT_MS)
+  })
+  try {
+    return await Promise.race([promise, timedOut])
+  } finally {
+    clearTimeout(timeout)
+  }
+}
 
 function readObservation(observationPath) {
   try {
@@ -129,21 +142,24 @@ async function runPhaseOne({
     const coordinator = createSemanticRepairCoordinator({
       repairBatch: (options) => {
         repairCalls += 1
-        return repairMissingVectorBatch({
-          ...options,
-          db,
-          embedChunkDetailed: async (text) => {
-            embeddedTexts.push(text)
-            return {
-              vector: deterministicProcessRepairVector(
-                "phase1",
-                embeddedTexts.length,
-              ),
-              available: true,
-              diagnostic: null,
-            }
-          },
-        })
+        return awaitBounded(
+          repairMissingVectorBatch({
+            ...options,
+            db,
+            embedChunkDetailed: async (text) => {
+              embeddedTexts.push(text)
+              return {
+                vector: deterministicProcessRepairVector(
+                  "phase1",
+                  embeddedTexts.length,
+                ),
+                available: true,
+                diagnostic: null,
+              }
+            },
+          }),
+          "phase 1 semantic repair batch did not settle",
+        )
       },
       schedule: scheduler.schedule,
       clearScheduled: scheduler.clearScheduled,
@@ -205,21 +221,24 @@ async function runPhaseTwo({
     const coordinator = createSemanticRepairCoordinator({
       repairBatch: (options) => {
         repairCalls += 1
-        return repairMissingVectorBatch({
-          ...options,
-          db,
-          embedChunkDetailed: async (text) => {
-            embeddedTexts.push(text)
-            return {
-              vector: deterministicProcessRepairVector(
-                "phase2",
-                embeddedTexts.length,
-              ),
-              available: true,
-              diagnostic: null,
-            }
-          },
-        })
+        return awaitBounded(
+          repairMissingVectorBatch({
+            ...options,
+            db,
+            embedChunkDetailed: async (text) => {
+              embeddedTexts.push(text)
+              return {
+                vector: deterministicProcessRepairVector(
+                  "phase2",
+                  embeddedTexts.length,
+                ),
+                available: true,
+                diagnostic: null,
+              }
+            },
+          }),
+          "phase 2 semantic repair batch did not settle",
+        )
       },
       schedule: scheduler.schedule,
       clearScheduled: scheduler.clearScheduled,

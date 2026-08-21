@@ -539,8 +539,13 @@ test("semantic repair catches background rejection, records a compact failure, a
   }
 })
 
-test("semantic repair cancellation aborts the active batch and permits a later retry", async () => {
-  const { createSemanticRepairCoordinator } = await loadSemanticRepair()
+test("semantic repair cancellation aborts the active real batch, waits for cleanup, and permits a later retry", async () => {
+  const {
+    createSemanticRepairCoordinator,
+    repairMissingVectorBatch,
+  } = await loadSemanticRepair()
+  const root = await makeRoot()
+  const db = openDb(root)
   const scheduler = createManualScheduler()
   const settlements = []
   const bound = (promise, message, options) => {
@@ -548,65 +553,136 @@ test("semantic repair cancellation aborts the active batch and permits a later r
     settlements.push(settlement)
     return settlement.settled
   }
-  let calls = 0
+  const cancellationTimeoutMs = TEST_SETTLEMENT_TIMEOUT_MS * 4
+  const embeddingFallbackMs = TEST_SETTLEMENT_TIMEOUT_MS * 2
+  const embedded = []
+  const injectedVectors = new Map()
+  let batchSignal
+  let embedSignal
+  let embeddingFallback
+  let embeddingFallbackFired = false
+  let finishPendingEmbedding
   let abortCleanupFinished = false
   let activeBatchSettled = false
-  let releaseBatchCleanup
-  let batchStarted
+  let releaseAbortCleanup
+  let markEmbeddingStarted
   let markAbortObserved
-  const started = new Promise((resolve) => {
-    batchStarted = resolve
+  const embeddingStarted = new Promise((resolve) => {
+    markEmbeddingStarted = resolve
   })
   const abortObserved = new Promise((resolve) => {
     markAbortObserved = resolve
   })
+  const abortCleanup = new Promise((resolve) => {
+    releaseAbortCleanup = resolve
+  })
   const coordinator = createSemanticRepairCoordinator({
-    repairBatch: ({ signal }) => {
-      calls += 1
-      if (calls > 1) {
-        return Promise.resolve({ processed_chunks: 1, remaining_chunks: 0 })
-      }
-      return new Promise((resolve) => {
-        let cleanupScheduled = false
-        releaseBatchCleanup = () => {
-          if (cleanupScheduled) return
-          cleanupScheduled = true
-          setImmediate(() => {
-            abortCleanupFinished = true
-            resolve({
-              processed_chunks: 0,
-              remaining_chunks: 1,
-              cancelled: true,
+    repairBatch: (options) => {
+      batchSignal = options.signal
+      return awaitBounded(
+        repairMissingVectorBatch({
+          ...options,
+          db,
+          embedChunkDetailed: (text, opts) => {
+            embedded.push(text)
+            const injectedVector = deterministicRepairVector(
+              200 + embedded.length,
+            )
+            injectedVectors.set(text, injectedVector)
+            if (embedded.length > 1) {
+              assert.strictEqual(opts?.signal, options.signal)
+              return Promise.resolve({
+                vector: injectedVector,
+                available: true,
+                diagnostic: null,
+              })
+            }
+
+            embedSignal = opts?.signal
+            markEmbeddingStarted()
+            return new Promise((resolve, reject) => {
+              let settled = false
+              const finish = (callback, value) => {
+                if (settled) return
+                settled = true
+                clearTimeout(embeddingFallback)
+                callback(value)
+              }
+              finishPendingEmbedding = () => {
+                finish(resolve, {
+                  vector: injectedVector,
+                  available: true,
+                  diagnostic: null,
+                })
+              }
+              embeddingFallback = setTimeout(() => {
+                embeddingFallbackFired = true
+                finishPendingEmbedding()
+              }, embeddingFallbackMs)
+
+              const onAbort = () => {
+                markAbortObserved()
+                abortCleanup.then(() => {
+                  abortCleanupFinished = true
+                  const error = new Error("semantic repair embedding aborted")
+                  error.name = "AbortError"
+                  error.code = "ABORT_ERR"
+                  finish(reject, error)
+                })
+              }
+              if (embedSignal?.aborted) {
+                onAbort()
+              } else {
+                embedSignal?.addEventListener("abort", onAbort, { once: true })
+              }
             })
-          })
-        }
-        batchStarted()
-        signal.addEventListener(
-          "abort",
-          () => {
-            markAbortObserved()
           },
-          { once: true },
-        )
-      })
+        }),
+        "semantic repair active real batch did not settle",
+        {
+          onTimeout: () => {
+            releaseAbortCleanup()
+            finishPendingEmbedding?.()
+          },
+          timeoutMs: cancellationTimeoutMs * 2,
+        },
+      )
     },
     schedule: scheduler.schedule,
     clearScheduled: scheduler.clearScheduled,
   })
-  const root = path.resolve("/tmp/desk-root")
 
-  const first = coordinator.start({ deskRoot: root })
-  const activeBatch = scheduler.runNext().finally(() => {
-    activeBatchSettled = true
-  })
-  let cancellation
-  let cancellationSettled = false
   try {
+    insertDocument(db, {
+      documentPath: "active/reference.md",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      texts: ["chunk-0", "chunk-1"],
+    })
+
+    const first = coordinator.start({
+      deskRoot: root,
+      batchChunks: 1,
+      batchMs: 5000,
+    })
+    const activeBatch = scheduler.runNext().finally(() => {
+      activeBatchSettled = true
+    })
+    let cancellationSettled = false
     await bound(
-      started,
-      "semantic repair active batch did not start",
+      embeddingStarted,
+      "semantic repair active real batch did not enter embedding",
+      {
+        onTimeout: () => finishPendingEmbedding?.(),
+        timeoutMs: cancellationTimeoutMs,
+      },
     )
-    cancellation = Promise.resolve(coordinator.cancel(root))
+    assert.notEqual(
+      embeddingFallback,
+      undefined,
+      "semantic repair cancellation test must pre-schedule its embedding fallback",
+    )
+
+    const cancellation = Promise.resolve(coordinator.cancel(root))
     cancellation.then(
       () => {
         cancellationSettled = true
@@ -617,70 +693,108 @@ test("semantic repair cancellation aborts the active batch and permits a later r
     )
     const cancelSettled = bound(
       cancellation,
-      "semantic repair cancel did not settle after fallback batch cleanup",
-      { onTimeout: () => releaseBatchCleanup?.() },
+      "semantic repair cancel did not settle after real batch cleanup",
+      {
+        onTimeout: () => finishPendingEmbedding?.(),
+        timeoutMs: cancellationTimeoutMs,
+      },
     )
     const activeBatchFinished = bound(
       activeBatch,
-      "semantic repair active scheduler callback did not settle",
-      { onTimeout: () => releaseBatchCleanup?.() },
+      "semantic repair active real scheduler callback did not settle",
+      {
+        onTimeout: () => finishPendingEmbedding?.(),
+        timeoutMs: cancellationTimeoutMs,
+      },
     )
     const repairSettled = bound(
       first,
-      "semantic repair promise did not settle after active cancellation",
-      { onTimeout: () => releaseBatchCleanup?.() },
+      "semantic repair promise did not settle after real batch cancellation",
+      {
+        onTimeout: () => finishPendingEmbedding?.(),
+        timeoutMs: cancellationTimeoutMs,
+      },
     )
     await bound(
       abortObserved,
-      "semantic repair cancel did not abort the active batch before awaiting it",
-      { onTimeout: () => releaseBatchCleanup?.() },
+      "semantic repair cancel did not propagate its AbortSignal into the embedding call",
+      {
+        onTimeout: () => finishPendingEmbedding?.(),
+        timeoutMs: cancellationTimeoutMs,
+      },
     )
+
+    assert.strictEqual(embedSignal, batchSignal)
+    assert.equal(embedSignal.aborted, true)
     await Promise.resolve()
     assert.equal(cancellationSettled, false)
     assert.equal(abortCleanupFinished, false)
     assert.equal(activeBatchSettled, false)
+    assert.equal(
+      db.prepare("SELECT COUNT(*) AS count FROM chunk_vecs").get().count,
+      0,
+    )
 
-    releaseBatchCleanup()
+    releaseAbortCleanup()
     const cancelled = await cancelSettled
     await activeBatchFinished
     assert.equal((await repairSettled).state, "idle")
     assert.equal(cancelled.cancelled, true)
     assert.equal(abortCleanupFinished, true)
     assert.equal(activeBatchSettled, true)
+    assert.equal(embeddingFallbackFired, false)
+    assert.deepEqual(embedded, ["chunk-0"])
+    assert.equal(
+      db.prepare("SELECT COUNT(*) AS count FROM chunk_vecs").get().count,
+      0,
+    )
+    assert.equal(
+      db.prepare(
+        `SELECT COUNT(*) AS count
+         FROM chunks c
+         LEFT JOIN chunk_vecs v ON v.chunk_id = c.id
+         WHERE v.chunk_id IS NULL`,
+      ).get().count,
+      2,
+    )
+    assert.equal(scheduler.queued.length, 0)
+    assert.equal(scheduler.scheduled.length, 1)
+    assert.equal(coordinator.status(root).state, "idle")
+
+    const retry = coordinator.start({
+      deskRoot: root,
+      batchChunks: 100,
+      batchMs: 5000,
+    })
+    assert.notStrictEqual(retry, first)
+    await bound(
+      scheduler.drain(),
+      "semantic repair retry scheduler callbacks did not settle",
+    )
+    assert.equal(
+      (await bound(
+        retry,
+        "semantic repair retry after real cancellation did not settle",
+      )).state,
+      "complete",
+    )
+    assert.deepEqual(embedded, ["chunk-0", "chunk-0", "chunk-1"])
+    assert.equal(
+      db.prepare("SELECT COUNT(*) AS count FROM chunk_vecs").get().count,
+      2,
+    )
+    for (const text of ["chunk-0", "chunk-1"]) {
+      assertStoredVector(db, text, injectedVectors.get(text))
+    }
   } finally {
-    releaseBatchCleanup?.()
+    clearTimeout(embeddingFallback)
+    releaseAbortCleanup()
+    finishPendingEmbedding?.()
     await Promise.allSettled(settlements.map(({ settled }) => settled))
     for (const settlement of settlements) settlement.clear()
+    closeDb(db)
+    await fs.rm(root, { recursive: true, force: true })
   }
-
-  assert.equal(abortCleanupFinished, true)
-  assert.equal(activeBatchSettled, true)
-  assert.equal(scheduler.queued.length, 0)
-  assert.equal(scheduler.scheduled.length, 1)
-  assert.equal(coordinator.status(root).state, "idle")
-
-  const retry = coordinator.start({ deskRoot: root })
-  assert.notStrictEqual(retry, first)
-  const retryDrain = boundedSettlement(
-    scheduler.drain(),
-    "semantic repair retry scheduler callbacks did not settle",
-  )
-  const retrySettled = boundedSettlement(
-    retry,
-    "semantic repair retry did not settle",
-  )
-  try {
-    await retryDrain.settled
-    assert.equal((await retrySettled.settled).state, "complete")
-  } finally {
-    await Promise.allSettled([
-      retryDrain.settled,
-      retrySettled.settled,
-    ])
-    retryDrain.clear()
-    retrySettled.clear()
-  }
-  assert.equal(calls, 2)
 })
 
 test("semantic repair cancellation clears a pending batch without running repair work", async () => {
@@ -778,25 +892,29 @@ test("semantic repair batch cancellation persists completed work and resumes the
       texts: ["chunk-0", "chunk-1", "chunk-2"],
     })
 
-    const cancelled = await repairMissingVectorBatch({
-      db,
-      deskRoot: root,
-      batchChunks: 100,
-      batchMs: 5000,
-      signal: controller.signal,
-      embedChunkDetailed: async (text) => {
-        embedded.push(text)
-        const injectedVector = deterministicRepairVector(embedded.length)
-        injectedVectors.set(text, injectedVector)
-        const result = {
-          vector: injectedVector,
-          available: true,
-          diagnostic: null,
-        }
-        if (embedded.length === 1) controller.abort()
-        return result
-      },
-    })
+    const cancelled = await awaitBounded(
+      repairMissingVectorBatch({
+        db,
+        deskRoot: root,
+        batchChunks: 100,
+        batchMs: 5000,
+        signal: controller.signal,
+        embedChunkDetailed: async (text) => {
+          embedded.push(text)
+          const injectedVector = deterministicRepairVector(embedded.length)
+          injectedVectors.set(text, injectedVector)
+          const result = {
+            vector: injectedVector,
+            available: true,
+            diagnostic: null,
+          }
+          if (embedded.length === 1) controller.abort()
+          return result
+        },
+      }),
+      "semantic repair cancelled batch did not settle",
+      { onTimeout: () => controller.abort() },
+    )
 
     assert.deepEqual(embedded, ["chunk-0"])
     assert.equal(cancelled.processed_chunks, 1)
@@ -830,24 +948,27 @@ test("semantic repair batch cancellation persists completed work and resumes the
     )
 
     const resumedEmbeddings = []
-    const resumed = await repairMissingVectorBatch({
-      db,
-      deskRoot: root,
-      batchChunks: 100,
-      batchMs: 5000,
-      embedChunkDetailed: async (text) => {
-        resumedEmbeddings.push(text)
-        const injectedVector = deterministicRepairVector(
-          100 + resumedEmbeddings.length,
-        )
-        injectedVectors.set(text, injectedVector)
-        return {
-          vector: injectedVector,
-          available: true,
-          diagnostic: null,
-        }
-      },
-    })
+    const resumed = await awaitBounded(
+      repairMissingVectorBatch({
+        db,
+        deskRoot: root,
+        batchChunks: 100,
+        batchMs: 5000,
+        embedChunkDetailed: async (text) => {
+          resumedEmbeddings.push(text)
+          const injectedVector = deterministicRepairVector(
+            100 + resumedEmbeddings.length,
+          )
+          injectedVectors.set(text, injectedVector)
+          return {
+            vector: injectedVector,
+            available: true,
+            diagnostic: null,
+          }
+        },
+      }),
+      "semantic repair resumed batch did not settle",
+    )
 
     assert.deepEqual(resumedEmbeddings, ["chunk-1", "chunk-2"])
     assert.equal(resumed.processed_chunks, 2)
@@ -1005,22 +1126,25 @@ test("semantic repair batch prioritizes active recent documents, chunk ordinal, 
       texts: ["active-undated"],
     })
 
-    const result = await repairMissingVectorBatch({
-      db,
-      deskRoot: root,
-      batchChunks: 10,
-      batchMs: 5000,
-      embedChunkDetailed: async (text) => {
-        seen.push(text)
-        const injectedVector = deterministicRepairVector(seen.length)
-        injectedVectors.set(text, injectedVector)
-        return {
-          vector: injectedVector,
-          available: true,
-          diagnostic: null,
-        }
-      },
-    })
+    const result = await awaitBounded(
+      repairMissingVectorBatch({
+        db,
+        deskRoot: root,
+        batchChunks: 10,
+        batchMs: 5000,
+        embedChunkDetailed: async (text) => {
+          seen.push(text)
+          const injectedVector = deterministicRepairVector(seen.length)
+          injectedVectors.set(text, injectedVector)
+          return {
+            vector: injectedVector,
+            available: true,
+            diagnostic: null,
+          }
+        },
+      }),
+      "semantic repair ordered batch did not settle",
+    )
 
     assert.deepEqual(seen, [
       "active-alpha-0",
@@ -1073,12 +1197,18 @@ test("semantic repair batch stops at the chunk bound and resumes remaining vecto
       },
     }
 
-    const first = await repairMissingVectorBatch(options)
+    const first = await awaitBounded(
+      repairMissingVectorBatch(options),
+      "semantic repair first chunk-bounded batch did not settle",
+    )
     assert.equal(first.processed_chunks, 2)
     assert.equal(first.remaining_chunks, 1)
     assert.equal(first.stopped_by, "chunk_limit")
 
-    const second = await repairMissingVectorBatch(options)
+    const second = await awaitBounded(
+      repairMissingVectorBatch(options),
+      "semantic repair resumed chunk-bounded batch did not settle",
+    )
     assert.equal(second.processed_chunks, 1)
     assert.equal(second.remaining_chunks, 0)
     assert.equal(second.stopped_by, "complete")
@@ -1106,24 +1236,27 @@ test("semantic repair batch stops at the elapsed-time bound", async () => {
       texts: ["chunk-0", "chunk-1", "chunk-2"],
     })
 
-    const result = await repairMissingVectorBatch({
-      db,
-      deskRoot: root,
-      batchChunks: 100,
-      batchMs: 5,
-      now: () => elapsedMs,
-      embedChunkDetailed: async (text) => {
-        seen.push(text)
-        elapsedMs += 3
-        const injectedVector = deterministicRepairVector(seen.length)
-        injectedVectors.set(text, injectedVector)
-        return {
-          vector: injectedVector,
-          available: true,
-          diagnostic: null,
-        }
-      },
-    })
+    const result = await awaitBounded(
+      repairMissingVectorBatch({
+        db,
+        deskRoot: root,
+        batchChunks: 100,
+        batchMs: 5,
+        now: () => elapsedMs,
+        embedChunkDetailed: async (text) => {
+          seen.push(text)
+          elapsedMs += 3
+          const injectedVector = deterministicRepairVector(seen.length)
+          injectedVectors.set(text, injectedVector)
+          return {
+            vector: injectedVector,
+            available: true,
+            diagnostic: null,
+          }
+        },
+      }),
+      "semantic repair time-bounded batch did not settle",
+    )
 
     assert.deepEqual(seen, ["chunk-0", "chunk-1"])
     assert.equal(result.processed_chunks, 2)
