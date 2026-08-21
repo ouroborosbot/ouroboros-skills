@@ -7,6 +7,7 @@ import * as zlib from "node:zlib"
 import { fileURLToPath } from "node:url"
 
 import { closeDb, indexDbPath, openDb } from "../db/init.js"
+import { DISCOVERY_GRAMMAR_VERSION } from "../indexer/discover.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 import {
   deriveVectorPackPaths,
@@ -37,6 +38,7 @@ const SNAPSHOT_PORTABLE_RUNTIME = Object.freeze({
 })
 const VECTOR_ENCODING = "float32-json"
 const DEFAULT_SOURCE_PATHS = Object.freeze([
+  "plugins/desk/mcp/src/indexer/discover.js",
   "plugins/desk/mcp/src/indexer/index.js",
   "plugins/desk/mcp/src/indexer/vector-packs.js",
   "plugins/desk/mcp/src/snapshots/manifest.js",
@@ -137,6 +139,7 @@ export async function buildVectorPackFromLocalDb({
       rows_sha256: packSha,
       artifact_source_scope_hash: context.expectedArtifactSourceScopeHash,
       document_tree_hash: context.expectedDocumentTreeHash,
+      discovery_grammar_version: DISCOVERY_GRAMMAR_VERSION,
       represented_documents: sourceDocs,
       created_at: new Date(now()).toISOString(),
       provenance: {
@@ -209,6 +212,7 @@ export async function buildSnapshotFromLocalDb({
       runtime: context.expectedRuntime,
       artifact_source_scope_hash: context.expectedArtifactSourceScopeHash,
       document_tree_hash: context.expectedDocumentTreeHash,
+      discovery_grammar_version: DISCOVERY_GRAMMAR_VERSION,
       included_pack_ids: includedPackIds,
       represented_documents: sourceDocs,
       created_at: new Date(now()).toISOString(),
@@ -320,7 +324,7 @@ export async function validateArtifacts({
   const budgetMs = budgetValue(budgets, "artifacts", "validate_ms")
   assertBudgetAllowsStart({ budgetMs, label: "artifact validation" })
   const startedAt = now()
-  const vectorPacks = await validateAllVectorPacks({ pluginRoot })
+  const vectorPacks = await validateAllVectorPacks({ pluginRoot, mcpRoot })
   const snapshots = await validateAllSnapshots({ pluginRoot, mcpRoot })
   const elapsedMs = assertWithinBudget({
     startedAt,
@@ -372,18 +376,27 @@ function representedDocuments(db) {
   }))
 }
 
-async function validateAllVectorPacks({ pluginRoot }) {
+async function validateAllVectorPacks({ pluginRoot, mcpRoot }) {
   const dir = path.join(pluginRoot, "artifacts", "vector-packs", ACTIVE_EMBEDDING_SPEC.id)
   const files = await filesWithSuffix(dir, ".jsonl")
   const out = []
   for (const packPath of files) {
+    const manifestPath = packPath.replace(/\.jsonl$/u, ".manifest.json")
+    const manifest = await readJson(manifestPath)
+    const context = snapshotCompatibilityContext({
+      mcpRoot,
+      docs: manifest.represented_documents ?? [],
+    })
     const validation = await validateVectorPackFile({
       pluginRoot,
       packPath,
+      expectedArtifactSourceScopeHash: context.expectedArtifactSourceScopeHash,
+      expectedDiscoveryGrammarVersion: context.expectedDiscoveryGrammarVersion,
     })
     out.push({
       pack_id: validation.pack_id,
       rows: validation.rows.length,
+      freshness: validation.freshness,
     })
   }
   return {
@@ -431,6 +444,7 @@ function snapshotCompatibilityContext({ mcpRoot = DEFAULT_MCP_ROOT, docs = [] } 
     expectedRuntime: SNAPSHOT_PORTABLE_RUNTIME,
     expectedArtifactSourceScopeHash: artifactSourceScopeHash(mcpRoot),
     expectedDocumentTreeHash: documentTreeHash(docs),
+    expectedDiscoveryGrammarVersion: DISCOVERY_GRAMMAR_VERSION,
   }
 }
 

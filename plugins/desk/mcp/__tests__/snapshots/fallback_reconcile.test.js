@@ -12,6 +12,7 @@ import matter from "gray-matter"
 
 import { closeDb, getMeta, indexDbPath, openDb, setMeta } from "../../src/db/init.js"
 import { chunkBody } from "../../src/indexer/chunk.js"
+import { DISCOVERY_GRAMMAR_VERSION } from "../../src/indexer/discover.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
 import {
   ACTIVE_EMBEDDING_SPEC,
@@ -144,6 +145,7 @@ function validManifest({
     runtime: RUNTIME,
     artifact_source_scope_hash: SOURCE_SCOPE_HASH,
     document_tree_hash: documentTreeHash,
+    discovery_grammar_version: DISCOVERY_GRAMMAR_VERSION,
     included_pack_ids: ["desk-base-pack"],
     created_at: createdAt,
     artifact: {

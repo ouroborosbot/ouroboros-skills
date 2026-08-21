@@ -14,6 +14,7 @@ export async function discoverSnapshotArtifacts({
   expectedRuntime,
   expectedArtifactSourceScopeHash,
   expectedDocumentTreeHash,
+  expectedDiscoveryGrammarVersion,
 } = {}) {
   const root = requiredPath(pluginRoot, "pluginRoot")
   const snapshotsRoot = path.join(root, "artifacts", "snapshots")
@@ -46,6 +47,7 @@ export async function discoverSnapshotArtifacts({
           expectedDocumentTreeHash: await resolveExpectedHash(
             expectedDocumentTreeHash,
           ),
+          expectedDiscoveryGrammarVersion,
         })
         compatible.push({
           ...validation,

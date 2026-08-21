@@ -8,12 +8,12 @@
 // for new chunks are left absent so semantic search degrades gracefully.
 
 import { promises as fs } from "node:fs"
-import { openDb, closeDb, setMeta } from "../db/init.js"
+import { openDb, closeDb, getMeta, setMeta } from "../db/init.js"
 import {
   filterTombstonedDocuments,
   tombstoneStatusForDocuments,
 } from "../artifacts/tombstones.js"
-import { discover } from "./discover.js"
+import { DISCOVERY_GRAMMAR_VERSION, discover } from "./discover.js"
 import { chunkBody } from "./chunk.js"
 import {
   embedChunksDetailed,
@@ -159,6 +159,7 @@ export async function rebuildIndex(deskRoot, opts = {}) {
     // scan of docs frontmatter) and avoids stale edges.
     refreshRefs(db, discovered)
 
+    setMeta(db, "discovery_grammar_version", String(DISCOVERY_GRAMMAR_VERSION))
     setMeta(db, "last_indexed_at", new Date().toISOString())
     setMeta(db, "embedding_dim", String(EMBEDDING_DIM))
     setMeta(db, "embedding_model", opts.embed?.model ?? "nomic-embed-text")
@@ -179,7 +180,15 @@ async function importVectorPackRoots({ db, vectorPacks, signal }) {
   const combined = emptyVectorPackSummary()
   for (const pluginRoot of roots) {
     try {
-      const rootSummary = await importVectorPacks({ db, pluginRoot, signal })
+      const rootSummary = await importVectorPacks({
+        db,
+        pluginRoot,
+        signal,
+        expectedArtifactSourceScopeHash:
+          vectorPacks.expectedArtifactSourceScopeHash,
+        expectedDiscoveryGrammarVersion:
+          vectorPacks.expectedDiscoveryGrammarVersion,
+      })
       mergeVectorPackSummary(combined, rootSummary)
     } catch (error) {
       if (!vectorPacks.ignoreInvalidRoots || error?.name === "AbortError") throw error
@@ -548,7 +557,12 @@ function refreshRefs(db, docs) {
  * inside rebuildIndex. This is just for the boot-time "do we need to do
  * anything?" decision.
  */
+export function isDiscoveryGrammarCurrent(db) {
+  return getMeta(db, "discovery_grammar_version") === String(DISCOVERY_GRAMMAR_VERSION)
+}
+
 export async function isIndexFresh(deskRoot, db, { signal, tombstones } = {}) {
+  if (!isDiscoveryGrammarCurrent(db)) return false
   const row = db
     .prepare("SELECT value FROM meta WHERE key = 'last_indexed_at'")
     .get()

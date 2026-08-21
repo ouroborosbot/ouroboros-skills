@@ -97,6 +97,7 @@ export async function validateSnapshotArtifact({
   expectedRuntime,
   expectedArtifactSourceScopeHash,
   expectedDocumentTreeHash,
+  expectedDiscoveryGrammarVersion,
 } = {}) {
   const label =
     typeof snapshotPath === "string" && snapshotPath.trim() !== ""
@@ -128,6 +129,7 @@ export async function validateSnapshotArtifact({
     expectedRuntime,
     expectedArtifactSourceScopeHash,
     expectedDocumentTreeHash,
+    expectedDiscoveryGrammarVersion,
   })
   await assertArtifactDoesNotRepresentTombstones({
     pluginRoot,
@@ -149,6 +151,7 @@ export function validateSnapshotManifest({
   expectedRuntime,
   expectedArtifactSourceScopeHash,
   expectedDocumentTreeHash,
+  expectedDiscoveryGrammarVersion,
 } = {}) {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw new Error("snapshot manifest must be an object")
@@ -180,22 +183,30 @@ export function validateSnapshotManifest({
   assertProvenance(manifest.provenance)
   assertSourcePaths(manifest.source_paths)
 
+  const freshness = {
+    artifact_source_scope:
+      manifest.artifact_source_scope_hash === expectedArtifactSourceScopeHash
+        ? "fresh"
+        : "stale",
+    document_tree:
+      manifest.document_tree_hash === expectedDocumentTreeHash
+        ? "fresh"
+        : "stale",
+  }
+  if (expectedDiscoveryGrammarVersion !== undefined) {
+    freshness.discovery_grammar =
+      manifest.discovery_grammar_version === expectedDiscoveryGrammarVersion
+        ? "fresh"
+        : "stale"
+  }
+
   return {
     compatible: true,
     snapshot_id: manifest.snapshot_id,
     embedding_spec_id: manifest.embedding_spec_id,
     included_pack_ids: [...manifest.included_pack_ids],
     manifest,
-    freshness: {
-      artifact_source_scope:
-        manifest.artifact_source_scope_hash === expectedArtifactSourceScopeHash
-          ? "fresh"
-          : "stale",
-      document_tree:
-        manifest.document_tree_hash === expectedDocumentTreeHash
-          ? "fresh"
-          : "stale",
-    },
+    freshness,
   }
 }
 

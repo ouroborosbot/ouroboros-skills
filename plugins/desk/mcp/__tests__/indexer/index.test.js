@@ -409,6 +409,11 @@ test("isIndexFresh covers missing, invalid, stale, and fresh metadata states", a
   await w(root, "trackA/task-1/task.md", "---\nstatus: processing\n---\nfreshness body")
   const db = openDb(root)
   try {
+    setMeta(
+      db,
+      "discovery_grammar_version",
+      String(discovery.DISCOVERY_GRAMMAR_VERSION),
+    )
     assert.equal(await isIndexFresh(root, db), false)
 
     setMeta(db, "last_indexed_at", "not-a-date")

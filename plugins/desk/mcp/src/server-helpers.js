@@ -9,8 +9,12 @@ import { existsSync, readFileSync, readdirSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { closeDb, getMeta, indexDbPath, openDb, setMeta } from "./db/init.js"
-import { discover } from "./indexer/discover.js"
-import { isIndexFresh, rebuildIndex } from "./indexer/index.js"
+import { DISCOVERY_GRAMMAR_VERSION, discover } from "./indexer/discover.js"
+import {
+  isDiscoveryGrammarCurrent,
+  isIndexFresh,
+  rebuildIndex,
+} from "./indexer/index.js"
 import { probeEmbeddingService } from "./indexer/embed.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
 import { restoreSnapshotToState } from "./snapshots/restore.js"
@@ -32,6 +36,7 @@ const SNAPSHOT_PORTABLE_RUNTIME = Object.freeze({
   node_abi: "portable",
 })
 const ARTIFACT_SOURCE_SCOPE_PATHS = Object.freeze([
+  "plugins/desk/mcp/src/indexer/discover.js",
   "plugins/desk/mcp/src/indexer/index.js",
   "plugins/desk/mcp/src/indexer/vector-packs.js",
   "plugins/desk/mcp/src/snapshots/manifest.js",
@@ -85,7 +90,11 @@ export async function ensureIndex(deskRoot, opts = {}) {
     const semanticBefore = getSemanticCoverage(db)
     let repairMissing = false
     if (dbExisted) {
-      if (snapshot?.restored && !snapshotNeedsReconcile(snapshot)) {
+      if (
+        snapshot?.restored &&
+        !snapshotNeedsReconcile(snapshot) &&
+        isDiscoveryGrammarCurrent(db)
+      ) {
         const repair = await maybeRepairMissingEmbeddings(
           deskRoot,
           db,
@@ -187,7 +196,8 @@ export function configureRuntimeArtifacts({ pluginRoot } = {}) {
 function snapshotNeedsReconcile(snapshot) {
   if (!snapshot?.restored) return false
   return snapshot.freshness?.artifact_source_scope === "stale" ||
-    snapshot.freshness?.document_tree === "stale"
+    snapshot.freshness?.document_tree === "stale" ||
+    snapshot.freshness?.discovery_grammar === "stale"
 }
 
 function resolveSnapshotOptions({ opts, pluginRoot, workspaceArtifactRoot, deskRoot, signal }) {
@@ -214,9 +224,14 @@ function resolveSnapshotOptions({ opts, pluginRoot, workspaceArtifactRoot, deskR
 
 function resolveVectorPackOptions({ opts, pluginRoot, workspaceArtifactRoot }) {
   if (opts.vectorPacks === false || opts.vectorPacks === null) return undefined
+  const compatibility = {
+    expectedArtifactSourceScopeHash: artifactSourceScopeHash(),
+    expectedDiscoveryGrammarVersion: DISCOVERY_GRAMMAR_VERSION,
+  }
   if (opts.vectorPacks !== undefined) {
     return {
       pluginRoot,
+      ...compatibility,
       ...opts.vectorPacks,
     }
   }
@@ -229,6 +244,7 @@ function resolveVectorPackOptions({ opts, pluginRoot, workspaceArtifactRoot }) {
     pluginRoot: artifactRoots[0],
     fallbackPluginRoots: artifactRoots.slice(1),
     ignoreInvalidRoots: true,
+    ...compatibility,
   }
 }
 
@@ -287,6 +303,7 @@ function defaultSnapshotCompatibilityContext({ deskRoot, signal } = {}) {
     expectedRuntime: SNAPSHOT_PORTABLE_RUNTIME,
     expectedArtifactSourceScopeHash: artifactSourceScopeHash(),
     expectedDocumentTreeHash: () => currentDocumentTreeHash(deskRoot, signal),
+    expectedDiscoveryGrammarVersion: DISCOVERY_GRAMMAR_VERSION,
   }
 }
 

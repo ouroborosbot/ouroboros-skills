@@ -92,6 +92,8 @@ export async function validateVectorPackFile({
   manifestPath,
   checksumPath,
   expectedSpec = ACTIVE_EMBEDDING_SPEC,
+  expectedArtifactSourceScopeHash,
+  expectedDiscoveryGrammarVersion,
   signal,
 } = {}) {
   throwIfAborted(signal)
@@ -124,18 +126,35 @@ export async function validateVectorPackFile({
     throw new Error(`${label}: manifest row_count must match vector pack rows`)
   }
 
-  return {
+  const result = {
     pack_id: manifest.pack_id,
     embedding_spec_id: manifest.embedding_spec_id,
     rows,
     manifest,
   }
+  const freshness = {}
+  if (expectedArtifactSourceScopeHash !== undefined) {
+    freshness.artifact_source_scope =
+      manifest.artifact_source_scope_hash === expectedArtifactSourceScopeHash
+        ? "fresh"
+        : "stale"
+  }
+  if (expectedDiscoveryGrammarVersion !== undefined) {
+    freshness.discovery_grammar =
+      manifest.discovery_grammar_version === expectedDiscoveryGrammarVersion
+        ? "fresh"
+        : "stale"
+  }
+  if (Object.keys(freshness).length > 0) result.freshness = freshness
+  return result
 }
 
 export async function importVectorPacks({
   db,
   pluginRoot,
   expectedSpec = ACTIVE_EMBEDDING_SPEC,
+  expectedArtifactSourceScopeHash,
+  expectedDiscoveryGrammarVersion,
   signal,
 } = {}) {
   throwIfAborted(signal)
@@ -199,6 +218,8 @@ export async function importVectorPacks({
       manifestPath: sidecarPath(packPath, ".manifest.json"),
       checksumPath: sidecarPath(packPath, ".sha256"),
       expectedSpec,
+      expectedArtifactSourceScopeHash,
+      expectedDiscoveryGrammarVersion,
       signal,
     })
     throwIfAborted(signal)

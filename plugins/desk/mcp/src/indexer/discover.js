@@ -24,6 +24,8 @@ import {
   loadExclusionRules,
 } from "./exclusions.js"
 
+export const DISCOVERY_GRAMMAR_VERSION = 2
+
 /** Filenames we always pick up regardless of where they sit in the tree. */
 const TASK_DOC_BASENAMES = new Set([
   "task.md",

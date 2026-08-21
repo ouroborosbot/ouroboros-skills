@@ -25,6 +25,7 @@ const productionCurrentSourceHashField = "current_artifact_source_scope_hash";
 const productionCurrentDocumentHashField = "current_document_tree_hash";
 const productionArtifactTypes = Object.freeze(["vector-pack", "snapshot"]);
 const snapshotSourceScopePaths = Object.freeze([
+  "plugins/desk/mcp/src/indexer/discover.js",
   "plugins/desk/mcp/src/indexer/index.js",
   "plugins/desk/mcp/src/indexer/vector-packs.js",
   "plugins/desk/mcp/src/snapshots/manifest.js",
