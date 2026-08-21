@@ -120,7 +120,7 @@ function createManualScheduler() {
   }
 }
 
-test("semantic repair reuses one in-flight promise per root", async () => {
+test("semantic repair reuses one in-flight promise per root and evicts it after completion", async () => {
   const { createSemanticRepairCoordinator } = await loadSemanticRepair()
   const scheduler = createManualScheduler()
   const calls = []
@@ -148,7 +148,20 @@ test("semantic repair reuses one in-flight promise per root", async () => {
   assert.equal(scheduler.queued.length, 1)
   await scheduler.drain()
   assert.equal((await first).state, "complete")
-  assert.deepEqual(calls, [path.resolve("/tmp/desk-root-a")])
+
+  const next = coordinator.start({
+    deskRoot: "/tmp/desk-root-a",
+    batchChunks: 100,
+    batchMs: 5000,
+  })
+  assert.notStrictEqual(next, first)
+  assert.equal(scheduler.queued.length, 1)
+  await scheduler.drain()
+  assert.equal((await next).state, "complete")
+  assert.deepEqual(calls, [
+    path.resolve("/tmp/desk-root-a"),
+    path.resolve("/tmp/desk-root-a"),
+  ])
 })
 
 test("semantic repair runs different roots independently", async () => {
@@ -214,24 +227,30 @@ test("semantic repair schedules every batch at zero delay on an unref'ed timer",
   )
 })
 
-test("semantic repair catches background rejection and records a compact failure", async () => {
+test("semantic repair catches background rejection, records a compact failure, and permits retry", async () => {
   const { createSemanticRepairCoordinator } = await loadSemanticRepair()
   const scheduler = createManualScheduler()
   const error = new Error("embedding endpoint unavailable")
   error.code = "embedding_service_unavailable"
+  const calls = []
   const coordinator = createSemanticRepairCoordinator({
-    repairBatch: async () => {
-      throw error
+    repairBatch: async ({ deskRoot }) => {
+      calls.push(deskRoot)
+      if (calls.length === 1) {
+        throw error
+      }
+      return { processed_chunks: 1, remaining_chunks: 0 }
     },
     schedule: scheduler.schedule,
     clearScheduled: scheduler.clearScheduled,
   })
+  const root = path.resolve("/tmp/desk-root")
   const unhandled = []
   const onUnhandled = (reason) => unhandled.push(reason)
   process.on("unhandledRejection", onUnhandled)
 
   try {
-    const repair = coordinator.start({ deskRoot: "/tmp/desk-root" })
+    const repair = coordinator.start({ deskRoot: root })
     await scheduler.drain()
     await new Promise((resolve) => setImmediate(resolve))
     const result = await repair
@@ -240,8 +259,15 @@ test("semantic repair catches background rejection and records a compact failure
       reason: "embedding_service_unavailable",
       message: "embedding endpoint unavailable",
     })
-    assert.deepEqual(coordinator.status("/tmp/desk-root"), result)
+    assert.deepEqual(coordinator.status(root), result)
     assert.deepEqual(unhandled, [])
+
+    const retry = coordinator.start({ deskRoot: root })
+    assert.notStrictEqual(retry, repair)
+    assert.equal(scheduler.queued.length, 1)
+    await scheduler.drain()
+    assert.equal((await retry).state, "complete")
+    assert.deepEqual(calls, [root, root])
   } finally {
     process.off("unhandledRejection", onUnhandled)
   }
@@ -330,7 +356,7 @@ test("a new coordinator resumes persisted missing work after process interruptio
   assert.equal((await abandoned).state, "idle")
 })
 
-test("semantic repair batch prioritizes active recent documents and chunk ordinal", async () => {
+test("semantic repair batch prioritizes active recent documents, chunk ordinal, and path", async () => {
   const { repairMissingVectorBatch } = await loadSemanticRepair()
   const root = await makeRoot()
   const db = openDb(root)
@@ -348,9 +374,14 @@ test("semantic repair batch prioritizes active recent documents and chunk ordina
       texts: ["active-old"],
     })
     insertDocument(db, {
-      documentPath: "active/new.md",
+      documentPath: "active/zulu.md",
       updatedAt: "2026-01-01T00:00:00.000Z",
-      texts: ["active-new-0", "active-new-1"],
+      texts: ["active-zulu-0", "active-zulu-1"],
+    })
+    insertDocument(db, {
+      documentPath: "active/alpha.md",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      texts: ["active-alpha-0", "active-alpha-1"],
     })
     insertDocument(db, {
       documentPath: "active/undated.md",
@@ -370,14 +401,16 @@ test("semantic repair batch prioritizes active recent documents and chunk ordina
     })
 
     assert.deepEqual(seen, [
-      "active-new-0",
-      "active-new-1",
+      "active-alpha-0",
+      "active-zulu-0",
+      "active-alpha-1",
+      "active-zulu-1",
       "active-old",
       "active-undated",
       "archived-new",
     ])
-    assert.equal(result.processed_chunks, 5)
-    assert.equal(result.vectors_indexed, 5)
+    assert.equal(result.processed_chunks, 7)
+    assert.equal(result.vectors_indexed, 7)
     assert.equal(result.remaining_chunks, 0)
     assert.equal(result.stopped_by, "complete")
   } finally {

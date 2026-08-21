@@ -295,7 +295,7 @@ function assertArtifactTreeUnchanged(pluginRoot, before) {
   assert.deepEqual(artifactTree(pluginRoot), before)
 }
 
-function writeBudgetConfig(file, overrides = {}) {
+function performanceBudgetConfig(overrides = {}) {
   const base = {
     schema_version: 1,
     search: {
@@ -316,16 +316,20 @@ function writeBudgetConfig(file, overrides = {}) {
       validate_ms: 1000,
     },
   }
+  return {
+    ...base,
+    ...overrides,
+    search: { ...base.search, ...overrides.search },
+    startup: { ...base.startup, ...overrides.startup },
+    rebuild: { ...base.rebuild, ...overrides.rebuild },
+    artifacts: { ...base.artifacts, ...overrides.artifacts },
+  }
+}
+
+function writeBudgetConfig(file, overrides = {}) {
   writeFileSync(
     file,
-    `${JSON.stringify({
-      ...base,
-      ...overrides,
-      search: { ...base.search, ...overrides.search },
-      startup: { ...base.startup, ...overrides.startup },
-      rebuild: { ...base.rebuild, ...overrides.rebuild },
-      artifacts: { ...base.artifacts, ...overrides.artifacts },
-    }, null, 2)}\n`,
+    `${JSON.stringify(performanceBudgetConfig(overrides), null, 2)}\n`,
     "utf8",
   )
 }
@@ -876,17 +880,35 @@ test("performance budget loader fails closed for malformed, missing, or invalid 
         /valid JSON/u.test(error.message),
     )
 
+    const missingSearch = performanceBudgetConfig()
+    delete missingSearch.search
     for (const [body, expectedDiagnostic] of [
       [null, "performance budget config must be an object"],
       [{ schema_version: 2 }, "performance budget config schema_version must be 1"],
-      [{ schema_version: 1, startup: [], rebuild: {}, artifacts: {} }, "performance budget startup must be an object"],
+      [missingSearch, "performance budget search must be an object"],
+      [
+        performanceBudgetConfig({
+          search: { semantic_repair_batch_chunks: 0 },
+        }),
+        "performance budget search.semantic_repair_batch_chunks must be a positive integer",
+      ],
+      [
+        performanceBudgetConfig({
+          search: { semantic_repair_batch_ms: 1.5 },
+        }),
+        "performance budget search.semantic_repair_batch_ms must be a positive integer",
+      ],
       [
         {
-          schema_version: 1,
-          startup: { ensure_index_ms: -1, snapshot_restore_ms: 1, vector_pack_import_ms: 1 },
-          rebuild: { vector_pack_rebuild_ms: 1, snapshot_build_ms: 1 },
-          artifacts: { snapshot_verify_ms: 1, validate_ms: 1 },
+          ...performanceBudgetConfig(),
+          startup: [],
         },
+        "performance budget startup must be an object",
+      ],
+      [
+        performanceBudgetConfig({
+          startup: { ensure_index_ms: -1, snapshot_restore_ms: 1, vector_pack_import_ms: 1 },
+        }),
         "performance budget startup.ensure_index_ms must be a non-negative integer",
       ],
     ]) {
