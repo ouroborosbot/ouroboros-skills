@@ -1036,6 +1036,55 @@ test("artifact builders reject missing grammar metadata and stale document trees
   }
 })
 
+test("artifact builders reject matching document trees with stale chunk contents", async () => {
+  const deskRoot = makeTempDir("desk-artifact-scripts-stale-chunks-desk-")
+  const pluginRoot = makeTempDir("desk-artifact-scripts-stale-chunks-plugin-")
+  try {
+    writeApprovedPolicy(pluginRoot)
+    writeFile(
+      deskRoot,
+      path.join("trackA", "task-1", "task.md"),
+      "---\nstatus: processing\n---\nstale chunk artifact body",
+    )
+    await rebuildIndex(deskRoot, { skipEmbed: true })
+    const db = openDb(deskRoot)
+    try {
+      db.prepare("DELETE FROM chunks").run()
+    } finally {
+      closeDb(db)
+    }
+
+    for (const [run, idFlag, id] of [
+      [runVectorPackBuildCli, "--pack-id", "stale-chunks-pack"],
+      [runSnapshotBuildCli, "--snapshot-id", "stale-chunks-snapshot"],
+    ]) {
+      const captured = captureIo()
+      assert.equal(
+        await run({
+          argv: [
+            "--desk-root",
+            deskRoot,
+            "--plugin-root",
+            pluginRoot,
+            idFlag,
+            id,
+            "--from-local-db",
+          ],
+          io: captured.io,
+        }),
+        1,
+      )
+      assert.match(
+        captured.stderr.join(""),
+        /index contents are stale.*desk_reindex/u,
+      )
+    }
+  } finally {
+    rmSync(deskRoot, { recursive: true, force: true })
+    rmSync(pluginRoot, { recursive: true, force: true })
+  }
+})
+
 test("artifact script CLIs cover help, usage errors, repeated args, and targeted snapshot verification", async () => {
   for (const [run, pattern] of [
     [runVectorPackBuildCli, /Build a Desk vector-pack artifact/u],

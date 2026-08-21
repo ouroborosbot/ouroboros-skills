@@ -311,6 +311,48 @@ test("discover applies nested gitignore files and negated rules", async () => {
   assert.equal(paths.includes("trackA/local-ignored/reincluded/task.md"), true)
 })
 
+test("discover honors standard gitignore question, class, and recursive wildcards", async () => {
+  const root = await tmpRoot()
+  await writeFile(
+    root,
+    ".gitignore",
+    [
+      "notes?.md",
+      "draft[0-9].md",
+      "**/private-*.md",
+      "reports/**/secret.md",
+      "",
+    ].join("\n"),
+  )
+  for (const rel of [
+    "notes1.md",
+    "draft7.md",
+    "private-root.md",
+    "nested/private-note.md",
+    "reports/secret.md",
+    "reports/2026/q1/secret.md",
+  ]) {
+    await writeFile(root, rel, "# Ignored\n\nfixture secret")
+  }
+  for (const rel of [
+    "notes10.md",
+    "draftx.md",
+    "nested/public-note.md",
+    "reports/2026/q1/public.md",
+  ]) {
+    await writeFile(root, rel, "# Visible\n\npublic body")
+  }
+
+  const paths = (await discover(root)).map((doc) => doc.path)
+
+  assert.deepEqual(paths, [
+    "draftx.md",
+    "nested/public-note.md",
+    "notes10.md",
+    "reports/2026/q1/public.md",
+  ])
+})
+
 test("discover excludes symlink and hidden docs while preserving person and shared docs", async () => {
   const root = await tmpRoot()
   await writeFile(root, "trackA/task-1/task.md", "# Visible\n\npublic body")

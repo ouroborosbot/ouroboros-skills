@@ -26,6 +26,25 @@ async function w(root, rel, body) {
   await fs.writeFile(abs, body, "utf8")
 }
 
+async function writeTombstone(pluginRoot, doc) {
+  const ledgerDir = path.join(pluginRoot, "artifacts", "tombstones")
+  await fs.mkdir(ledgerDir, { recursive: true })
+  await fs.writeFile(
+    path.join(ledgerDir, "tombstones.jsonl"),
+    `${JSON.stringify({
+      schema_version: 1,
+      document_path: doc.path,
+      document_hash: `sha256:${doc.hash}`,
+      reason: "redacted",
+      redacted_at: "2026-08-21T00:00:00.000Z",
+      effective_from: "2026-08-21T00:00:00.000Z",
+      artifact_rotation_id: "unit-2-review",
+      actor: "unit-test",
+    })}\n`,
+    "utf8",
+  )
+}
+
 async function writeManyEmptySharedDocs(root, count) {
   const dir = path.join(root, "_shared")
   await fs.mkdir(dir, { recursive: true })
@@ -469,6 +488,68 @@ test("isIndexedDocumentTreeCurrent rejects count, path, and hash drift", async (
       await isIndexedDocumentTreeCurrent(root, db, {
         docs: [...docs].reverse(),
       }),
+      true,
+    )
+  } finally {
+    closeDb(db)
+  }
+})
+
+test("isIndexedDocumentTreeCurrent is ordering-independent and path-portable", async () => {
+  const root = await mkRoot()
+  await w(root, "README.md", "root document")
+  await w(root, "_meta/friction.md", "metadata document")
+  await rebuildIndex(root, indexOpts)
+  const db = openDb(root)
+  try {
+    assert.equal(await isIndexedDocumentTreeCurrent(root, db), true)
+    db.prepare(
+      "UPDATE docs SET path = REPLACE(path, '/', '\\') WHERE path LIKE '%/%'",
+    ).run()
+    assert.equal(await isIndexedDocumentTreeCurrent(root, db), true)
+  } finally {
+    closeDb(db)
+  }
+})
+
+test("isIndexFresh rejects missing chunk and refs index contents", async () => {
+  const root = await mkRoot()
+  await w(root, "trackA/task-1/task.md", "task body")
+  await w(root, "trackA/task-1/planning.md", "planning body")
+  await rebuildIndex(root, indexOpts)
+  const db = openDb(root)
+  try {
+    db.prepare("DELETE FROM chunks").run()
+    assert.equal(await isIndexFresh(root, db), false)
+  } finally {
+    closeDb(db)
+  }
+
+  await rebuildIndex(root, indexOpts)
+  const refsDb = openDb(root)
+  try {
+    refsDb.prepare("DELETE FROM refs_graph").run()
+    assert.equal(await isIndexFresh(root, refsDb), false)
+  } finally {
+    closeDb(refsDb)
+  }
+})
+
+test("isIndexFresh compares against the tombstone-filtered live tree", async () => {
+  const root = await mkRoot()
+  const pluginRoot = await mkRoot()
+  await w(root, "references/redacted.md", "redacted body")
+  const [doc] = await discovery.discover(root)
+  await writeTombstone(pluginRoot, doc)
+  await rebuildIndex(root, {
+    ...indexOpts,
+    tombstones: { pluginRoot },
+  })
+  const db = openDb(root)
+  try {
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM docs").get().n, 0)
+    assert.equal(
+      await isIndexFresh(root, db, { tombstones: { pluginRoot } }),
       true,
     )
   } finally {
