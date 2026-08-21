@@ -646,6 +646,79 @@ test("semantic repair compacts synchronous scheduling failures and preserves sta
   assert.deepEqual(coordinator.status(root), result)
 })
 
+test("semantic repair clears a registered timer when unref throws and permits retry", async () => {
+  const { createSemanticRepairCoordinator } = await loadSemanticRepair()
+  const root = path.resolve("desk-root-unref-failure")
+  const handles = []
+  const cleared = []
+  let callbackCalls = 0
+  let repairCalls = 0
+  const error = new Error("private timer unref detail")
+  const schedule = (callback, delay) => {
+    const handle = {
+      cancelled: false,
+      delay,
+      shouldThrow: handles.length === 0,
+      unrefCalls: 0,
+      async callback() {
+        callbackCalls += 1
+        return callback()
+      },
+      unref() {
+        this.unrefCalls += 1
+        if (this.shouldThrow) throw error
+      },
+    }
+    handles.push(handle)
+    return handle
+  }
+  const coordinator = createSemanticRepairCoordinator({
+    repairBatch: async () => {
+      repairCalls += 1
+      return { processed_chunks: 1, remaining_chunks: 0 }
+    },
+    schedule,
+    clearScheduled: (handle) => {
+      handle.cancelled = true
+      cleared.push(handle)
+    },
+  })
+
+  const failed = await awaitBounded(
+    coordinator.start({ deskRoot: root }),
+    "semantic repair unref failure did not settle",
+  )
+  assert.deepEqual(failed, {
+    state: "failed",
+    last_error: {
+      reason: "semantic_repair_failed",
+      message: "semantic repair failed",
+    },
+  })
+  assert.strictEqual(cleared[0], handles[0])
+  if (!handles[0].cancelled) await handles[0].callback()
+  assert.equal(callbackCalls, 0)
+  assert.equal(repairCalls, 0)
+  assert.deepEqual(coordinator.status(root), failed)
+
+  const retry = coordinator.start({ deskRoot: root })
+  assert.equal(handles.length, 2)
+  assert.equal(handles[1].unrefCalls, 1)
+  if (!handles[1].cancelled) await handles[1].callback()
+  assert.deepEqual(
+    await awaitBounded(
+      retry,
+      "semantic repair retry after unref failure did not settle",
+    ),
+    {
+      state: "complete",
+      last_error: null,
+    },
+  )
+  assert.equal(callbackCalls, 1)
+  assert.equal(repairCalls, 1)
+})
+
 test("semantic repair preserves the active batch when a custom scheduler fires a reschedule synchronously", async () => {
   const { createSemanticRepairCoordinator } = await loadSemanticRepair()
   const root = path.resolve("desk-root-synchronous-reschedule")

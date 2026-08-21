@@ -91,7 +91,6 @@ export function createSemanticRepairCoordinator({
       entry.timer = handle
       handle?.unref?.()
     } catch (error) {
-      entry.timer = undefined
       finish(entry, repairStatus("failed", compactError(error)))
     }
   }
