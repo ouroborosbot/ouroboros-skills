@@ -604,6 +604,72 @@ test("semantic repair redacts private error details from status", async () => {
   assert.equal(serialized.includes("at /Users"), false)
 })
 
+test("semantic repair cancellation settles across the reschedule cleanup boundary", async () => {
+  const { createSemanticRepairCoordinator } = await loadSemanticRepair()
+  const scheduler = createManualScheduler()
+  const root = path.resolve("desk-root-reschedule-cancellation")
+  let calls = 0
+  let cancellation
+  let coordinator
+  let markCancellationStarted
+  const cancellationStarted = new Promise((resolve) => {
+    markCancellationStarted = resolve
+  })
+  const schedule = (callback, delay) => {
+    const handle = scheduler.schedule(callback, delay)
+    if (scheduler.scheduled.length === 2) {
+      queueMicrotask(() => {
+        cancellation = coordinator.cancel(root)
+        markCancellationStarted()
+      })
+    }
+    return handle
+  }
+  coordinator = createSemanticRepairCoordinator({
+    repairBatch: async () => {
+      calls += 1
+      return { processed_chunks: 1, remaining_chunks: 1 }
+    },
+    schedule,
+    clearScheduled: scheduler.clearScheduled,
+  })
+
+  const repair = coordinator.start({ deskRoot: root })
+  const firstBatch = scheduler.runNext()
+  await awaitBounded(
+    cancellationStarted,
+    "semantic repair cancellation did not enter the reschedule cleanup boundary",
+  )
+  const pendingBatch = scheduler.scheduled[1]
+  assert.ok(pendingBatch)
+  assert.equal(pendingBatch.handle.cancelled, true)
+
+  const [cancelled, result] = await awaitBounded(
+    Promise.all([cancellation, repair]),
+    "semantic repair cancellation did not settle across the reschedule cleanup boundary",
+  )
+  await awaitBounded(
+    firstBatch,
+    "semantic repair first batch did not settle after boundary cancellation",
+  )
+  await scheduler.drain()
+
+  assert.deepEqual(cancelled, {
+    state: "idle",
+    last_error: null,
+    cancelled: true,
+  })
+  assert.deepEqual(result, {
+    state: "idle",
+    last_error: null,
+  })
+  assert.deepEqual(coordinator.status(root), result)
+  assert.equal(calls, 1)
+  assert.equal(scheduler.scheduled.length, 2)
+  assert.deepEqual(scheduler.cleared, [pendingBatch.handle])
+  assert.equal(scheduler.queued.length, 0)
+})
+
 test("semantic repair cancellation aborts the active real batch, waits for cleanup, and permits a later retry", async () => {
   const {
     createSemanticRepairCoordinator,

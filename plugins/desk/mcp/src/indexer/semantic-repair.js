@@ -81,7 +81,11 @@ export function createSemanticRepairCoordinator({
         const active = runBatch(entry)
         entry.active = active
         return active.finally(() => {
-          if (entry.active === active) entry.active = undefined
+          if (entry.active !== active) return
+          entry.active = undefined
+          if (entry.controller.signal.aborted) {
+            finish(entry, repairStatus("idle"))
+          }
         })
       }, 0)
       entry.timer = handle
