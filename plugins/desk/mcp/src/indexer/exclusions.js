@@ -191,14 +191,14 @@ function parseGitignoreLine(line, baseDir) {
     pattern,
     negated,
   }
+}
 
-  function validateGitignorePattern(pattern) {
-    try {
-      matchesGitignorePattern("", pattern)
-    } catch (error) {
-      if (error?.code === "exclusion_rules_unavailable") throw error
-      throw unsupportedGitignorePatternError()
-    }
+function validateGitignorePattern(pattern, match = matchesGitignorePattern) {
+  try {
+    match("", pattern)
+  } catch (error) {
+    if (error?.code === "exclusion_rules_unavailable") throw error
+    throw unsupportedGitignorePatternError()
   }
 }
 
@@ -399,7 +399,6 @@ function parseCharacterClass(pattern, start) {
     negated = true
     body = body.slice(1)
   }
-  if (body === "") return null
   const escapedBody = translateCharacterClassBody(body)
   return {
     source: negated ? `[^/${escapedBody}]` : `[${escapedBody}]`,
@@ -424,12 +423,8 @@ function translateCharacterClassBody(body) {
     if (char === "/") throw unsupportedGitignorePatternError()
     if (char === "\\") {
       const next = body[index + 1]
-      if (next === undefined) {
-        source += "\\\\"
-      } else {
-        source += next.replace(/[\\\]^\-]/gu, "\\$&")
-        index += 1
-      }
+      source += next.replace(/[\\\]^\-]/gu, "\\$&")
+      index += 1
       continue
     }
     source += escapeCharacterClassLiteral(char)
@@ -459,4 +454,12 @@ function stripUnescapedTrailingSpaces(line) {
     end -= 1
   }
   return line.slice(0, end)
+}
+
+export const __exclusionInternalsForTests = {
+  globToRegexSource,
+  parseCharacterClass,
+  stripUnescapedTrailingSpaces,
+  translateCharacterClassBody,
+  validateGitignorePattern,
 }

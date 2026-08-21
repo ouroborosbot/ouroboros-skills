@@ -145,6 +145,56 @@ function bfs(db, startDocId, depth, direction) {
   return visited
 }
 
+function buildThreadRows(visited, metaById, startDocId) {
+  const rows = []
+  for (const [docId, info] of visited.entries()) {
+    const meta = metaById.get(docId)
+    if (!meta) continue
+    if (docId === startDocId) {
+      rows.push({
+        path: meta.path,
+        kind: meta.kind,
+        ref_kind: null,
+        hop_distance: 0,
+        why_connected: "start",
+        updated_at: meta.updated_at,
+      })
+      continue
+    }
+    const otherMeta = metaById.get(info.edge_other_id)
+    const slug = otherMeta?.task_slug ?? meta.task_slug ?? "task"
+    rows.push({
+      path: meta.path,
+      kind: meta.kind,
+      ref_kind: info.ref_kind,
+      hop_distance: info.hop_distance,
+      why_connected: describeRefKind(info.ref_kind, slug),
+      updated_at: meta.updated_at,
+    })
+  }
+  return rows
+}
+
+function compareThreadRows(a, b) {
+  if (a.hop_distance !== b.hop_distance) {
+    return a.hop_distance - b.hop_distance
+  }
+  const ua = a.updated_at ?? ""
+  const ub = b.updated_at ?? ""
+  if (ua === ub) return a.path.localeCompare(b.path)
+  if (!ua) return 1
+  if (!ub) return -1
+  return ub.localeCompare(ua)
+}
+
+export const __threadInternalsForTests = {
+  bfs,
+  buildThreadRows,
+  clampDepth,
+  compareThreadRows,
+  normalizeStartPath,
+}
+
 /**
  * desk_thread — provenance walk via refs_graph.
  *
@@ -202,54 +252,11 @@ export async function desk_thread({ deskRoot, input, ensure = ensureIndex }) {
 
     // Build chain rows. The start doc has its own shape (no ref_kind /
     // why_connected) but is included as the first element per design.
-    const rows = []
-    for (const [docId, info] of visited.entries()) {
-      const meta = metaById.get(docId)
-      if (!meta) continue
-      if (docId === startDoc.id) {
-        rows.push({
-          path: meta.path,
-          kind: meta.kind,
-          ref_kind: null,
-          hop_distance: 0,
-          why_connected: "start",
-          updated_at: meta.updated_at,
-        })
-        continue
-      }
-      // For why_connected, we want to name the *task* the edge connects to.
-      // The ref_kind on a planning/doing/feedback edge points to the task.md,
-      // so the most informative phrasing references that task's slug. We
-      // look at the edge_other_id (the doc on the other side of the first
-      // hop reaching this node) and prefer its task_slug; fall back to this
-      // node's own task_slug, then to "task".
-      const otherMeta = metaById.get(info.edge_other_id)
-      const slug =
-        otherMeta?.task_slug ?? meta.task_slug ?? "task"
-      rows.push({
-        path: meta.path,
-        kind: meta.kind,
-        ref_kind: info.ref_kind,
-        hop_distance: info.hop_distance,
-        why_connected: describeRefKind(info.ref_kind, slug),
-        updated_at: meta.updated_at,
-      })
-    }
+    const rows = buildThreadRows(visited, metaById, startDoc.id)
 
     // Sort: start doc first (hop_distance 0), then by hop_distance asc, then
     // by updated_at desc within the same hop. Stable on ties.
-    rows.sort((a, b) => {
-      if (a.hop_distance !== b.hop_distance) {
-        return a.hop_distance - b.hop_distance
-      }
-      // Newer first within the same hop. Nulls sort last.
-      const ua = a.updated_at ?? ""
-      const ub = b.updated_at ?? ""
-      if (ua === ub) return a.path.localeCompare(b.path)
-      if (!ua) return 1
-      if (!ub) return -1
-      return ub.localeCompare(ua)
-    })
+    rows.sort(compareThreadRows)
 
     return {
       start: { path: startDoc.path, kind: startDoc.kind },

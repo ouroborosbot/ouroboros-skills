@@ -734,6 +734,59 @@ test("exclusion helpers cover path globs and benign artifact inputs", async () =
   )
 })
 
+test("gitignore parser internals cover malformed and boundary patterns", async () => {
+  const {
+    __exclusionInternalsForTests: {
+      globToRegexSource,
+      parseCharacterClass,
+      stripUnescapedTrailingSpaces,
+      translateCharacterClassBody,
+      validateGitignorePattern,
+    },
+  } = await loadExclusionsModule()
+
+  assert.equal(globToRegexSource("**", { pathPattern: true }), ".*")
+  assert.equal(globToRegexSource("\\"), "\\\\")
+  assert.equal(globToRegexSource("[^a]"), "[^/a]")
+  assert.equal(globToRegexSource("[]a]"), "[\\]a]")
+  assert.equal(parseCharacterClass("[", 0), null)
+  assert.equal(parseCharacterClass("[]", 0), null)
+  assert.equal(parseCharacterClass("[!]", 0), null)
+  assert.deepEqual(parseCharacterClass("[]a]", 0), {
+    source: "[\\]a]",
+    end: 3,
+  })
+  assert.equal(translateCharacterClassBody("!a"), "!a")
+  assert.equal(translateCharacterClassBody("^a"), "\\^a")
+  assert.equal(translateCharacterClassBody("\\-"), "\\-")
+  assert.equal(translateCharacterClassBody("[:digit:]"), "0-9")
+  assert.throws(
+    () => translateCharacterClassBody("[:unknown:]"),
+    /unsupported pattern/u,
+  )
+  assert.throws(
+    () => translateCharacterClassBody("[:digit"),
+    /unsupported pattern/u,
+  )
+  assert.throws(
+    () => translateCharacterClassBody("a/b"),
+    /unsupported pattern/u,
+  )
+  assert.throws(
+    () => validateGitignorePattern("[[:digit]"),
+    /unsupported pattern/u,
+  )
+  assert.throws(
+    () => validateGitignorePattern("valid", () => {
+      throw new Error("unexpected parser failure")
+    }),
+    /unsupported pattern/u,
+  )
+  assert.equal(stripUnescapedTrailingSpaces("plain  "), "plain")
+  assert.equal(stripUnescapedTrailingSpaces("escaped\\ "), "escaped\\ ")
+  assert.equal(stripUnescapedTrailingSpaces("plain"), "plain")
+})
+
 async function assertArtifactWriterRejectsExcludedSourceDocs({ artifactType, write }) {
   const deskRoot = await tmpRoot("desk-exclusions-writer-desk-")
   const pluginRoot = await tmpRoot("desk-exclusions-writer-plugin-")

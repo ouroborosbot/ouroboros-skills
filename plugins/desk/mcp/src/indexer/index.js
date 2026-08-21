@@ -175,6 +175,7 @@ export async function rebuildIndex(deskRoot, opts = {}) {
 }
 
 async function importVectorPackRoots({ db, vectorPacks, signal }) {
+  const importer = vectorPacks.importer ?? importVectorPacks
   const roots = uniquePaths([
     vectorPacks.pluginRoot,
     ...(Array.isArray(vectorPacks.fallbackPluginRoots)
@@ -184,7 +185,7 @@ async function importVectorPackRoots({ db, vectorPacks, signal }) {
   const combined = emptyVectorPackSummary()
   for (const pluginRoot of roots) {
     try {
-      const rootSummary = await importVectorPacks({
+      const rootSummary = await importer({
         db,
         pluginRoot,
         signal,
@@ -490,7 +491,7 @@ async function embedMissingVectors(db, opts, summary, docIds) {
   const serviceFailure = embeddingResults.some((result) => (
     result.vector == null && !isChunkLocalEmbeddingFailure(result.diagnostic)
   ))
-  if (serviceFailure && summary.semantic_warnings === 0) {
+  if (serviceFailure) {
     summary.semantic_warnings += 1
     // One log line per run is enough; downstream tools surface the
     // semantic_unavailable warning at query time.

@@ -10,6 +10,7 @@ import Database from "better-sqlite3"
 
 import {
   isIndexFresh,
+  isIndexedContentCurrent,
   isIndexedDocumentTreeCurrent,
   rebuildIndex,
 } from "../../src/indexer/index.js"
@@ -512,6 +513,31 @@ test("isIndexedDocumentTreeCurrent is ordering-independent and path-portable", a
   }
 })
 
+test("isIndexedContentCurrent rejects duplicate canonical and missing indexed paths", async () => {
+  const root = await mkRoot()
+  await w(root, "trackA/task-1/task.md", "first document")
+  await w(root, "trackB/task-2/task.md", "second document")
+  await rebuildIndex(root, indexOpts)
+  const docs = await discovery.discover(root)
+  const db = openDb(root)
+  try {
+    assert.equal(
+      isIndexedContentCurrent(db, [
+        ...docs,
+        { ...docs[0], path: "missing/task.md" },
+      ]),
+      false,
+    )
+    db.prepare("UPDATE docs SET path = ? WHERE path = ?").run(
+      "trackA\\task-1\\task.md",
+      "trackB/task-2/task.md",
+    )
+    assert.equal(isIndexedContentCurrent(db, docs), false)
+  } finally {
+    closeDb(db)
+  }
+})
+
 test("isIndexFresh rejects missing chunk and refs index contents", async () => {
   const root = await mkRoot()
   await w(root, "trackA/task-1/task.md", "task body")
@@ -532,6 +558,15 @@ test("isIndexFresh rejects missing chunk and refs index contents", async () => {
     assert.equal(await isIndexFresh(root, refsDb), false)
   } finally {
     closeDb(refsDb)
+  }
+
+  await rebuildIndex(root, indexOpts)
+  const wrongRefsDb = openDb(root)
+  try {
+    wrongRefsDb.prepare("UPDATE refs_graph SET ref_kind = 'wrong_kind'").run()
+    assert.equal(await isIndexFresh(root, wrongRefsDb), false)
+  } finally {
+    closeDb(wrongRefsDb)
   }
 
   await rebuildIndex(root, indexOpts)
@@ -569,6 +604,55 @@ test("isIndexFresh compares against the tombstone-filtered live tree", async () 
   } finally {
     closeDb(db)
   }
+})
+
+test("isIndexFresh rejects indexed tombstones and live tree drift", async () => {
+  const root = await mkRoot()
+  const pluginRoot = await mkRoot()
+  await w(root, "references/redacted.md", "original body")
+  await rebuildIndex(root, indexOpts)
+  const [doc] = await discovery.discover(root)
+  await writeTombstone(pluginRoot, doc)
+
+  const db = openDb(root)
+  try {
+    assert.equal(
+      await isIndexFresh(root, db, { tombstones: { pluginRoot } }),
+      false,
+    )
+  } finally {
+    closeDb(db)
+  }
+
+  await fs.rm(path.join(pluginRoot, "artifacts"), { recursive: true })
+  await w(root, "references/redacted.md", "changed body")
+  const driftDb = openDb(root)
+  try {
+    assert.equal(await isIndexFresh(root, driftDb), false)
+  } finally {
+    closeDb(driftDb)
+  }
+})
+
+test("vector-pack import diagnostics preserve non-Error failures", async () => {
+  const root = await mkRoot()
+  const summary = await rebuildIndex(root, {
+    ...indexOpts,
+    vectorPacks: {
+      pluginRoot: "/synthetic/vector-pack-root",
+      ignoreInvalidRoots: true,
+      importer: async () => {
+        throw "synthetic primitive failure"
+      },
+    },
+  })
+
+  assert.deepEqual(summary.vector_packs.import_errors, [
+    {
+      pluginRoot: "/synthetic/vector-pack-root",
+      message: "synthetic primitive failure",
+    },
+  ])
 })
 
 test("isIndexFresh rejects missing and stale discovery grammar metadata", async () => {

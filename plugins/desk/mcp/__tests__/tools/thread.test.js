@@ -13,7 +13,11 @@ import { promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
-import { desk_thread, describeRefKind } from "../../src/tools/thread.js"
+import {
+  __threadInternalsForTests,
+  desk_thread,
+  describeRefKind,
+} from "../../src/tools/thread.js"
 import { openDb, closeDb } from "../../src/db/init.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
 
@@ -518,4 +522,106 @@ test("describeRefKind — known ref_kinds produce expected phrasing", () => {
   assert.equal(describeRefKind("custom_of", "foo"), "custom entry of foo")
   // Missing slug → defaults to "task".
   assert.equal(describeRefKind("planning_of", null), "planning doc of task")
+  assert.equal(describeRefKind(null, null), "connected to task")
+})
+
+test("thread internals cover depth, path, hydration, and ordering boundaries", () => {
+  const {
+    buildThreadRows,
+    clampDepth,
+    compareThreadRows,
+    normalizeStartPath,
+  } = __threadInternalsForTests
+  const root = path.resolve("/tmp/desk-thread-root")
+
+  assert.equal(clampDepth(undefined), 4)
+  assert.equal(clampDepth(Number.POSITIVE_INFINITY), 4)
+  assert.equal(clampDepth(0), 1)
+  assert.equal(clampDepth(99), 32)
+  assert.equal(clampDepth(2.9), 2)
+
+  assert.equal(normalizeStartPath(root, ""), "")
+  assert.equal(normalizeStartPath(root, "./track/task.md"), "track/task.md")
+  assert.equal(
+    normalizeStartPath(root, path.join(root, "track", "task.md")),
+    "track/task.md",
+  )
+  assert.equal(normalizeStartPath(root, root), "")
+  const outside = path.resolve(root, "..", "outside.md")
+  assert.equal(normalizeStartPath(root, outside), outside)
+
+  const visited = new Map([
+    [1, { hop_distance: 0, ref_kind: null, edge_other_id: null }],
+    [2, { hop_distance: 1, ref_kind: "custom_of", edge_other_id: 1 }],
+    [3, { hop_distance: 1, ref_kind: null, edge_other_id: 99 }],
+    [4, { hop_distance: 1, ref_kind: null, edge_other_id: 99 }],
+  ])
+  const metaById = new Map([
+    [2, {
+      path: "self-slug.md",
+      kind: "reference",
+      task_slug: "self",
+      updated_at: null,
+    }],
+    [3, {
+      path: "default-slug.md",
+      kind: "reference",
+      task_slug: null,
+      updated_at: null,
+    }],
+  ])
+  assert.deepEqual(buildThreadRows(visited, metaById, 1), [
+    {
+      path: "self-slug.md",
+      kind: "reference",
+      ref_kind: "custom_of",
+      hop_distance: 1,
+      why_connected: "custom entry of self",
+      updated_at: null,
+    },
+    {
+      path: "default-slug.md",
+      kind: "reference",
+      ref_kind: null,
+      hop_distance: 1,
+      why_connected: "connected to task",
+      updated_at: null,
+    },
+  ])
+  assert.deepEqual(
+    buildThreadRows(
+      new Map([[1, { hop_distance: 0, ref_kind: null, edge_other_id: null }]]),
+      new Map([[1, {
+        path: "start.md",
+        kind: "task",
+        task_slug: "start",
+        updated_at: null,
+      }]]),
+      1,
+    ),
+    [{
+      path: "start.md",
+      kind: "task",
+      ref_kind: null,
+      hop_distance: 0,
+      why_connected: "start",
+      updated_at: null,
+    }],
+  )
+
+  const row = (pathValue, hop, updated_at) => ({
+    path: pathValue,
+    hop_distance: hop,
+    updated_at,
+  })
+  assert.ok(compareThreadRows(row("b", 2, "2026-01-01"), row("a", 1, "2026-01-01")) > 0)
+  assert.ok(compareThreadRows(row("a", 1, null), row("b", 1, "2026-01-01")) > 0)
+  assert.ok(compareThreadRows(row("a", 1, "2026-01-01"), row("b", 1, null)) < 0)
+  assert.ok(compareThreadRows(row("a", 1, null), row("b", 1, null)) < 0)
+  assert.ok(
+    compareThreadRows(
+      row("a", 1, "2026-01-02"),
+      row("b", 1, "2026-01-01"),
+    ) < 0,
+  )
 })

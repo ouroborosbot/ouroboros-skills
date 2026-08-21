@@ -55,6 +55,16 @@ function artifactSourceScopeHash() {
   return generatedArtifacts.artifactSourceScopeHash(mcpRoot)
 }
 
+test("generated document-tree hashing covers equal canonical sort keys", () => {
+  assert.match(
+    docTree([
+      { path: "track\\task.md", hash: "a".repeat(64) },
+      { path: "track/task.md", hash: `sha256:${"b".repeat(64)}` },
+    ]),
+    /^sha256:[0-9a-f]{64}$/u,
+  )
+})
+
 function validApproval(artifactType) {
   return {
     scope: "repo",
