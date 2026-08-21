@@ -8,7 +8,11 @@ import * as os from "node:os"
 import { promises as fs } from "node:fs"
 import Database from "better-sqlite3"
 
-import { isIndexFresh, rebuildIndex } from "../../src/indexer/index.js"
+import {
+  isIndexFresh,
+  isIndexedDocumentTreeCurrent,
+  rebuildIndex,
+} from "../../src/indexer/index.js"
 import { openDb, closeDb, getMeta, setMeta } from "../../src/db/init.js"
 import * as discovery from "../../src/indexer/discover.js"
 import { ensureIndex } from "../../src/server-helpers.js"
@@ -426,6 +430,47 @@ test("isIndexFresh requires valid metadata and trusts an exact document tree", a
 
     setMeta(db, "last_indexed_at", "2999-01-01T00:00:00.000Z")
     assert.equal(await isIndexFresh(root, db), true)
+  } finally {
+    closeDb(db)
+  }
+})
+
+test("isIndexedDocumentTreeCurrent rejects count, path, and hash drift", async () => {
+  const root = await mkRoot()
+  await w(root, "trackA/task-1/task.md", "first document")
+  await w(root, "trackB/task-2/task.md", "second document")
+  await rebuildIndex(root, indexOpts)
+  const db = openDb(root)
+  try {
+    assert.equal(await isIndexedDocumentTreeCurrent(root, db), true)
+
+    const docs = await discovery.discover(root)
+    assert.equal(
+      await isIndexedDocumentTreeCurrent(root, db, { docs: docs.slice(1) }),
+      false,
+    )
+    assert.equal(
+      await isIndexedDocumentTreeCurrent(root, db, {
+        docs: docs.map((doc, index) =>
+          index === 0 ? { ...doc, path: "different.md" } : doc
+        ),
+      }),
+      false,
+    )
+    assert.equal(
+      await isIndexedDocumentTreeCurrent(root, db, {
+        docs: docs.map((doc, index) =>
+          index === 0 ? { ...doc, hash: "different" } : doc
+        ),
+      }),
+      false,
+    )
+    assert.equal(
+      await isIndexedDocumentTreeCurrent(root, db, {
+        docs: [...docs].reverse(),
+      }),
+      true,
+    )
   } finally {
     closeDb(db)
   }

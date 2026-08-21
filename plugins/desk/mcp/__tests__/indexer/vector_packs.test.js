@@ -32,6 +32,19 @@ function sha256(value) {
   return createHash("sha256").update(value).digest("hex")
 }
 
+function representedDocumentsHash(docs) {
+  const hash = createHash("sha256")
+  for (const doc of [...docs].sort((left, right) =>
+    left.path.localeCompare(right.path)
+  )) {
+    const documentHash = doc.hash.startsWith("sha256:")
+      ? doc.hash
+      : `sha256:${doc.hash}`
+    hash.update(`${doc.path.split(path.sep).join("/")}\0${documentHash}\0`)
+  }
+  return `sha256:${hash.digest("hex")}`
+}
+
 function vector(seed, dimension = ACTIVE_EMBEDDING_SPEC.dimension) {
   return Array.from({ length: dimension }, (_, index) => ((index + seed) % 17) / 17)
 }
@@ -495,6 +508,84 @@ test("vector-pack freshness rejects represented documents that do not match the 
   assert.deepEqual(result.freshness, {
     document_tree: "stale",
   })
+})
+
+test("vector-pack freshness hashes sorted represented documents", async () => {
+  const { validateVectorPackFile } = await loadVectorPackModule()
+  const root = await tmpRoot()
+  const pluginRoot = path.join(root, "plugins", "desk")
+  const identity = chunkIdentity({
+    docPath: "trackA/task-1/task.md",
+    chunk: { text: "sorted represented document tree chunk" },
+  })
+  const representedDocuments = [
+    { path: "z.md", hash: "a".repeat(64) },
+    { path: "a.md", hash: `sha256:${"b".repeat(64)}` },
+  ]
+  const documentTreeHash = representedDocumentsHash(representedDocuments)
+  const paths = await writePack({
+    pluginRoot,
+    packId: "sorted-document-tree-pack",
+    rows: [rowFor(identity)],
+    manifest: {
+      document_tree_hash: documentTreeHash,
+      represented_documents: representedDocuments,
+    },
+  })
+
+  const result = await validateVectorPackFile({
+    pluginRoot,
+    packPath: paths.packPath,
+    manifestPath: paths.manifestPath,
+    checksumPath: paths.checksumPath,
+    expectedSpec: ACTIVE_EMBEDDING_SPEC,
+    expectedDocumentTreeHash: documentTreeHash,
+  })
+
+  assert.deepEqual(result.freshness, {
+    document_tree: "fresh",
+  })
+})
+
+test("vector-pack freshness treats malformed represented documents as stale", async () => {
+  const { validateVectorPackFile } = await loadVectorPackModule()
+  const root = await tmpRoot()
+  const pluginRoot = path.join(root, "plugins", "desk")
+  const identity = chunkIdentity({
+    docPath: "trackA/task-1/task.md",
+    chunk: { text: "malformed represented document tree chunk" },
+  })
+  const malformedValues = [
+    null,
+    [null],
+    ["invalid"],
+    [[]],
+    [{ path: 1, hash: "a".repeat(64) }],
+    [{ path: "a.md", hash: 1 }],
+  ]
+
+  for (const [index, represented_documents] of malformedValues.entries()) {
+    const paths = await writePack({
+      pluginRoot,
+      packId: `malformed-document-tree-pack-${index}`,
+      rows: [rowFor(identity)],
+      manifest: {
+        document_tree_hash: `sha256:${"c".repeat(64)}`,
+        represented_documents,
+      },
+    })
+
+    const result = await validateVectorPackFile({
+      pluginRoot,
+      packPath: paths.packPath,
+      manifestPath: paths.manifestPath,
+      checksumPath: paths.checksumPath,
+      expectedSpec: ACTIVE_EMBEDDING_SPEC,
+      expectedDocumentTreeHash: `sha256:${"c".repeat(64)}`,
+    })
+
+    assert.equal(result.freshness.document_tree, "stale")
+  }
 })
 
 test("vector pack validation rejects wrong specs, dimensions, hashes, and malformed vectors", async () => {

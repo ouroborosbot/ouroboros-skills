@@ -1,7 +1,7 @@
 // desk_reindex — rebuild the desk-index sqlite db.
 //
 // Two modes:
-//   - default (no args)     → behaves like ensureIndex (content-incremental).
+//   - default (no args)     → behaves like ensureIndex (mtime-incremental).
 //                             Returns built=false reason=fresh when nothing
 //                             has changed since the last pass.
 //   - { force: true }       → drops <deskRoot>/.state/desk-index.sqlite then

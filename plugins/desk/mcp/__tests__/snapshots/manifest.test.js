@@ -41,7 +41,10 @@ function sha256(value) {
 function documentTreeHash(docs) {
   const hash = createHash("sha256")
   for (const doc of [...docs].sort((left, right) => left.path.localeCompare(right.path))) {
-    hash.update(`${doc.path}\0${doc.hash}\0`)
+    const documentHash = doc.hash.startsWith("sha256:")
+      ? doc.hash
+      : `sha256:${doc.hash}`
+    hash.update(`${doc.path.split(path.sep).join("/")}\0${documentHash}\0`)
   }
   return `sha256:${hash.digest("hex")}`
 }
@@ -296,6 +299,65 @@ test("snapshot freshness rejects represented documents that do not match the cla
   })
 
   assert.equal(result.freshness.document_tree, "stale")
+})
+
+test("snapshot freshness hashes sorted represented documents", async () => {
+  const { validateSnapshotManifest } = await loadManifestModule()
+  const artifactSha = `sha256:${"d".repeat(64)}`
+  const representedDocuments = [
+    { path: "z.md", hash: "a".repeat(64) },
+    { path: "a.md", hash: `sha256:${"b".repeat(64)}` },
+  ]
+  const expectedDocumentTreeHash = documentTreeHash(representedDocuments)
+  const manifest = {
+    ...validManifest({ artifactSha }),
+    document_tree_hash: expectedDocumentTreeHash,
+    represented_documents: representedDocuments,
+  }
+
+  const result = validateSnapshotManifest({
+    manifest,
+    artifactSha256: artifactSha,
+    expectedSpec: ACTIVE_EMBEDDING_SPEC,
+    expectedDbSchema: DB_SCHEMA,
+    expectedSqliteVec: SQLITE_VEC,
+    expectedRuntime: RUNTIME,
+    expectedArtifactSourceScopeHash: SOURCE_SCOPE_HASH,
+    expectedDocumentTreeHash,
+  })
+
+  assert.equal(result.freshness.document_tree, "fresh")
+})
+
+test("snapshot freshness treats malformed represented documents as stale", async () => {
+  const { validateSnapshotManifest } = await loadManifestModule()
+  const artifactSha = `sha256:${"d".repeat(64)}`
+  const malformedValues = [
+    null,
+    [null],
+    ["invalid"],
+    [[]],
+    [{ path: 1, hash: "a".repeat(64) }],
+    [{ path: "a.md", hash: 1 }],
+  ]
+
+  for (const represented_documents of malformedValues) {
+    const result = validateSnapshotManifest({
+      manifest: {
+        ...validManifest({ artifactSha }),
+        represented_documents,
+      },
+      artifactSha256: artifactSha,
+      expectedSpec: ACTIVE_EMBEDDING_SPEC,
+      expectedDbSchema: DB_SCHEMA,
+      expectedSqliteVec: SQLITE_VEC,
+      expectedRuntime: RUNTIME,
+      expectedArtifactSourceScopeHash: SOURCE_SCOPE_HASH,
+      expectedDocumentTreeHash: DOCUMENT_TREE_HASH,
+    })
+
+    assert.equal(result.freshness.document_tree, "stale")
+  }
 })
 
 test("snapshot manifest rejects compatibility and provenance drift", async () => {
