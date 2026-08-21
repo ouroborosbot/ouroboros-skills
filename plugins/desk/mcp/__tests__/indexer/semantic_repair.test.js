@@ -1036,6 +1036,172 @@ test("semantic repair discards a pending vector resolved after cancellation", as
   }
 })
 
+test("semantic repair discards a pending vector for a concurrently replaced chunk", async () => {
+  const { repairMissingVectorBatch } = await loadSemanticRepair()
+  const root = await makeRoot()
+  const db = openDb(root)
+  const writerDb = openDb(root)
+  const staleVector = deterministicRepairVector(505)
+  const replacementVector = deterministicRepairVector(506)
+  let markEmbeddingStarted
+  let resolveEmbedding
+  const embeddingStarted = new Promise((resolve) => {
+    markEmbeddingStarted = resolve
+  })
+
+  try {
+    insertDocument(db, {
+      documentPath: "active/reference.md",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      texts: ["stale-chunk"],
+    })
+    const stale = db.prepare(
+      `SELECT
+         c.id,
+         c.doc_id,
+         c.chunk_index
+       FROM chunks c
+       WHERE c.text = 'stale-chunk'`,
+    ).get()
+    assert.ok(stale)
+
+    const pendingBatch = repairMissingVectorBatch({
+      db,
+      deskRoot: root,
+      batchChunks: 1,
+      batchMs: 5000,
+      embedChunkDetailed: (text) => {
+        assert.equal(text, "stale-chunk")
+        markEmbeddingStarted()
+        return new Promise((resolve) => {
+          resolveEmbedding = resolve
+        })
+      },
+    })
+    await awaitBounded(
+      embeddingStarted,
+      "semantic repair stale-chunk embedding did not start",
+    )
+
+    const replaceChunk = writerDb.transaction(() => {
+      writerDb.prepare("DELETE FROM chunks WHERE id = ?").run(stale.id)
+      writerDb.prepare(
+        `INSERT INTO chunks (
+           doc_id,
+           chunk_index,
+           chunk_key,
+           text_hash,
+           embedding_spec_id,
+           chunker_id,
+           normalization_id,
+           text
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        stale.doc_id,
+        stale.chunk_index,
+        "active/reference.md:replacement",
+        "text-hash:active/reference.md:replacement",
+        ACTIVE_EMBEDDING_SPEC.id,
+        ACTIVE_EMBEDDING_SPEC.chunker_id,
+        ACTIVE_EMBEDDING_SPEC.normalization_id,
+        "replacement-chunk",
+      )
+    })
+    replaceChunk.immediate()
+    const replacement = writerDb.prepare(
+      "SELECT id FROM chunks WHERE text = 'replacement-chunk'",
+    ).get()
+    assert.ok(replacement)
+    assert.notEqual(replacement.id, stale.id)
+
+    resolveEmbedding({
+      vector: staleVector,
+      available: true,
+      diagnostic: null,
+    })
+    const first = await awaitBounded(
+      pendingBatch,
+      "semantic repair stale-chunk batch did not settle",
+    )
+
+    assert.equal(
+      db.prepare(
+        "SELECT COUNT(*) AS count FROM chunk_vecs WHERE chunk_id = ?",
+      ).get(BigInt(stale.id)).count,
+      0,
+    )
+    assert.equal(
+      db.prepare(
+        `SELECT COUNT(*) AS count
+         FROM chunk_vecs v
+         LEFT JOIN chunks c ON c.id = v.chunk_id
+         WHERE c.id IS NULL`,
+      ).get().count,
+      0,
+    )
+    assert.deepEqual(first, {
+      processed_chunks: 0,
+      vectors_indexed: 0,
+      remaining_chunks: 1,
+      stopped_by: "chunk_limit",
+    })
+    assert.deepEqual(
+      db.prepare(
+        `SELECT c.text
+         FROM chunks c
+         LEFT JOIN chunk_vecs v ON v.chunk_id = c.id
+         WHERE v.chunk_id IS NULL`,
+      ).all().map(({ text }) => text),
+      ["replacement-chunk"],
+    )
+
+    const second = await awaitBounded(
+      repairMissingVectorBatch({
+        db,
+        deskRoot: root,
+        batchChunks: 1,
+        batchMs: 5000,
+        embedChunkDetailed: async (text) => {
+          assert.equal(text, "replacement-chunk")
+          return {
+            vector: replacementVector,
+            available: true,
+            diagnostic: null,
+          }
+        },
+      }),
+      "semantic repair replacement-chunk batch did not settle",
+    )
+
+    assert.deepEqual(second, {
+      processed_chunks: 1,
+      vectors_indexed: 1,
+      remaining_chunks: 0,
+      stopped_by: "complete",
+    })
+    assertStoredVector(db, "replacement-chunk", replacementVector)
+    assert.equal(
+      db.prepare(
+        `SELECT COUNT(*) AS count
+         FROM chunk_vecs v
+         LEFT JOIN chunks c ON c.id = v.chunk_id
+         WHERE c.id IS NULL`,
+      ).get().count,
+      0,
+    )
+  } finally {
+    resolveEmbedding?.({
+      vector: staleVector,
+      available: true,
+      diagnostic: null,
+    })
+    closeDb(writerDb)
+    closeDb(db)
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
 test("semantic repair cancellation clears a pending batch without running repair work", async () => {
   const { createSemanticRepairCoordinator } = await loadSemanticRepair()
   const scheduler = createManualScheduler()

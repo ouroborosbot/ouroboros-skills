@@ -255,6 +255,31 @@ export async function repairMissingVectorBatch({
     const insertVector = database.prepare(
       "INSERT INTO chunk_vecs (chunk_id, embedding) VALUES (?, ?)",
     )
+    const currentRepairableCandidate = database.prepare(
+      `SELECT 1
+       FROM chunks c
+       JOIN docs d ON d.id = c.doc_id
+       WHERE c.id = @id
+         AND c.chunk_key IS @chunk_key
+         AND c.text_hash IS @text_hash
+         AND c.embedding_spec_id IS @embedding_spec_id
+         AND c.chunker_id IS @chunker_id
+         AND c.normalization_id IS @normalization_id
+         AND NOT EXISTS (
+           SELECT 1
+           FROM chunk_vecs v
+           WHERE v.chunk_id = c.id
+         )
+         AND NOT EXISTS (
+           SELECT 1
+           FROM chunk_embedding_failures f
+           WHERE f.chunk_key IS c.chunk_key
+             AND f.text_hash IS c.text_hash
+             AND f.embedding_spec_id IS c.embedding_spec_id
+             AND f.chunker_id IS c.chunker_id
+             AND f.normalization_id IS c.normalization_id
+         )`,
+    )
     const deleteFailure = database.prepare(
       `DELETE FROM chunk_embedding_failures
        WHERE chunk_key = @chunk_key
@@ -295,6 +320,30 @@ export async function repairMissingVectorBatch({
          message = excluded.message,
          failed_at = excluded.failed_at`,
     )
+    const persistCandidateResult = database.transaction(
+      (candidate, result) => {
+        if (signal?.aborted) return "cancelled"
+        if (!currentRepairableCandidate.get(candidate)) return "stale"
+        if (signal?.aborted) return "cancelled"
+
+        if (result.vector != null) {
+          insertVector.run(
+            BigInt(candidate.id),
+            new Float32Array(result.vector),
+          )
+          deleteFailure.run(candidate)
+          return "vector"
+        }
+
+        upsertFailure.run({
+          ...candidate,
+          reason: result.diagnostic.reason,
+          message: result.diagnostic.message,
+          failed_at: new Date().toISOString(),
+        })
+        return "failure"
+      },
+    )
 
     for (const candidate of candidates) {
       if (signal?.aborted) {
@@ -326,15 +375,7 @@ export async function repairMissingVectorBatch({
         break
       }
 
-      if (result?.vector != null) {
-        insertVector.run(
-          BigInt(candidate.id),
-          new Float32Array(result.vector),
-        )
-        deleteFailure.run(candidate)
-        processedChunks += 1
-        vectorsIndexed += 1
-      } else {
+      if (result?.vector == null) {
         if (signal?.aborted) {
           stoppedBy = "cancelled"
           break
@@ -342,14 +383,17 @@ export async function repairMissingVectorBatch({
         if (!isChunkLocalEmbeddingFailure(result?.diagnostic)) {
           throw embeddingUnavailableError(result?.diagnostic)
         }
-        upsertFailure.run({
-          ...candidate,
-          reason: result.diagnostic.reason,
-          message: result.diagnostic.message,
-          failed_at: new Date().toISOString(),
-        })
-        processedChunks += 1
       }
+
+      // Lock writers before revalidation so reindex cannot replace the chunk between the identity check and persistence.
+      const persistence = persistCandidateResult.immediate(candidate, result)
+      if (persistence === "cancelled") {
+        stoppedBy = "cancelled"
+        break
+      }
+      if (persistence === "stale") continue
+      processedChunks += 1
+      if (persistence === "vector") vectorsIndexed += 1
 
       if (signal?.aborted) {
         stoppedBy = "cancelled"
