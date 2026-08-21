@@ -25,7 +25,7 @@ Commands run:
 
 Current freshness anchors:
 
-- current_artifact_source_scope_hash: sha256:093ffd3b259e61666cd9619c6ce55947d1b30632b7efbd5901b0f3174ea8966e
+- current_artifact_source_scope_hash: sha256:8e69838b7a0a5dd3ea16a6d69780900ab93643dc2b4fd0295f85e3fc9d0c81e4
 - current_document_tree_hash: sha256:b8268841c4877dfe293de7c463eadf38339c741daa6416ffd5b1ec652087fba8
 - The source-scope binding includes discovery, exclusions, tombstones, chunking, refs, document-tree canonicalization, index validation, artifact writers, snapshot restore, policy, schema, and dependency manifests.
 
@@ -37,12 +37,12 @@ Published vector pack:
 - `pack_id`: `repo-public-bootstrap-2026-06-15`
 - `row_count`: 2
 - `rows_sha256`: `d0c07f02e1acda61962e4f2232fa68d7f5cc9802510c29aebb604cabfca1dfda`
-- `artifact_source_scope_hash`: `sha256:093ffd3b259e61666cd9619c6ce55947d1b30632b7efbd5901b0f3174ea8966e`
+- `artifact_source_scope_hash`: `sha256:8e69838b7a0a5dd3ea16a6d69780900ab93643dc2b4fd0295f85e3fc9d0c81e4`
 - `document_tree_hash`: `sha256:b8268841c4877dfe293de7c463eadf38339c741daa6416ffd5b1ec652087fba8`
 - `discovery_grammar_version`: `2`
 - `represented_document_count`: 1
 - Represented document: `tasks/dependency-activation/task.md` at `sha256:3886140d5ca53b11e39d670572bce11535d9f980e4d168dbdcbbd72bc10edf59`
-- Provenance commit: `e5ac03766a1f95487e72819d79f73fc990d32f11`
+- Provenance commit: `e5fd34d3b4d6e46d78f2ac312edb643fefb17d7d`
 
 Published snapshot:
 
@@ -50,15 +50,15 @@ Published snapshot:
 - Manifest: `plugins/desk/artifacts/snapshots/nomic-embed-text-v1_5-desk-md-h2-paragraph-v1-unicode-whitespace-v1-768/repo-public-bootstrap-2026-06-15.manifest.json`
 - Checksum: `plugins/desk/artifacts/snapshots/nomic-embed-text-v1_5-desk-md-h2-paragraph-v1-unicode-whitespace-v1-768/repo-public-bootstrap-2026-06-15.sha256`
 - `snapshot_id`: `repo-public-bootstrap-2026-06-15`
-- `artifact_source_scope_hash`: `sha256:093ffd3b259e61666cd9619c6ce55947d1b30632b7efbd5901b0f3174ea8966e`
+- `artifact_source_scope_hash`: `sha256:8e69838b7a0a5dd3ea16a6d69780900ab93643dc2b4fd0295f85e3fc9d0c81e4`
 - `document_tree_hash`: `sha256:b8268841c4877dfe293de7c463eadf38339c741daa6416ffd5b1ec652087fba8`
 - `discovery_grammar_version`: `2`
 - `included_pack_ids`: `repo-public-bootstrap-2026-06-15`
 - `represented_document_count`: 1
 - Represented document: `tasks/dependency-activation/task.md` at `sha256:3886140d5ca53b11e39d670572bce11535d9f980e4d168dbdcbbd72bc10edf59`
-- Artifact sha256: `sha256:2d6c43b612f4ec603ef93ba12bc1720ee2281a6f99bfe1f6dc42d41d8912a1b7`
+- Artifact sha256: `sha256:4e214f00c70ba9df0efa97e658f671f945ead1abbecd20a49a5f6d88de279391`
 - Runtime: `portable-portable-portable`
-- Provenance commit: `e5ac03766a1f95487e72819d79f73fc990d32f11`
+- Provenance commit: `e5fd34d3b4d6e46d78f2ac312edb643fefb17d7d`
 
 Approval state:
 
