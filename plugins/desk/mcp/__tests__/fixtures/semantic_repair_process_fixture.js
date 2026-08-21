@@ -5,19 +5,12 @@ import {
 } from "node:fs"
 
 import { closeDb, openDb } from "../../src/db/init.js"
-import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
+import { deterministicProcessRepairVector } from "./semantic_repair_test_vectors.js"
 
 const semanticRepairModuleUrl = new URL(
   "../../src/indexer/semantic-repair.js",
   import.meta.url,
 )
-
-function vector(seed) {
-  return Array.from(
-    { length: ACTIVE_EMBEDDING_SPEC.dimension },
-    (_, index) => ((seed + index) % 23) / 23,
-  )
-}
 
 function readObservation(observationPath) {
   try {
@@ -142,7 +135,10 @@ async function runPhaseOne({
           embedChunkDetailed: async (text) => {
             embeddedTexts.push(text)
             return {
-              vector: vector(100 + embeddedTexts.length),
+              vector: deterministicProcessRepairVector(
+                "phase1",
+                embeddedTexts.length,
+              ),
               available: true,
               diagnostic: null,
             }
@@ -215,7 +211,10 @@ async function runPhaseTwo({
           embedChunkDetailed: async (text) => {
             embeddedTexts.push(text)
             return {
-              vector: vector(200 + embeddedTexts.length),
+              vector: deterministicProcessRepairVector(
+                "phase2",
+                embeddedTexts.length,
+              ),
               available: true,
               diagnostic: null,
             }

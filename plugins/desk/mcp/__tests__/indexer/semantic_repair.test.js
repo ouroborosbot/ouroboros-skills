@@ -7,6 +7,10 @@ import { fileURLToPath } from "node:url"
 
 import { closeDb, openDb } from "../../src/db/init.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
+import {
+  deterministicProcessRepairVector,
+  deterministicRepairVector,
+} from "../fixtures/semantic_repair_test_vectors.js"
 
 const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
 const repairProcessFixturePath = fileURLToPath(
@@ -17,16 +21,10 @@ const semanticRepairModuleUrl = new URL(
   import.meta.url,
 )
 const TEST_SETTLEMENT_TIMEOUT_MS = 250
+const MANUAL_SCHEDULER_MAX_BATCHES = 16
 
 async function loadSemanticRepair() {
   return import(semanticRepairModuleUrl.href)
-}
-
-function vector(seed = 1) {
-  return Array.from(
-    { length: ACTIVE_EMBEDDING_SPEC.dimension },
-    (_, index) => ((seed + index) % 23) / 23,
-  )
 }
 
 async function makeRoot(prefix = "desk-semantic-repair-") {
@@ -90,6 +88,63 @@ function boundedSettlement(promise, message, {
     )
   })
   return { clear, settled }
+}
+
+async function awaitBounded(promise, message, options) {
+  const settlement = boundedSettlement(promise, message, options)
+  try {
+    return await settlement.settled
+  } finally {
+    settlement.clear()
+  }
+}
+
+function decodeStoredVector(value) {
+  const buffer = Buffer.from(value)
+  assert.equal(
+    buffer.length % Float32Array.BYTES_PER_ELEMENT,
+    0,
+    "stored semantic repair vector must contain complete Float32 values",
+  )
+  const values = []
+  for (
+    let offset = 0;
+    offset < buffer.length;
+    offset += Float32Array.BYTES_PER_ELEMENT
+  ) {
+    values.push(buffer.readFloatLE(offset))
+  }
+  return values
+}
+
+function storedVectorForText(db, text) {
+  const row = db.prepare(
+    `SELECT v.embedding
+     FROM chunk_vecs v
+     JOIN chunks c ON c.id = v.chunk_id
+     WHERE c.text = ?`,
+  ).get(text)
+  assert.ok(row, `missing stored semantic repair vector for ${text}`)
+  return decodeStoredVector(row.embedding)
+}
+
+function assertVectorApprox(actual, expected, label) {
+  const normalizedExpected = Array.from(Float32Array.from(expected))
+  assert.equal(actual.length, normalizedExpected.length, `${label} dimension`)
+  for (let index = 0; index < normalizedExpected.length; index += 1) {
+    assert.ok(
+      Math.abs(actual[index] - normalizedExpected[index]) <= 0.000001,
+      `${label}[${index}] expected ${normalizedExpected[index]}, got ${actual[index]}`,
+    )
+  }
+}
+
+function assertStoredVector(db, text, expected) {
+  assertVectorApprox(
+    storedVectorForText(db, text),
+    expected,
+    `stored vector for ${text}`,
+  )
 }
 
 function insertDocument(db, {
@@ -172,10 +227,22 @@ function createManualScheduler() {
     }
     return entry
   }
-  const drain = async () => {
+  const drain = async ({
+    maxBatches = MANUAL_SCHEDULER_MAX_BATCHES,
+  } = {}) => {
+    let batchCount = 0
     while (queued.length > 0) {
-      await runNext()
+      batchCount += 1
+      assert.ok(
+        batchCount <= maxBatches,
+        `manual semantic-repair scheduler exceeded ${maxBatches} batches; repair may be rescheduling after completion`,
+      )
+      await awaitBounded(
+        runNext(),
+        `manual semantic-repair scheduler batch ${batchCount} did not settle`,
+      )
     }
+    return batchCount
   }
   return {
     clearScheduled,
@@ -215,7 +282,13 @@ test("semantic repair reuses one in-flight promise per root and evicts it after 
   assert.strictEqual(second, first)
   assert.equal(scheduler.queued.length, 1)
   await scheduler.drain()
-  assert.equal((await first).state, "complete")
+  assert.equal(
+    (await awaitBounded(
+      first,
+      "semantic repair first same-root job did not settle",
+    )).state,
+    "complete",
+  )
 
   const next = coordinator.start({
     deskRoot: "/tmp/desk-root-a",
@@ -225,7 +298,13 @@ test("semantic repair reuses one in-flight promise per root and evicts it after 
   assert.notStrictEqual(next, first)
   assert.equal(scheduler.queued.length, 1)
   await scheduler.drain()
-  assert.equal((await next).state, "complete")
+  assert.equal(
+    (await awaitBounded(
+      next,
+      "semantic repair restarted same-root job did not settle",
+    )).state,
+    "complete",
+  )
   assert.deepEqual(calls, [
     path.resolve("/tmp/desk-root-a"),
     path.resolve("/tmp/desk-root-a"),
@@ -257,8 +336,17 @@ test("semantic repair reuses the same promise while a same-root batch is active"
 
   const first = coordinator.start({ deskRoot: root })
   const activeBatch = scheduler.runNext()
-  await started
   try {
+    await awaitBounded(
+      started,
+      "semantic repair same-root active batch did not start",
+      {
+        onTimeout: () => releaseBatch({
+          processed_chunks: 0,
+          remaining_chunks: 0,
+        }),
+      },
+    )
     const second = coordinator.start({ deskRoot: `${root}${path.sep}.` })
     assert.strictEqual(second, first)
     assert.equal(calls, 1)
@@ -266,10 +354,19 @@ test("semantic repair reuses the same promise while a same-root batch is active"
     assert.equal(scheduler.queued.length, 0)
   } finally {
     releaseBatch({ processed_chunks: 1, remaining_chunks: 0 })
-    await activeBatch
+    await awaitBounded(
+      activeBatch,
+      "semantic repair same-root active scheduler callback did not settle",
+    )
   }
 
-  assert.equal((await first).state, "complete")
+  assert.equal(
+    (await awaitBounded(
+      first,
+      "semantic repair same-root active job did not settle",
+    )).state,
+    "complete",
+  )
   assert.equal(calls, 1)
   assert.equal(scheduler.scheduled.length, 1)
 })
@@ -278,34 +375,67 @@ test("semantic repair runs different roots independently", async () => {
   const { createSemanticRepairCoordinator } = await loadSemanticRepair()
   const scheduler = createManualScheduler()
   const started = []
-  const gates = new Map()
-  const coordinator = createSemanticRepairCoordinator({
-    repairBatch: ({ deskRoot, batchChunks, batchMs }) => new Promise((resolve) => {
-      started.push({ deskRoot, batchChunks, batchMs })
-      gates.set(deskRoot, resolve)
+  const rootA = path.resolve("/tmp/desk-root-a")
+  const rootB = path.resolve("/tmp/desk-root-b")
+  let markBothStarted
+  const bothStarted = new Promise((resolve) => {
+    markBothStarted = resolve
+  })
+  const gates = new Map(
+    [rootA, rootB].map((root) => {
+      let release
+      const promise = new Promise((resolve) => {
+        release = resolve
+      })
+      return [root, { promise, release }]
     }),
+  )
+  const coordinator = createSemanticRepairCoordinator({
+    repairBatch: ({ deskRoot, batchChunks, batchMs }) => {
+      started.push({ deskRoot, batchChunks, batchMs })
+      if (started.length === 2) markBothStarted()
+      return gates.get(deskRoot).promise
+    },
     schedule: scheduler.schedule,
     clearScheduled: scheduler.clearScheduled,
   })
-  const rootA = path.resolve("/tmp/desk-root-a")
-  const rootB = path.resolve("/tmp/desk-root-b")
 
   const repairA = coordinator.start({ deskRoot: rootA })
   const repairB = coordinator.start({ deskRoot: rootB })
   assert.notStrictEqual(repairA, repairB)
   const batchA = scheduler.runNext()
   const batchB = scheduler.runNext()
-  await Promise.resolve()
-
-  assert.deepEqual(started, [
-    { deskRoot: rootA, batchChunks: 100, batchMs: 5000 },
-    { deskRoot: rootB, batchChunks: 100, batchMs: 5000 },
-  ])
-  gates.get(rootA)({ processed_chunks: 1, remaining_chunks: 0 })
-  gates.get(rootB)({ processed_chunks: 1, remaining_chunks: 0 })
-  await Promise.all([batchA, batchB])
-  assert.equal((await repairA).state, "complete")
-  assert.equal((await repairB).state, "complete")
+  try {
+    await awaitBounded(
+      bothStarted,
+      "semantic repair different-root batches did not both start",
+      {
+        onTimeout: () => {
+          for (const gate of gates.values()) {
+            gate.release({ processed_chunks: 0, remaining_chunks: 0 })
+          }
+        },
+      },
+    )
+    assert.deepEqual(started, [
+      { deskRoot: rootA, batchChunks: 100, batchMs: 5000 },
+      { deskRoot: rootB, batchChunks: 100, batchMs: 5000 },
+    ])
+  } finally {
+    for (const gate of gates.values()) {
+      gate.release({ processed_chunks: 1, remaining_chunks: 0 })
+    }
+  }
+  await awaitBounded(
+    Promise.all([batchA, batchB]),
+    "semantic repair different-root scheduler callbacks did not settle",
+  )
+  const [resultA, resultB] = await awaitBounded(
+    Promise.all([repairA, repairB]),
+    "semantic repair different-root jobs did not settle",
+  )
+  assert.equal(resultA.state, "complete")
+  assert.equal(resultB.state, "complete")
 })
 
 test("semantic repair schedules every batch at zero delay on an unref'ed timer", async () => {
@@ -331,7 +461,13 @@ test("semantic repair schedules every batch at zero delay on an unref'ed timer",
     batchMs: 250,
   })
   await scheduler.drain()
-  assert.equal((await repair).state, "complete")
+  assert.equal(
+    (await awaitBounded(
+      repair,
+      "semantic repair multi-batch job did not settle",
+    )).state,
+    "complete",
+  )
   assert.deepEqual(batches, [
     { deskRoot: root, batchChunks: 7, batchMs: 250 },
     { deskRoot: root, batchChunks: 7, batchMs: 250 },
@@ -374,7 +510,10 @@ test("semantic repair catches background rejection, records a compact failure, a
     const repair = coordinator.start({ deskRoot: root })
     await scheduler.drain()
     await new Promise((resolve) => setImmediate(resolve))
-    const result = await repair
+    const result = await awaitBounded(
+      repair,
+      "semantic repair failed job did not settle",
+    )
     assert.equal(result.state, "failed")
     assert.deepEqual(result.last_error, {
       reason: "embedding_service_unavailable",
@@ -387,7 +526,13 @@ test("semantic repair catches background rejection, records a compact failure, a
     assert.notStrictEqual(retry, repair)
     assert.equal(scheduler.queued.length, 1)
     await scheduler.drain()
-    assert.equal((await retry).state, "complete")
+    assert.equal(
+      (await awaitBounded(
+        retry,
+        "semantic repair retry after failure did not settle",
+      )).state,
+      "complete",
+    )
     assert.deepEqual(calls, [root, root])
   } finally {
     process.off("unhandledRejection", onUnhandled)
@@ -625,6 +770,7 @@ test("semantic repair batch cancellation persists completed work and resumes the
   const db = openDb(root)
   const controller = new AbortController()
   const embedded = []
+  const injectedVectors = new Map()
   try {
     insertDocument(db, {
       documentPath: "active/reference.md",
@@ -640,8 +786,10 @@ test("semantic repair batch cancellation persists completed work and resumes the
       signal: controller.signal,
       embedChunkDetailed: async (text) => {
         embedded.push(text)
+        const injectedVector = deterministicRepairVector(embedded.length)
+        injectedVectors.set(text, injectedVector)
         const result = {
-          vector: vector(embedded.length),
+          vector: injectedVector,
           available: true,
           diagnostic: null,
         }
@@ -665,6 +813,11 @@ test("semantic repair batch cancellation persists completed work and resumes the
       ).all().map(({ text }) => text),
       ["chunk-0"],
     )
+    assertStoredVector(
+      db,
+      "chunk-0",
+      injectedVectors.get("chunk-0"),
+    )
     assert.deepEqual(
       db.prepare(
         `SELECT c.text
@@ -684,8 +837,12 @@ test("semantic repair batch cancellation persists completed work and resumes the
       batchMs: 5000,
       embedChunkDetailed: async (text) => {
         resumedEmbeddings.push(text)
+        const injectedVector = deterministicRepairVector(
+          100 + resumedEmbeddings.length,
+        )
+        injectedVectors.set(text, injectedVector)
         return {
-          vector: vector(100 + resumedEmbeddings.length),
+          vector: injectedVector,
           available: true,
           diagnostic: null,
         }
@@ -701,6 +858,9 @@ test("semantic repair batch cancellation persists completed work and resumes the
       db.prepare("SELECT COUNT(*) AS count FROM chunk_vecs").get().count,
       3,
     )
+    for (const text of ["chunk-0", "chunk-1", "chunk-2"]) {
+      assertStoredVector(db, text, injectedVectors.get(text))
+    }
   } finally {
     closeDb(db)
     await fs.rm(root, { recursive: true, force: true })
@@ -728,11 +888,16 @@ test("a new coordinator resumes persisted missing work after process interruptio
       1,
     )
     const firstPersisted = db.prepare(
-      `SELECT c.text
+      `SELECT c.text, v.embedding
        FROM chunk_vecs v
        JOIN chunks c ON c.id = v.chunk_id`,
     ).get()
     assert.ok(firstPersisted)
+    assertVectorApprox(
+      decodeStoredVector(firstPersisted.embedding),
+      deterministicProcessRepairVector("phase1", 1),
+      `phase 1 persisted vector for ${firstPersisted.text}`,
+    )
     closeDb(db)
     db = undefined
 
@@ -780,6 +945,26 @@ test("a new coordinator resumes persisted missing work after process interruptio
       ].sort(),
       ["chunk-0", "chunk-1", "chunk-2"],
     )
+    assertStoredVector(
+      db,
+      firstPersisted.text,
+      deterministicProcessRepairVector("phase1", 1),
+    )
+    assert.ok(
+      observation.phase2.embedded_texts.length > 0,
+      "phase 2 must resume at least one persisted semantic repair vector",
+    )
+    for (
+      let index = 0;
+      index < observation.phase2.embedded_texts.length;
+      index += 1
+    ) {
+      assertStoredVector(
+        db,
+        observation.phase2.embedded_texts[index],
+        deterministicProcessRepairVector("phase2", index + 1),
+      )
+    }
   } finally {
     closeDb(db)
     await fs.rm(root, { recursive: true, force: true })
@@ -791,6 +976,7 @@ test("semantic repair batch prioritizes active recent documents, chunk ordinal, 
   const root = await makeRoot()
   const db = openDb(root)
   const seen = []
+  const injectedVectors = new Map()
   try {
     insertDocument(db, {
       documentPath: "archive/reference.md",
@@ -826,7 +1012,13 @@ test("semantic repair batch prioritizes active recent documents, chunk ordinal, 
       batchMs: 5000,
       embedChunkDetailed: async (text) => {
         seen.push(text)
-        return { vector: vector(seen.length), available: true, diagnostic: null }
+        const injectedVector = deterministicRepairVector(seen.length)
+        injectedVectors.set(text, injectedVector)
+        return {
+          vector: injectedVector,
+          available: true,
+          diagnostic: null,
+        }
       },
     })
 
@@ -843,6 +1035,9 @@ test("semantic repair batch prioritizes active recent documents, chunk ordinal, 
     assert.equal(result.vectors_indexed, 7)
     assert.equal(result.remaining_chunks, 0)
     assert.equal(result.stopped_by, "complete")
+    for (const [text, injectedVector] of injectedVectors) {
+      assertStoredVector(db, text, injectedVector)
+    }
   } finally {
     closeDb(db)
     await fs.rm(root, { recursive: true, force: true })
@@ -854,6 +1049,7 @@ test("semantic repair batch stops at the chunk bound and resumes remaining vecto
   const root = await makeRoot()
   const db = openDb(root)
   const seen = []
+  const injectedVectors = new Map()
   try {
     insertDocument(db, {
       documentPath: "active/reference.md",
@@ -867,7 +1063,13 @@ test("semantic repair batch stops at the chunk bound and resumes remaining vecto
       batchMs: 5000,
       embedChunkDetailed: async (text) => {
         seen.push(text)
-        return { vector: vector(seen.length), available: true, diagnostic: null }
+        const injectedVector = deterministicRepairVector(seen.length)
+        injectedVectors.set(text, injectedVector)
+        return {
+          vector: injectedVector,
+          available: true,
+          diagnostic: null,
+        }
       },
     }
 
@@ -881,6 +1083,9 @@ test("semantic repair batch stops at the chunk bound and resumes remaining vecto
     assert.equal(second.remaining_chunks, 0)
     assert.equal(second.stopped_by, "complete")
     assert.deepEqual(seen, ["chunk-0", "chunk-1", "chunk-2"])
+    for (const [text, injectedVector] of injectedVectors) {
+      assertStoredVector(db, text, injectedVector)
+    }
   } finally {
     closeDb(db)
     await fs.rm(root, { recursive: true, force: true })
@@ -892,6 +1097,7 @@ test("semantic repair batch stops at the elapsed-time bound", async () => {
   const root = await makeRoot()
   const db = openDb(root)
   const seen = []
+  const injectedVectors = new Map()
   let elapsedMs = 0
   try {
     insertDocument(db, {
@@ -909,7 +1115,13 @@ test("semantic repair batch stops at the elapsed-time bound", async () => {
       embedChunkDetailed: async (text) => {
         seen.push(text)
         elapsedMs += 3
-        return { vector: vector(seen.length), available: true, diagnostic: null }
+        const injectedVector = deterministicRepairVector(seen.length)
+        injectedVectors.set(text, injectedVector)
+        return {
+          vector: injectedVector,
+          available: true,
+          diagnostic: null,
+        }
       },
     })
 
@@ -917,6 +1129,18 @@ test("semantic repair batch stops at the elapsed-time bound", async () => {
     assert.equal(result.processed_chunks, 2)
     assert.equal(result.remaining_chunks, 1)
     assert.equal(result.stopped_by, "time_limit")
+    for (const [text, injectedVector] of injectedVectors) {
+      assertStoredVector(db, text, injectedVector)
+    }
+    assert.equal(
+      db.prepare(
+        `SELECT COUNT(*) AS count
+         FROM chunks c
+         LEFT JOIN chunk_vecs v ON v.chunk_id = c.id
+         WHERE c.text = 'chunk-2' AND v.chunk_id IS NULL`,
+      ).get().count,
+      1,
+    )
   } finally {
     closeDb(db)
     await fs.rm(root, { recursive: true, force: true })
