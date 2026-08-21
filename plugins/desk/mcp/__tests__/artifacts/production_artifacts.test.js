@@ -63,6 +63,14 @@ test("generated document-tree hashing covers equal canonical sort keys", () => {
     ]),
     /^sha256:[0-9a-f]{64}$/u,
   )
+  assert.match(
+    docTree([
+      { path: "b.md", hash: "b".repeat(64) },
+      { path: "a.md", hash: "a".repeat(64) },
+      { path: "c.md", hash: "c".repeat(64) },
+    ]),
+    /^sha256:[0-9a-f]{64}$/u,
+  )
 })
 
 function validApproval(artifactType) {
