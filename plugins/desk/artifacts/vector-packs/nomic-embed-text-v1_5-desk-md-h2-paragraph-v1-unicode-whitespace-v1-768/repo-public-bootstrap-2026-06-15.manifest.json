@@ -6,7 +6,7 @@
   "encoding": "float32-json",
   "row_count": 2,
   "rows_sha256": "d0c07f02e1acda61962e4f2232fa68d7f5cc9802510c29aebb604cabfca1dfda",
-  "artifact_source_scope_hash": "sha256:4299a8b53af565c316a13c4259f257ef3ac9409e5d799ddf55e0f9143c252915",
+  "artifact_source_scope_hash": "sha256:502b3a54197775393713a8f864fec5629a5739fd344a9ee4f6c9636944e7e296",
   "document_tree_hash": "sha256:b8268841c4877dfe293de7c463eadf38339c741daa6416ffd5b1ec652087fba8",
   "discovery_grammar_version": 2,
   "represented_documents": [
@@ -15,11 +15,11 @@
       "hash": "sha256:3886140d5ca53b11e39d670572bce11535d9f980e4d168dbdcbbd72bc10edf59"
     }
   ],
-  "created_at": "2026-08-21T07:38:05.085Z",
+  "created_at": "2026-08-21T08:26:27.906Z",
   "provenance": {
     "builder": "plugins/desk/mcp/scripts/build-vector-pack.js",
     "source": "local-db",
-    "commit": "cd64a08f06283f80a88a9a86a22b75ba68227b3b"
+    "commit": "82af32f3f1d8dc704bc96e62d51895911d5a4d13"
   },
   "source_paths": [
     "plugins/desk/mcp/src/artifacts/tombstones.js",
