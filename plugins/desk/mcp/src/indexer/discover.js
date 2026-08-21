@@ -11,8 +11,8 @@
 //
 // For each match we compute kind/track/task_slug from the path shape, parse
 // frontmatter (tolerant — falls back to {} on parse failure), hash the
-// contents (sha256) for dirty-detection, and capture mtime as a fast first
-// pass.
+// contents (sha256) for dirty-detection, and capture mtime as document
+// metadata.
 
 import { promises as fs } from "node:fs"
 import { createHash } from "node:crypto"

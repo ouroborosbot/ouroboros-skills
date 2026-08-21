@@ -54,10 +54,9 @@ let configuredArtifactPluginRoot = null
 
 /**
  * Bring the on-disk index up to date for `deskRoot`. Idempotent: when the
- * DB exists and no markdown file has an mtime newer than last_indexed_at,
- * does nothing. Called at server-boot and re-called at the top of each
- * search-tool invocation so single-process callers (tests, the daemon) see
- * a consistent view after writes.
+ * DB exists and its document path/hash set exactly matches current discovery,
+ * does nothing. Called at server-boot and re-called at the top of each search
+ * tool invocation so single-process callers see a consistent view after writes.
  *
  * @param {string} deskRoot
  * @param {object} [opts]
