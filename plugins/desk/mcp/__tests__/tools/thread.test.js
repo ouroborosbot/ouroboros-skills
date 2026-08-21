@@ -8,6 +8,7 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
+import { createHash } from "node:crypto"
 import { promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -35,10 +36,16 @@ async function indexNoEmbed(root) {
 }
 
 /**
- * Insert a synthetic doc into the DB. Returns the row id. Used by tests
- * that want to bypass the indexer and craft refs_graph by hand.
+ * Insert a filesystem-backed synthetic doc into the DB. Returns the row id.
+ * Used by tests that want to craft refs_graph by hand.
  */
-function insertSyntheticDoc(db, { path: docPath, kind, updated_at, track, task_slug }) {
+async function insertSyntheticDoc(
+  root,
+  db,
+  { path: docPath, kind, updated_at, track, task_slug },
+) {
+  const body = `synthetic ${docPath}\n`
+  await writeFile(root, docPath, body)
   const row = db
     .prepare(
       `INSERT INTO docs (path, kind, track, task_slug, status, schema_version,
@@ -52,7 +59,7 @@ function insertSyntheticDoc(db, { path: docPath, kind, updated_at, track, task_s
       track ?? null,
       task_slug ?? null,
       updated_at ?? null,
-      "synthetic-hash-" + docPath,
+      createHash("sha256").update(body).digest("hex"),
       0,
     )
   return row.id
@@ -257,6 +264,7 @@ test("desk_thread — depth limit truncates a long chain", async () => {
     "---\nschema_version: 1\n---\nseed\n",
   )
   await indexNoEmbed(root)
+  await fs.rm(path.join(root, "_meta", "friction.md"))
 
   const db = openDb(root)
   try {
@@ -265,7 +273,7 @@ test("desk_thread — depth limit truncates a long chain", async () => {
     const ids = []
     for (const name of ["A", "B", "C", "D", "E", "F"]) {
       ids.push(
-        insertSyntheticDoc(db, {
+        await insertSyntheticDoc(root, db, {
           path: `chain/${name}.md`,
           kind: "reference",
           updated_at: `2026-04-2${ids.length}`,
@@ -306,16 +314,17 @@ test("desk_thread — cycle in refs_graph doesn't infinite-loop", async () => {
     "---\nschema_version: 1\n---\nseed\n",
   )
   await indexNoEmbed(root)
+  await fs.rm(path.join(root, "_meta", "friction.md"))
 
   const db = openDb(root)
   try {
     db.exec("DELETE FROM refs_graph; DELETE FROM docs;")
-    const aId = insertSyntheticDoc(db, {
+    const aId = await insertSyntheticDoc(root, db, {
       path: "cycle/A.md",
       kind: "reference",
       updated_at: "2026-04-20",
     })
-    const bId = insertSyntheticDoc(db, {
+    const bId = await insertSyntheticDoc(root, db, {
       path: "cycle/B.md",
       kind: "reference",
       updated_at: "2026-04-21",
@@ -386,11 +395,12 @@ test("desk_thread — ordering: start first, then hop_distance asc, then updated
     "---\nschema_version: 1\n---\nseed\n",
   )
   await indexNoEmbed(root)
+  await fs.rm(path.join(root, "_meta", "friction.md"))
 
   const db = openDb(root)
   try {
     db.exec("DELETE FROM refs_graph; DELETE FROM docs;")
-    const startId = insertSyntheticDoc(db, {
+    const startId = await insertSyntheticDoc(root, db, {
       path: "start.md",
       kind: "task",
       updated_at: "2026-05-01",
@@ -398,20 +408,20 @@ test("desk_thread — ordering: start first, then hop_distance asc, then updated
     })
     // Two hop-1 neighbours with different updated_at dates; the newer one
     // must come before the older one.
-    const newerId = insertSyntheticDoc(db, {
+    const newerId = await insertSyntheticDoc(root, db, {
       path: "hop1-newer.md",
       kind: "doing",
       updated_at: "2026-04-25",
       task_slug: "start",
     })
-    const olderId = insertSyntheticDoc(db, {
+    const olderId = await insertSyntheticDoc(root, db, {
       path: "hop1-older.md",
       kind: "planning",
       updated_at: "2026-04-10",
       task_slug: "start",
     })
     // Hop-2 doc reachable via newerId.
-    const farId = insertSyntheticDoc(db, {
+    const farId = await insertSyntheticDoc(root, db, {
       path: "hop2-far.md",
       kind: "reference",
       updated_at: "2026-04-30",

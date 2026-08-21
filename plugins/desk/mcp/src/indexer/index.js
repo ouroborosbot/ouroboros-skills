@@ -550,12 +550,8 @@ function refreshRefs(db, docs) {
 }
 
 /**
- * Check whether the index at `dbPath` is fresh — i.e., no markdown file
- * under `deskRoot` has an mtime newer than the recorded last_indexed_at.
- *
- * Cheap heuristic; the real correctness invariant is the hash-compare
- * inside rebuildIndex. This is just for the boot-time "do we need to do
- * anything?" decision.
+ * Check whether the index is fresh: metadata is valid, no indexed document
+ * is tombstoned, and the indexed path/hash set exactly matches discovery.
  */
 export function isDiscoveryGrammarCurrent(db) {
   return getMeta(db, "discovery_grammar_version") === String(DISCOVERY_GRAMMAR_VERSION)
@@ -593,14 +589,6 @@ export async function isIndexFresh(deskRoot, db, { signal, tombstones } = {}) {
     docs: db.prepare("SELECT path, hash FROM docs").all(),
   })
   if (tombstoneStatus.tombstoned) return false
-  // Walk discover() targets and bail on the first newer mtime.
   const docs = await discover(deskRoot, { signal })
-  if (!await isIndexedDocumentTreeCurrent(deskRoot, db, { signal, docs })) {
-    return false
-  }
-  for (const d of docs) {
-    throwIfAborted(signal)
-    if (d.mtime > indexedMs) return false
-  }
-  return true
+  return isIndexedDocumentTreeCurrent(deskRoot, db, { signal, docs })
 }

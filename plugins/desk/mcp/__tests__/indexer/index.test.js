@@ -404,7 +404,7 @@ test("default embedding options use global fetch and archive docs keep archive m
   }
 })
 
-test("isIndexFresh covers missing, invalid, stale, and fresh metadata states", async () => {
+test("isIndexFresh requires valid metadata and trusts an exact document tree", async () => {
   const root = await mkRoot()
   await w(root, "trackA/task-1/task.md", "---\nstatus: processing\n---\nfreshness body")
   await rebuildIndex(root, indexOpts)
@@ -422,7 +422,7 @@ test("isIndexFresh covers missing, invalid, stale, and fresh metadata states", a
     assert.equal(await isIndexFresh(root, db), false)
 
     setMeta(db, "last_indexed_at", "2000-01-01T00:00:00.000Z")
-    assert.equal(await isIndexFresh(root, db), false)
+    assert.equal(await isIndexFresh(root, db), true)
 
     setMeta(db, "last_indexed_at", "2999-01-01T00:00:00.000Z")
     assert.equal(await isIndexFresh(root, db), true)
