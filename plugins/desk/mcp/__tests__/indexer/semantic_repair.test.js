@@ -2,6 +2,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
 import { promises as fs } from "node:fs"
+import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -28,7 +29,7 @@ async function loadSemanticRepair() {
 }
 
 async function makeRoot(prefix = "desk-semantic-repair-") {
-  return fs.mkdtemp(path.join(mcpRoot, `.${prefix}`))
+  return fs.mkdtemp(path.join(tmpdir(), prefix))
 }
 
 function runRepairProcessPhase(phase, root, observationPath) {
@@ -264,6 +265,19 @@ function createManualScheduler() {
     scheduled,
   }
 }
+
+test("semantic repair test roots stay outside the MCP source tree", async () => {
+  const root = await makeRoot("desk-semantic-repair-location-")
+  try {
+    assert.equal(path.dirname(root), path.resolve(tmpdir()))
+    assert.equal(
+      path.relative(mcpRoot, root).startsWith(`..${path.sep}`),
+      true,
+    )
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
 
 test("semantic repair validates roots and positive batch limits", async () => {
   const {
@@ -646,6 +660,29 @@ test("semantic repair compacts synchronous scheduling failures and preserves sta
   assert.deepEqual(coordinator.status(root), result)
 })
 
+test("semantic repair isolates resolved terminal results from stored status", async () => {
+  const { createSemanticRepairCoordinator } = await loadSemanticRepair()
+  const root = path.resolve("desk-root-result-isolation")
+  const error = new Error("private scheduler detail")
+  error.reason = "embedding_service_unavailable"
+  const coordinator = createSemanticRepairCoordinator({
+    schedule: () => {
+      throw error
+    },
+  })
+
+  const result = await awaitBounded(
+    coordinator.start({ deskRoot: root }),
+    "semantic repair result isolation failure did not settle",
+  )
+  const stored = coordinator.status(root)
+  result.state = "mutated"
+  result.last_error.reason = "mutated"
+  result.last_error.message = "mutated"
+
+  assert.deepEqual(coordinator.status(root), stored)
+})
+
 test("semantic repair clears a registered timer when unref throws and permits retry", async () => {
   const { createSemanticRepairCoordinator } = await loadSemanticRepair()
   const root = path.resolve("desk-root-unref-failure")
@@ -717,6 +754,91 @@ test("semantic repair clears a registered timer when unref throws and permits re
   )
   assert.equal(callbackCalls, 1)
   assert.equal(repairCalls, 1)
+})
+
+test("semantic repair finish stays terminal when unref and timer clearing throw", async () => {
+  const { createSemanticRepairCoordinator } = await loadSemanticRepair()
+  const root = path.resolve("desk-root-unref-clear-failure")
+  const handles = []
+  let clearCalls = 0
+  let repairCalls = 0
+  const unrefError = new Error("private timer unref detail")
+  unrefError.reason = "embedding_service_unavailable"
+  const clearError = new Error("private timer clear detail")
+  const schedule = (callback, delay) => {
+    const handle = {
+      callback,
+      delay,
+      unrefCalls: 0,
+      unref() {
+        this.unrefCalls += 1
+        if (handles.length === 1) throw unrefError
+      },
+    }
+    handles.push(handle)
+    return handle
+  }
+  const coordinator = createSemanticRepairCoordinator({
+    repairBatch: async () => {
+      repairCalls += 1
+      return { processed_chunks: 1, remaining_chunks: 0 }
+    },
+    schedule,
+    clearScheduled: () => {
+      clearCalls += 1
+      throw clearError
+    },
+  })
+
+  const failedPromise = coordinator.start({ deskRoot: root })
+  let failedSettlements = 0
+  failedPromise.then(() => {
+    failedSettlements += 1
+  })
+  const failed = await awaitBounded(
+    failedPromise,
+    "semantic repair unref and clear failure did not settle",
+  )
+  assert.deepEqual(failed, {
+    state: "failed",
+    last_error: {
+      reason: "embedding_service_unavailable",
+      message: "embedding endpoint unavailable",
+    },
+  })
+  assert.equal(failedSettlements, 1)
+  assert.equal(clearCalls, 1)
+  assert.equal(repairCalls, 0)
+
+  await handles[0].callback()
+  assert.equal(failedSettlements, 1)
+  assert.equal(clearCalls, 1)
+  assert.equal(repairCalls, 0)
+  assert.deepEqual(coordinator.status(root), failed)
+
+  const retry = coordinator.start({ deskRoot: root })
+  assert.notStrictEqual(retry, failedPromise)
+  assert.strictEqual(coordinator.start({ deskRoot: root }), retry)
+  assert.equal(handles.length, 2)
+  await handles[1].callback()
+  assert.deepEqual(
+    await awaitBounded(
+      retry,
+      "semantic repair retry after unref and clear failure did not settle",
+    ),
+    {
+      state: "complete",
+      last_error: null,
+    },
+  )
+  assert.equal(clearCalls, 1)
+  assert.equal(repairCalls, 1)
+
+  await handles[0].callback()
+  assert.equal(failedSettlements, 1)
+  assert.equal(clearCalls, 1)
+  assert.equal(repairCalls, 1)
+  assert.equal(coordinator.status(root).state, "complete")
 })
 
 test("semantic repair preserves the active batch when a custom scheduler fires a reschedule synchronously", async () => {

@@ -48,26 +48,28 @@ export function createSemanticRepairCoordinator({
   function status(deskRoot) {
     const root = canonicalRoot(deskRoot)
     const current = statuses.get(root) ?? repairStatus("idle")
-    return {
-      ...current,
-      last_error: current.last_error === null
-        ? null
-        : { ...current.last_error },
-    }
+    return repairStatusSnapshot(current)
+  }
+
+  function clearEntryTimer(entry) {
+    if (entry.timer === undefined) return
+    const handle = entry.timer
+    entry.timer = undefined
+    try {
+      clearScheduled(handle)
+    } catch {}
   }
 
   function finish(entry, nextStatus) {
     if (entry.settled) return
     entry.settled = true
-    if (entry.timer !== undefined) {
-      clearScheduled(entry.timer)
-      entry.timer = undefined
-    }
-    statuses.set(entry.deskRoot, nextStatus)
+    const storedStatus = repairStatusSnapshot(nextStatus)
+    statuses.set(entry.deskRoot, storedStatus)
     if (inFlight.get(entry.deskRoot) === entry) {
       inFlight.delete(entry.deskRoot)
     }
-    entry.resolve(nextStatus)
+    clearEntryTimer(entry)
+    entry.resolve(repairStatusSnapshot(storedStatus))
   }
 
   function scheduleNext(entry) {
@@ -176,10 +178,7 @@ export function createSemanticRepairCoordinator({
     }
 
     entry.controller.abort()
-    if (entry.timer !== undefined) {
-      clearScheduled(entry.timer)
-      entry.timer = undefined
-    }
+    clearEntryTimer(entry)
     if (!entry.active) {
       finish(entry, repairStatus("idle"))
     }
@@ -454,6 +453,15 @@ function repairStatus(state, lastError = null) {
   return {
     state,
     last_error: lastError,
+  }
+}
+
+function repairStatusSnapshot(status) {
+  return {
+    ...status,
+    last_error: status.last_error === null
+      ? null
+      : { ...status.last_error },
   }
 }
 
