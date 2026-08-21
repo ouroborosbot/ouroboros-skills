@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
 import { closeDb, openDb } from "../../src/db/init.js"
+import { createSemanticRepairCoordinator } from "../../src/indexer/semantic-repair.js"
 import { ensureIndex } from "../../src/server-helpers.js"
 import { TOOL_NAMES } from "../../src/tool-names.js"
 import { desk_reindex } from "../../src/tools/reindex.js"
@@ -119,6 +120,36 @@ async function flushAsyncWork(message) {
     new Promise((resolve) => setImmediate(resolve)),
     message,
   )
+}
+
+function createManualScheduler() {
+  const queued = []
+  return {
+    clear(handle) {
+      handle.cancelled = true
+    },
+    get size() {
+      return queued.filter((entry) => !entry.handle.cancelled).length
+    },
+    async runNext() {
+      const entry = queued.shift()
+      assert.ok(entry, "expected one scheduled semantic repair batch")
+      if (entry.handle.cancelled) return undefined
+      return entry.callback()
+    },
+    schedule(callback, delay) {
+      const handle = {
+        cancelled: false,
+        delay,
+        unrefCalled: false,
+        unref() {
+          this.unrefCalled = true
+        },
+      }
+      queued.push({ callback, handle })
+      return handle
+    },
+  }
 }
 
 function recordingEmbedFetch(prompts) {
@@ -602,6 +633,353 @@ test("default-wired desk_reindex coordinates exact non-force and force requests 
     }
   } finally {
     if (restoreDefault) restoreDefault()
+    await cleanupRoot(root)
+  }
+})
+
+test("non-force desk_reindex cancels active repair before one locked full repair and releases the root", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const root = await mkTempDeskRoot()
+  const scheduler = createManualScheduler()
+  const backgroundEntered = deferred()
+  const backgroundAborted = deferred()
+  const backgroundCleanupRelease = deferred()
+  const fullRepairEntered = deferred()
+  const fullRepairRelease = deferred()
+  const competingFreshnessEntered = deferred()
+  const activeByRoot = new Map()
+  const events = []
+  const ensureCalls = []
+  const repairCalls = []
+  const resetCalls = []
+  const cancelCalls = []
+  const explicitCalls = []
+  const initialEmbed = { fetch: makeEmbedFetch() }
+  const explicitEmbed = { fetch: makeEmbedFetch() }
+  const competingEmbed = { fetch: makeEmbedFetch() }
+  const explicitEnsureOptions = {
+    embed: explicitEmbed,
+    marker: "non-force-real-coordinator",
+    snapshots: false,
+    vectorPacks: false,
+  }
+  let busyThrows = 0
+  let maxSameRootWriters = 0
+  let coordinator
+  let maintenance
+  let initialFreshness
+  let initialResult
+  let scheduledRepair
+  let reindex
+  let competingFreshness
+  let competingResult
+
+  async function guardedWriter(deskRoot, label, operation) {
+    const canonical = path.resolve(deskRoot)
+    const active = activeByRoot.get(canonical)
+    maxSameRootWriters = Math.max(maxSameRootWriters, active ? 2 : 1)
+    if (active) {
+      busyThrows += 1
+      const error = new Error(`SQLITE_BUSY overlap: ${label} while ${active}`)
+      error.code = "SQLITE_BUSY"
+      throw error
+    }
+    activeByRoot.set(canonical, label)
+    events.push(`${label}:start`)
+    try {
+      return await operation()
+    } finally {
+      events.push(`${label}:end`)
+      activeByRoot.delete(canonical)
+    }
+  }
+
+  try {
+    coordinator = createMaintenanceCoordinator({
+      ensureIndex: async (deskRoot, options) => {
+        ensureCalls.push({ deskRoot, options })
+        if (options.embed === initialEmbed) {
+          return guardedWriter(deskRoot, "initial-freshness", async () =>
+            completeIndexResult({ chunks: 2, vectors: 1 }),
+          )
+        }
+        if (options.embed === explicitEmbed) {
+          return guardedWriter(deskRoot, "nonforce-reindex", async () => {
+            fullRepairEntered.resolve()
+            await awaitBounded(
+              fullRepairRelease.promise,
+              "non-force full repair was not released",
+            )
+            return {
+              built: true,
+              reason: "semantic_missing",
+              summary: {
+                docs_indexed: 2,
+                docs_skipped: 1,
+                docs_removed: 0,
+              },
+              semantic: {
+                chunks_total: 3,
+                vectors_indexed: 3,
+                missing_vectors: 0,
+                embedding_available: true,
+              },
+            }
+          })
+        }
+        assert.equal(options.embed, competingEmbed)
+        return guardedWriter(deskRoot, "competing-freshness", async () => {
+          competingFreshnessEntered.resolve()
+          return completeIndexResult({ chunks: 3, vectors: 3 })
+        })
+      },
+      repairBatch: async (options) => {
+        repairCalls.push(options)
+        return guardedWriter(options.deskRoot, "background-repair", async () => {
+          backgroundEntered.resolve()
+          await awaitBounded(
+            new Promise((resolve) => {
+              const onAbort = () => {
+                events.push("background-repair:abort")
+                backgroundAborted.resolve()
+                resolve()
+              }
+              if (options.signal.aborted) onAbort()
+              else options.signal.addEventListener("abort", onAbort, { once: true })
+            }),
+            "background repair did not observe non-force reindex cancellation",
+          )
+          await awaitBounded(
+            backgroundCleanupRelease.promise,
+            "background repair cleanup was not released",
+          )
+          events.push("background-repair:cleanup")
+          return {
+            processed_chunks: 0,
+            vectors_indexed: 0,
+            remaining_chunks: 1,
+            stopped_by: "cancelled",
+            cancelled: true,
+          }
+        })
+      },
+      createRepairCoordinator: (options) => {
+        const repair = createSemanticRepairCoordinator({
+          ...options,
+          schedule: scheduler.schedule,
+          clearScheduled: scheduler.clear,
+        })
+        return {
+          start: repair.start,
+          status: repair.status,
+          async cancel(deskRoot) {
+            cancelCalls.push(deskRoot)
+            events.push("cancel:start")
+            const result = await repair.cancel(deskRoot)
+            events.push("cancel:done")
+            return result
+          },
+        }
+      },
+      resetIndex: async (options) => {
+        resetCalls.push(options)
+        return guardedWriter(options.deskRoot, "unexpected-reset", async () => {})
+      },
+    })
+    maintenance = {
+      ...coordinator,
+      async runExplicitReindex(args) {
+        explicitCalls.push(args)
+        return coordinator.runExplicitReindex(args)
+      },
+    }
+
+    initialFreshness = coordinator.ensureSearchFreshness({
+      deskRoot: root,
+      ensureOptions: { embed: initialEmbed },
+    })
+    initialResult = await awaitBounded(
+      initialFreshness,
+      "initial freshness did not settle before active repair",
+    )
+    assert.equal(scheduler.size, 1)
+    scheduledRepair = scheduler.runNext()
+    await awaitBounded(
+      backgroundEntered.promise,
+      "background repair did not enter through the maintenance coordinator",
+    )
+
+    reindex = desk_reindex({
+      deskRoot: root,
+      input: { force: false },
+      opts: { ...explicitEnsureOptions, maintenance },
+    })
+    const observedReindex = observeSettlement(reindex)
+    await awaitBounded(
+      backgroundAborted.promise,
+      "non-force desk_reindex did not cancel the active background repair",
+    )
+    await flushAsyncWork(
+      "non-force cancellation order check did not reach a deterministic turn",
+    )
+
+    assert.equal(observedReindex.state, "pending")
+    assert.equal(fullRepairEntered.settled, false)
+    assert.deepEqual(resetCalls, [])
+    assert.deepEqual(events, [
+      "initial-freshness:start",
+      "initial-freshness:end",
+      "background-repair:start",
+      "cancel:start",
+      "background-repair:abort",
+    ])
+
+    backgroundCleanupRelease.resolve()
+    await awaitBounded(
+      fullRepairEntered.promise,
+      "non-force full repair did not start after abort cleanup",
+    )
+    assert.deepEqual(events, [
+      "initial-freshness:start",
+      "initial-freshness:end",
+      "background-repair:start",
+      "cancel:start",
+      "background-repair:abort",
+      "background-repair:cleanup",
+      "background-repair:end",
+      "cancel:done",
+      "nonforce-reindex:start",
+    ])
+    assert.deepEqual(resetCalls, [])
+    assert.equal(observedReindex.state, "pending")
+
+    competingFreshness = coordinator.ensureSearchFreshness({
+      deskRoot: root,
+      ensureOptions: { embed: competingEmbed, marker: "after-non-force" },
+    })
+    const observedCompetingFreshness = observeSettlement(competingFreshness)
+    await flushAsyncWork(
+      "non-force lock-release check did not reach a deterministic turn",
+    )
+    assert.equal(observedCompetingFreshness.state, "pending")
+    assert.equal(competingFreshnessEntered.settled, false)
+    assert.equal(busyThrows, 0)
+    assert.equal(maxSameRootWriters, 1)
+
+    fullRepairRelease.resolve()
+    const reindexResult = await awaitBounded(
+      reindex,
+      "non-force desk_reindex did not await the complete full repair",
+    )
+    await awaitBounded(
+      competingFreshnessEntered.promise,
+      "same-root freshness did not enter after non-force reindex released the lock",
+    )
+    competingResult = await awaitBounded(
+      competingFreshness,
+      "same-root freshness did not settle after non-force reindex",
+    )
+    await awaitBounded(
+      competingResult.repair,
+      "post-reindex no-op repair promise did not settle",
+    )
+    await awaitBounded(
+      scheduledRepair,
+      "cancelled scheduled repair run did not settle",
+    )
+    await awaitBounded(
+      initialResult.repair,
+      "cancelled background repair promise did not settle",
+    )
+
+    assert.deepEqual(explicitCalls, [
+      {
+        deskRoot: path.resolve(root),
+        force: false,
+        ensureOptions: explicitEnsureOptions,
+      },
+    ])
+    assert.deepEqual(cancelCalls, [path.resolve(root)])
+    assert.deepEqual(resetCalls, [])
+    assert.deepEqual(ensureCalls, [
+      {
+        deskRoot: path.resolve(root),
+        options: { embed: initialEmbed, skipEmbed: true },
+      },
+      {
+        deskRoot: path.resolve(root),
+        options: explicitEnsureOptions,
+      },
+      {
+        deskRoot: path.resolve(root),
+        options: {
+          embed: competingEmbed,
+          marker: "after-non-force",
+          skipEmbed: true,
+        },
+      },
+    ])
+    assert.equal(repairCalls.length, 1)
+    assert.deepEqual(Object.keys(repairCalls[0]).sort(), [
+      "batchChunks",
+      "batchMs",
+      "deskRoot",
+      "embed",
+      "signal",
+    ])
+    assert.equal(repairCalls[0].deskRoot, path.resolve(root))
+    assert.equal(repairCalls[0].embed, initialEmbed)
+    assert.equal(repairCalls[0].signal instanceof AbortSignal, true)
+    assert.equal(repairCalls[0].signal.aborted, true)
+    assert.equal(reindexResult.status, "ok")
+    assert.equal(reindexResult.built, true)
+    assert.equal(reindexResult.reason, "semantic_missing")
+    assert.equal(reindexResult.docs_indexed, 2)
+    assert.equal(reindexResult.docs_skipped, 1)
+    assert.equal(reindexResult.docs_pruned, 0)
+    assert.equal(reindexResult.chunks_total, 3)
+    assert.equal(reindexResult.vectors_indexed, 3)
+    assert.equal(reindexResult.missing_vectors, 0)
+    assert.equal(busyThrows, 0)
+    assert.equal(maxSameRootWriters, 1)
+    assert.equal(activeByRoot.size, 0)
+    assert.equal(scheduler.size, 0)
+    assert.deepEqual(events, [
+      "initial-freshness:start",
+      "initial-freshness:end",
+      "background-repair:start",
+      "cancel:start",
+      "background-repair:abort",
+      "background-repair:cleanup",
+      "background-repair:end",
+      "cancel:done",
+      "nonforce-reindex:start",
+      "nonforce-reindex:end",
+      "competing-freshness:start",
+      "competing-freshness:end",
+    ])
+  } finally {
+    backgroundCleanupRelease.resolve()
+    fullRepairRelease.resolve()
+    if (coordinator) {
+      await awaitBounded(
+        coordinator.cancelBackgroundRepair(root),
+        "non-force maintenance did not settle during cleanup",
+      ).catch(() => {})
+    }
+    await awaitBounded(
+      Promise.allSettled(
+        [
+          initialFreshness,
+          initialResult?.repair,
+          scheduledRepair,
+          reindex,
+          competingFreshness,
+          competingResult?.repair,
+        ].filter(Boolean),
+      ),
+      "non-force integration promises did not settle during cleanup",
+    ).catch(() => {})
     await cleanupRoot(root)
   }
 })

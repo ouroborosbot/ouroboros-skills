@@ -275,6 +275,277 @@ test("search freshness finishes before scheduling one reused same-root repair jo
   }
 })
 
+test("active background repair holds the same-root lock while other roots stay independent", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const [rootA, rootB] = await Promise.all([
+    makeRoot("desk-maintenance-repair-root-a-"),
+    makeRoot("desk-maintenance-repair-root-b-"),
+  ])
+  const scheduler = createManualScheduler()
+  const repairEntered = deferred()
+  const repairRelease = deferred()
+  const queuedFreshnessEntered = deferred()
+  const rootBFreshnessEntered = deferred()
+  const activeByRoot = new Map()
+  const ensureCalls = []
+  const repairCalls = []
+  const events = []
+  const initialEmbed = { fetch: async () => null }
+  const queuedEmbed = { fetch: async () => null }
+  const rootBEmbed = { fetch: async () => null }
+  let busyThrows = 0
+  let maxSameRootWriters = 0
+  let rootAEnsureCount = 0
+  let maintenance
+  let initialFreshness
+  let initialResult
+  let scheduledRepair
+  let queuedFreshness
+  let queuedResult
+  let rootBFreshness
+  let rootBResult
+
+  async function guardedWriter(deskRoot, label, operation) {
+    const canonical = path.resolve(deskRoot)
+    const active = activeByRoot.get(canonical)
+    maxSameRootWriters = Math.max(maxSameRootWriters, active ? 2 : 1)
+    if (active) {
+      busyThrows += 1
+      const error = new Error(`SQLITE_BUSY overlap: ${label} while ${active}`)
+      error.code = "SQLITE_BUSY"
+      throw error
+    }
+    activeByRoot.set(canonical, label)
+    events.push(`${label}:start`)
+    try {
+      return await operation()
+    } finally {
+      events.push(`${label}:end`)
+      activeByRoot.delete(canonical)
+    }
+  }
+
+  try {
+    maintenance = createMaintenanceCoordinator({
+      ensureIndex: async (deskRoot, options) => {
+        ensureCalls.push({ deskRoot, options })
+        if (deskRoot === path.resolve(rootA)) {
+          rootAEnsureCount += 1
+          if (rootAEnsureCount === 1) {
+            return guardedWriter(deskRoot, "a:initial-freshness", async () => ({
+              built: false,
+              reason: "fresh",
+              semantic: {
+                chunks_total: 2,
+                vectors_indexed: 1,
+                missing_vectors: 1,
+              },
+            }))
+          }
+          return guardedWriter(deskRoot, "a:queued-freshness", async () => {
+            queuedFreshnessEntered.resolve()
+            return {
+              built: false,
+              reason: "fresh",
+              semantic: {
+                chunks_total: 2,
+                vectors_indexed: 2,
+                missing_vectors: 0,
+              },
+            }
+          })
+        }
+
+        assert.equal(deskRoot, path.resolve(rootB))
+        return guardedWriter(deskRoot, "b:freshness", async () => {
+          rootBFreshnessEntered.resolve()
+          return {
+            built: false,
+            reason: "fresh",
+            semantic: {
+              chunks_total: 1,
+              vectors_indexed: 1,
+              missing_vectors: 0,
+            },
+          }
+        })
+      },
+      repairBatch: async (options) => {
+        repairCalls.push(options)
+        return guardedWriter(options.deskRoot, "a:repair", async () => {
+          repairEntered.resolve()
+          await awaitBounded(
+            repairRelease.promise,
+            "active background repair was not released",
+          )
+          return {
+            processed_chunks: 1,
+            vectors_indexed: 1,
+            remaining_chunks: 0,
+            stopped_by: "complete",
+          }
+        })
+      },
+      createRepairCoordinator: (options) =>
+        createSemanticRepairCoordinator({
+          ...options,
+          schedule: scheduler.schedule,
+          clearScheduled: scheduler.clear,
+        }),
+    })
+
+    initialFreshness = maintenance.ensureSearchFreshness({
+      deskRoot: rootA,
+      ensureOptions: { embed: initialEmbed },
+    })
+    initialResult = await awaitBounded(
+      initialFreshness,
+      "initial root A freshness did not settle",
+    )
+    assert.equal(scheduler.size, 1)
+
+    scheduledRepair = scheduler.runNext()
+    await awaitBounded(
+      repairEntered.promise,
+      "root A background repair did not enter through maintenance",
+    )
+
+    queuedFreshness = maintenance.ensureSearchFreshness({
+      deskRoot: rootA,
+      ensureOptions: { embed: queuedEmbed },
+    })
+    const observedQueuedFreshness = observeSettlement(queuedFreshness)
+    rootBFreshness = maintenance.ensureSearchFreshness({
+      deskRoot: rootB,
+      ensureOptions: { embed: rootBEmbed },
+    })
+
+    await awaitBounded(
+      rootBFreshnessEntered.promise,
+      "root B freshness did not enter independently of root A repair",
+    )
+    rootBResult = await awaitBounded(
+      rootBFreshness,
+      "root B freshness was blocked by root A repair",
+    )
+    await awaitBounded(
+      rootBResult.repair,
+      "root B no-op repair promise did not settle",
+    )
+    await flushAsyncWork(
+      "same-root repair lock check did not reach a deterministic turn",
+    )
+
+    assert.equal(observedQueuedFreshness.state, "pending")
+    assert.equal(queuedFreshnessEntered.settled, false)
+    assert.equal(
+      repairCalls[0].signal.aborted,
+      false,
+      "same-root search freshness must queue behind, not cancel, active repair",
+    )
+    assert.equal(busyThrows, 0)
+    assert.equal(maxSameRootWriters, 1)
+    assert.deepEqual(events, [
+      "a:initial-freshness:start",
+      "a:initial-freshness:end",
+      "a:repair:start",
+      "b:freshness:start",
+      "b:freshness:end",
+    ])
+    assert.deepEqual(ensureCalls, [
+      {
+        deskRoot: path.resolve(rootA),
+        options: { embed: initialEmbed, skipEmbed: true },
+      },
+      {
+        deskRoot: path.resolve(rootB),
+        options: { embed: rootBEmbed, skipEmbed: true },
+      },
+    ])
+    assert.equal(repairCalls.length, 1)
+    assert.deepEqual(Object.keys(repairCalls[0]).sort(), [
+      "batchChunks",
+      "batchMs",
+      "deskRoot",
+      "embed",
+      "signal",
+    ])
+    assert.equal(repairCalls[0].deskRoot, path.resolve(rootA))
+    assert.equal(repairCalls[0].embed, initialEmbed)
+    assert.equal(repairCalls[0].batchChunks, 100)
+    assert.equal(repairCalls[0].batchMs, 5000)
+    assert.equal(repairCalls[0].signal instanceof AbortSignal, true)
+
+    repairRelease.resolve()
+    await awaitBounded(
+      scheduledRepair,
+      "released root A repair batch did not settle",
+    )
+    await awaitBounded(
+      initialResult.repair,
+      "root A background repair promise did not settle",
+    )
+    await awaitBounded(
+      queuedFreshnessEntered.promise,
+      "same-root freshness did not enter after repair released the lock",
+    )
+    queuedResult = await awaitBounded(
+      queuedFreshness,
+      "same-root freshness did not settle after repair released the lock",
+    )
+    await awaitBounded(
+      queuedResult.repair,
+      "same-root no-op repair promise did not settle",
+    )
+
+    assert.equal(observedQueuedFreshness.state, "fulfilled")
+    assert.equal(busyThrows, 0)
+    assert.equal(maxSameRootWriters, 1)
+    assert.equal(activeByRoot.size, 0)
+    assert.equal(scheduler.size, 0)
+    assert.deepEqual(ensureCalls[2], {
+      deskRoot: path.resolve(rootA),
+      options: { embed: queuedEmbed, skipEmbed: true },
+    })
+    assert.deepEqual(events, [
+      "a:initial-freshness:start",
+      "a:initial-freshness:end",
+      "a:repair:start",
+      "b:freshness:start",
+      "b:freshness:end",
+      "a:repair:end",
+      "a:queued-freshness:start",
+      "a:queued-freshness:end",
+    ])
+  } finally {
+    repairRelease.resolve()
+    if (maintenance) {
+      await awaitBounded(
+        Promise.all([
+          maintenance.cancelBackgroundRepair(rootA),
+          maintenance.cancelBackgroundRepair(rootB),
+        ]),
+        "repair mutex test maintenance did not settle during cleanup",
+      ).catch(() => {})
+    }
+    await awaitBounded(
+      Promise.allSettled(
+        [
+          initialFreshness,
+          initialResult?.repair,
+          scheduledRepair,
+          queuedFreshness,
+          queuedResult?.repair,
+          rootBFreshness,
+          rootBResult?.repair,
+        ].filter(Boolean),
+      ),
+      "repair mutex test promises did not settle during cleanup",
+    ).catch(() => {})
+    await removeRoots(rootA, rootB)
+  }
+})
+
 test("coordinator lets root B complete while root A search freshness holds its lock", async () => {
   const { createMaintenanceCoordinator } = await loadMaintenance()
   const [rootA, rootB] = await Promise.all([
