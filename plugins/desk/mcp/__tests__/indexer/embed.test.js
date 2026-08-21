@@ -125,6 +125,95 @@ test("embedChunkDetailed reports timeout diagnostics", async () => {
   assert.equal(res.diagnostic.reason, "timeout")
 })
 
+test("embedChunkDetailed propagates caller cancellation to the outgoing request", async () => {
+  const controller = new AbortController()
+  let capturedRequest
+  let markRequestStarted
+  let rejectFetch
+  const requestStarted = new Promise((resolve) => {
+    markRequestStarted = resolve
+  })
+  const embedding = embedChunkDetailed("x", {
+    endpoint: "http://127.0.0.1:11434",
+    fetch: async (_url, request) => {
+      capturedRequest = request
+      markRequestStarted()
+      return new Promise((_resolve, reject) => {
+        rejectFetch = reject
+      })
+    },
+    signal: controller.signal,
+    timeoutMs: 10000,
+  })
+
+  try {
+    await requestStarted
+    assert.equal(capturedRequest.signal.aborted, false)
+    controller.abort()
+    assert.equal(capturedRequest.signal.aborted, true)
+  } finally {
+    const error = new Error("aborted")
+    error.name = "AbortError"
+    rejectFetch?.(error)
+    await embedding
+  }
+})
+
+test("embedChunkDetailed sends an already-aborted caller signal", async () => {
+  const controller = new AbortController()
+  controller.abort()
+  const vec = Array.from({ length: EMBEDDING_DIM }, () => 0.25)
+  let capturedRequest
+
+  const res = await embedChunkDetailed("x", {
+    endpoint: "http://127.0.0.1:11434",
+    fetch: async (_url, request) => {
+      capturedRequest = request
+      return { ok: true, json: async () => ({ embedding: vec }) }
+    },
+    signal: controller.signal,
+  })
+
+  assert.equal(capturedRequest.signal.aborted, true)
+  assert.equal(res.available, true)
+})
+
+test("embedChunkDetailed removes the caller abort listener after fetch settles", async () => {
+  const listeners = new Set()
+  let added = 0
+  let removed = 0
+  const signal = {
+    aborted: false,
+    addEventListener(type, listener) {
+      assert.equal(type, "abort")
+      added += 1
+      listeners.add(listener)
+    },
+    removeEventListener(type, listener) {
+      assert.equal(type, "abort")
+      removed += 1
+      listeners.delete(listener)
+    },
+  }
+  const vec = Array.from({ length: EMBEDDING_DIM }, () => 0.25)
+  let capturedRequest
+
+  const res = await embedChunkDetailed("x", {
+    endpoint: "http://127.0.0.1:11434",
+    fetch: async (_url, request) => {
+      capturedRequest = request
+      return { ok: true, json: async () => ({ embedding: vec }) }
+    },
+    signal,
+  })
+
+  assert.equal(res.available, true)
+  assert.ok(capturedRequest.signal)
+  assert.equal(added, 1)
+  assert.equal(removed, 1)
+  assert.equal(listeners.size, 0)
+})
+
 test("embedChunkDetailed uses global fetch when no fetch override is passed", async () => {
   const oldFetch = globalThis.fetch
   const vec = Array.from({ length: EMBEDDING_DIM }, () => 0.25)
@@ -142,15 +231,22 @@ test("embedChunkDetailed uses global fetch when no fetch override is passed", as
 
 test("embedChunkDetailed works when AbortController is unavailable", async () => {
   const oldAbortController = globalThis.AbortController
+  const controller = new AbortController()
   const vec = Array.from({ length: EMBEDDING_DIM }, () => 0.25)
+  let capturedRequest
   globalThis.AbortController = undefined
   try {
     const res = await embedChunkDetailed("x", {
       endpoint: "http://127.0.0.1:11434",
-      fetch: mockOkFetch(vec),
+      fetch: async (_url, request) => {
+        capturedRequest = request
+        return { ok: true, json: async () => ({ embedding: vec }) }
+      },
+      signal: controller.signal,
     })
     assert.equal(res.available, true)
     assert.equal(res.vector.length, EMBEDDING_DIM)
+    assert.strictEqual(capturedRequest.signal, controller.signal)
   } finally {
     globalThis.AbortController = oldAbortController
   }

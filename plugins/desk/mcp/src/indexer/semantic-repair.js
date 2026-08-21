@@ -9,6 +9,26 @@ import { ACTIVE_EMBEDDING_SPEC } from "./spec.js"
 
 const DEFAULT_BATCH_CHUNKS = 100
 const DEFAULT_BATCH_MS = 5000
+const SAFE_REPAIR_ERRORS = new Map([
+  [
+    "embedding_service_unavailable",
+    {
+      reason: "embedding_service_unavailable",
+      message: "embedding endpoint unavailable",
+    },
+  ],
+  [
+    "semantic_repair_no_progress",
+    {
+      reason: "semantic_repair_no_progress",
+      message: "semantic repair made no progress",
+    },
+  ],
+])
+const GENERIC_REPAIR_ERROR = {
+  reason: "semantic_repair_failed",
+  message: "semantic repair failed",
+}
 const ACTIVE_FAILURE_JOIN = `
   f.chunk_key = c.chunk_key AND
   f.text_hash = c.text_hash AND
@@ -94,7 +114,20 @@ export function createSemanticRepairCoordinator({
       ) {
         finish(entry, repairStatus("idle"))
       } else if (result?.remaining_chunks > 0) {
-        scheduleNext(entry)
+        if (
+          !Number.isFinite(result?.processed_chunks) ||
+          result.processed_chunks <= 0
+        ) {
+          finish(
+            entry,
+            repairStatus(
+              "failed",
+              compactError({ code: "semantic_repair_no_progress" }),
+            ),
+          )
+        } else {
+          scheduleNext(entry)
+        }
       } else {
         finish(entry, repairStatus("complete"))
       }
@@ -179,6 +212,7 @@ export async function repairMissingVectorBatch({
 
   try {
     const startedAt = now()
+    let attemptedChunks = 0
     let processedChunks = 0
     let vectorsIndexed = 0
     let stoppedBy = signal?.aborted ? "cancelled" : null
@@ -263,13 +297,14 @@ export async function repairMissingVectorBatch({
         stoppedBy = "cancelled"
         break
       }
-      if (now() - startedAt >= batchMs) {
+      if (attemptedChunks > 0 && now() - startedAt >= batchMs) {
         stoppedBy = "time_limit"
         break
       }
 
       let result
       try {
+        attemptedChunks += 1
         result = await embedChunkDetailed(candidate.text, {
           ...(embed ?? {}),
           signal,
@@ -280,6 +315,11 @@ export async function repairMissingVectorBatch({
           break
         }
         throw error
+      }
+
+      if (signal?.aborted) {
+        stoppedBy = "cancelled"
+        break
       }
 
       if (result?.vector != null) {
@@ -370,10 +410,10 @@ function canonicalRoot(deskRoot) {
 }
 
 function compactError(error) {
-  return {
-    reason: String(error?.code ?? error?.reason ?? error?.name ?? "error"),
-    message: String(error?.message ?? error),
-  }
+  const key = [error?.code, error?.reason, error?.name].find(
+    (value) => typeof value === "string",
+  )
+  return { ...(SAFE_REPAIR_ERRORS.get(key) ?? GENERIC_REPAIR_ERROR) }
 }
 
 function embeddingUnavailableError(diagnostic) {

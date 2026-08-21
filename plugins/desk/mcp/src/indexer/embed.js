@@ -108,8 +108,16 @@ async function parseErrorMessage(response) {
   return response.statusText || `HTTP ${response.status}`
 }
 
-async function postEmbedding({ endpoint, model, text, fetchImpl, timeoutMs }) {
+async function postEmbedding({
+  endpoint,
+  model,
+  text,
+  fetchImpl,
+  timeoutMs,
+  signal,
+}) {
   let timeout = null
+  let removeExternalAbort = null
   const controller =
     typeof AbortController === "function" ? new AbortController() : null
   const request = {
@@ -118,14 +126,26 @@ async function postEmbedding({ endpoint, model, text, fetchImpl, timeoutMs }) {
     body: JSON.stringify({ model, prompt: text }),
   }
   if (controller) {
+    const abortFromExternal = () => controller.abort(signal?.reason)
+    if (signal?.aborted) {
+      abortFromExternal()
+    } else if (typeof signal?.addEventListener === "function") {
+      signal.addEventListener("abort", abortFromExternal, { once: true })
+      removeExternalAbort = () => {
+        signal.removeEventListener?.("abort", abortFromExternal)
+      }
+    }
     request.signal = controller.signal
     timeout = setTimeout(() => controller.abort(), timeoutMs)
+  } else if (signal) {
+    request.signal = signal
   }
 
   try {
     return await fetchImpl(endpoint, request)
   } finally {
     if (timeout) clearTimeout(timeout)
+    removeExternalAbort?.()
   }
 }
 
@@ -139,6 +159,7 @@ async function postEmbedding({ endpoint, model, text, fetchImpl, timeoutMs }) {
  * @param {string} [opts.model] — override the model name.
  * @param {number} [opts.timeoutMs] — per-endpoint timeout in milliseconds.
  * @param {typeof fetch} [opts.fetch] — injection point for tests.
+ * @param {AbortSignal} [opts.signal] — caller cancellation signal.
  * @returns {Promise<number[] | null>}
  */
 export async function embedChunk(text, opts = {}) {
@@ -181,6 +202,7 @@ export async function embedChunkDetailed(text, opts = {}) {
         text,
         fetchImpl,
         timeoutMs,
+        signal: opts.signal,
       })
     } catch (err) {
       lastDiagnostic = {
