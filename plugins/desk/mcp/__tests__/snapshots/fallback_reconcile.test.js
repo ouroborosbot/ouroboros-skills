@@ -146,6 +146,7 @@ function validManifest({
     artifact_source_scope_hash: SOURCE_SCOPE_HASH,
     document_tree_hash: documentTreeHash,
     discovery_grammar_version: DISCOVERY_GRAMMAR_VERSION,
+    represented_documents: [],
     included_pack_ids: ["desk-base-pack"],
     created_at: createdAt,
     artifact: {

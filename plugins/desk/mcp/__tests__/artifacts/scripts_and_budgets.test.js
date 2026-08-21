@@ -954,6 +954,88 @@ test("artifact builders reject stale discovery grammar DBs", async () => {
   }
 })
 
+test("artifact builders reject missing grammar metadata and stale document trees", async () => {
+  const deskRoot = makeTempDir("desk-artifact-scripts-stale-tree-desk-")
+  const pluginRoot = makeTempDir("desk-artifact-scripts-stale-tree-plugin-")
+  try {
+    writeApprovedPolicy(pluginRoot)
+    writeFile(
+      deskRoot,
+      path.join("trackA", "task-1", "task.md"),
+      "---\nstatus: processing\n---\nindexed artifact body",
+    )
+    await rebuildIndex(deskRoot, { skipEmbed: true })
+
+    const db = openDb(deskRoot)
+    try {
+      db.prepare("DELETE FROM meta WHERE key = 'discovery_grammar_version'").run()
+    } finally {
+      closeDb(db)
+    }
+    const missingGrammar = captureIo()
+    assert.equal(
+      await runVectorPackBuildCli({
+        argv: [
+          "--desk-root",
+          deskRoot,
+          "--plugin-root",
+          pluginRoot,
+          "--pack-id",
+          "missing-grammar-pack",
+          "--from-local-db",
+        ],
+        io: missingGrammar.io,
+      }),
+      1,
+    )
+    assert.match(
+      missingGrammar.stderr.join(""),
+      /discovery grammar version missing is stale.*desk_reindex/u,
+    )
+
+    const restoredDb = openDb(deskRoot)
+    try {
+      setMeta(restoredDb, "discovery_grammar_version", "2")
+    } finally {
+      closeDb(restoredDb)
+    }
+    writeFile(
+      deskRoot,
+      path.join("trackA", "reference.md"),
+      "newly discovered artifact document",
+    )
+
+    for (const [run, idFlag, id] of [
+      [runVectorPackBuildCli, "--pack-id", "stale-tree-pack"],
+      [runSnapshotBuildCli, "--snapshot-id", "stale-tree-snapshot"],
+    ]) {
+      const captured = captureIo()
+      assert.equal(
+        await run({
+          argv: [
+            "--desk-root",
+            deskRoot,
+            "--plugin-root",
+            pluginRoot,
+            idFlag,
+            id,
+            "--from-local-db",
+          ],
+          io: captured.io,
+        }),
+        1,
+      )
+      assert.match(
+        captured.stderr.join(""),
+        /document tree is stale.*desk_reindex/u,
+      )
+    }
+  } finally {
+    rmSync(deskRoot, { recursive: true, force: true })
+    rmSync(pluginRoot, { recursive: true, force: true })
+  }
+})
+
 test("artifact script CLIs cover help, usage errors, repeated args, and targeted snapshot verification", async () => {
   for (const [run, pattern] of [
     [runVectorPackBuildCli, /Build a Desk vector-pack artifact/u],
@@ -1044,7 +1126,14 @@ test("artifact script CLIs cover help, usage errors, repeated args, and targeted
     const directVerify = captureIo()
     assert.equal(
       await runSnapshotVerifyCli({
-        argv: ["--plugin-root", pluginRoot, "--snapshot-id", snapshotTarget.id],
+        argv: [
+          "--desk-root",
+          deskRoot,
+          "--plugin-root",
+          pluginRoot,
+          "--snapshot-id",
+          snapshotTarget.id,
+        ],
         io: directVerify.io,
       }),
       0,
@@ -1136,6 +1225,22 @@ test("artifact script CLIs cover help, usage errors, repeated args, and targeted
     const missingDocsVerifyBody = JSON.parse(missingDocsVerify.stdout.join(""))
     assert.equal(missingDocsVerifyBody.snapshot_id, snapshotTarget.id)
     assert.equal(missingDocsVerifyBody.freshness.document_tree, "stale")
+
+    const missingDocsAllVerify = captureIo()
+    assert.equal(
+      await runSnapshotVerifyCli({
+        argv: ["--plugin-root", pluginRoot],
+        io: missingDocsAllVerify.io,
+      }),
+      0,
+      missingDocsAllVerify.stderr.join(""),
+    )
+    assert.ok(
+      JSON.parse(missingDocsAllVerify.stdout.join(""))
+        .snapshots.artifacts.every(
+          (artifact) => artifact.freshness.document_tree === "stale",
+        ),
+    )
 
     const directValidate = captureIo()
     assert.equal(
