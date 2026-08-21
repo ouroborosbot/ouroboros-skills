@@ -449,6 +449,30 @@ test("canonical tombstone ledger and schema exist under plugin artifacts", async
   )
 })
 
+test("tombstone ledger fingerprints bind semantic rows, not file presence", async () => {
+  const {
+    loadTombstoneLedger,
+    tombstoneLedgerFingerprint,
+  } = await loadTombstonesModule()
+  const absentRoot = await tmpRoot("desk-tombstone-fingerprint-absent-")
+  const emptyRoot = await tmpRoot("desk-tombstone-fingerprint-empty-")
+  await writeRawTombstoneLedger(emptyRoot, "")
+
+  const absent = await loadTombstoneLedger({ pluginRoot: absentRoot })
+  const empty = await loadTombstoneLedger({ pluginRoot: emptyRoot })
+  const emptyFingerprint = `sha256:${createHash("sha256").digest("hex")}`
+  assert.equal(tombstoneLedgerFingerprint(absent), emptyFingerprint)
+  assert.equal(tombstoneLedgerFingerprint(empty), emptyFingerprint)
+
+  const row = tombstoneRow()
+  assert.equal(
+    tombstoneLedgerFingerprint({ valid: true, rows: [row] }),
+    sha256(`${JSON.stringify(row)}\0`),
+  )
+  assert.equal(tombstoneLedgerFingerprint(), null)
+  assert.equal(tombstoneLedgerFingerprint({ valid: true, rows: null }), null)
+})
+
 test("tombstone loader validates required row fields and repeated tombstones", async () => {
   const {
     loadTombstoneLedger,

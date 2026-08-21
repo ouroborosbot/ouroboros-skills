@@ -45,19 +45,30 @@ export function documentStatInventoryHash(docs) {
       typeof doc !== "object" ||
       Array.isArray(doc) ||
       typeof doc.path !== "string" ||
-      !Number.isFinite(doc.mtime)
+      !Number.isFinite(doc.mtime) ||
+      !Number.isFinite(doc.mtime_ms) ||
+      !Number.isFinite(doc.ctime_ms) ||
+      !Number.isFinite(doc.size)
     ) {
       return null
     }
     const path = canonicalDocumentPath(doc.path)
-    if (paths.has(path)) return null
+    if (!path || paths.has(path)) return null
     paths.add(path)
-    normalized.push({ path, mtime: Math.floor(doc.mtime) })
+    normalized.push({
+      path,
+      mtime: Math.floor(doc.mtime),
+      mtime_ms: doc.mtime_ms,
+      ctime_ms: doc.ctime_ms,
+      size: doc.size,
+    })
   }
   normalized.sort((left, right) => compareDocumentPaths(left.path, right.path))
   const hash = createHash("sha256")
   for (const doc of normalized) {
-    hash.update(`${doc.path}\0${doc.mtime}\0`)
+    hash.update(
+      `${doc.path}\0${doc.mtime}\0${doc.mtime_ms}\0${doc.ctime_ms}\0${doc.size}\0`,
+    )
   }
   return `sha256:${hash.digest("hex")}`
 }

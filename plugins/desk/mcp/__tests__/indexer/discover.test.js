@@ -9,7 +9,14 @@ import * as os from "node:os"
 import { promises as fs } from "node:fs"
 
 import { filterTombstonedDocuments } from "../../src/artifacts/tombstones.js"
-import { discover, classify, isIndexable, normalizeDate, stripPersonPrefix } from "../../src/indexer/discover.js"
+import {
+  classify,
+  discover,
+  discoverStatInventory,
+  isIndexable,
+  normalizeDate,
+  stripPersonPrefix,
+} from "../../src/indexer/discover.js"
 
 async function buildFixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-discover-"))
@@ -138,6 +145,122 @@ test("discover skips documents that become unreadable mid-walk", async (t) => {
   })
 
   assert.deepEqual(await discover(root), [])
+})
+
+test("discover retries a document that changes during its first read", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-discover-retry-"))
+  const docPath = path.join(root, "reference.md")
+  await fs.writeFile(docPath, "stable body", "utf8")
+  const stat = fs.stat.bind(fs)
+  let calls = 0
+  t.mock.method(fs, "stat", async (file, ...args) => {
+    const value = await stat(file, ...args)
+    if (file !== docPath) return value
+    calls += 1
+    if (calls !== 2) return value
+    return {
+      dev: value.dev,
+      ino: value.ino,
+      size: value.size,
+      mtimeMs: value.mtimeMs + 1,
+      ctimeMs: value.ctimeMs,
+    }
+  })
+
+  const docs = await discover(root)
+  assert.equal(calls, 4)
+  assert.equal(docs.length, 1)
+  assert.equal(docs[0].body, "stable body")
+})
+
+test("discover fails explicitly when a document keeps changing", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-discover-unstable-"))
+  const docPath = path.join(root, "reference.md")
+  await fs.writeFile(docPath, "unstable body", "utf8")
+  const stat = fs.stat.bind(fs)
+  let calls = 0
+  t.mock.method(fs, "stat", async (file, ...args) => {
+    const value = await stat(file, ...args)
+    if (file !== docPath) return value
+    calls += 1
+    return {
+      dev: value.dev,
+      ino: value.ino,
+      size: value.size,
+      mtimeMs: value.mtimeMs + (calls % 2 === 0 ? calls : 0),
+      ctimeMs: value.ctimeMs,
+    }
+  })
+
+  await assert.rejects(
+    discover(root),
+    (error) =>
+      error.code === "ERR_DESK_DISCOVERY_UNSTABLE" &&
+      error.message === "document changed repeatedly during discovery",
+  )
+})
+
+test("stat inventory uses the discovery exclusions without reading Markdown bodies", async (t) => {
+  const root = await buildFixture()
+  const readFile = fs.readFile.bind(fs)
+  t.mock.method(fs, "readFile", async (file, ...args) => {
+    if (String(file).endsWith(".md")) {
+      throw new Error("stat inventory must not read Markdown")
+    }
+    return readFile(file, ...args)
+  })
+
+  const inventory = await discoverStatInventory(root)
+  assert.ok(inventory.length > 0)
+  assert.deepEqual(
+    inventory.map((doc) => doc.path),
+    [...inventory].map((doc) => doc.path).sort((a, b) => a.localeCompare(b)),
+  )
+  assert.ok(inventory.every((doc) => Number.isInteger(doc.mtime)))
+  assert.ok(inventory.every((doc) => Number.isFinite(doc.mtime_ms)))
+  assert.ok(inventory.every((doc) => Number.isFinite(doc.ctime_ms)))
+  assert.ok(inventory.every((doc) => Number.isFinite(doc.size)))
+  assert.ok(inventory.some((doc) => doc.path === "references/guide.md"))
+  assert.ok(!inventory.some((doc) => doc.path.includes("node_modules")))
+  assert.ok(!inventory.some((doc) => doc.path.includes("_secrets")))
+  assert.ok(!inventory.some((doc) => doc.path === "task-link.md"))
+})
+
+test("stat inventory skips unreadable files", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-stat-inventory-"))
+  const docPath = path.join(root, "reference.md")
+  await fs.writeFile(docPath, "body", "utf8")
+  const stat = fs.stat.bind(fs)
+
+  t.mock.method(fs, "stat", async (file, ...args) => {
+    if (file === docPath) {
+      const error = new Error("unreadable")
+      error.code = "EACCES"
+      throw error
+    }
+    return stat(file, ...args)
+  })
+  assert.deepEqual(await discoverStatInventory(root), [])
+})
+
+test("stat inventory propagates aborts tripped during file metadata reads", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-stat-abort-"))
+  const docPath = path.join(root, "reference.md")
+  await fs.writeFile(docPath, "body", "utf8")
+  const controller = new AbortController()
+  const stat = fs.stat.bind(fs)
+  t.mock.method(fs, "stat", async (file, ...args) => {
+    const value = await stat(file, ...args)
+    if (file === docPath) controller.abort()
+    return value
+  })
+
+  await assert.rejects(
+    discoverStatInventory(root, { signal: controller.signal }),
+    (error) =>
+      error.name === "AbortError" &&
+      error.message === "operation aborted",
+  )
 })
 
 test("discover indexes malformed frontmatter with empty metadata", async () => {

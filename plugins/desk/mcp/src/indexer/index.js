@@ -693,11 +693,7 @@ export function isIndexedContentCurrent(
   return isFtsIndexCurrent(db) && isRefsGraphCurrent(db, docs)
 }
 
-export async function isIndexFresh(
-  deskRoot,
-  db,
-  { signal, tombstones, rebaseStatInventory = false } = {},
-) {
+export async function isIndexFresh(deskRoot, db, { signal, tombstones } = {}) {
   if (!isDiscoveryGrammarCurrent(db)) {
     forgetFreshIndex(deskRoot)
     return false
@@ -725,19 +721,11 @@ export async function isIndexFresh(
   const tombstoneMetadataDrift =
     getMeta(db, TOMBSTONE_LEDGER_META_KEY) !==
     tombstoneStatus.ledger_fingerprint
-  if (tombstoneMetadataDrift && !rebaseStatInventory) {
-    forgetFreshIndex(deskRoot)
-    return false
-  }
   const statInventoryHash = requiredStatInventoryHash(
     await discoverStatInventory(deskRoot, { signal }),
   )
   const statInventoryMetadataDrift =
     getMeta(db, STAT_INVENTORY_META_KEY) !== statInventoryHash
-  if (statInventoryMetadataDrift && !rebaseStatInventory) {
-    forgetFreshIndex(deskRoot)
-    return false
-  }
   if (
     !tombstoneMetadataDrift &&
     !statInventoryMetadataDrift &&
@@ -754,6 +742,7 @@ export async function isIndexFresh(
     docs: discovered,
   })
   const docs = tombstoneFilter.docs
+  const exactStatInventoryHash = requiredStatInventoryHash(discovered)
   if (!await isIndexedDocumentTreeCurrent(deskRoot, db, { signal, docs })) {
     forgetFreshIndex(deskRoot)
     return false
@@ -764,8 +753,11 @@ export async function isIndexFresh(
     return false
   }
   let ignoreWal = false
-  if (tombstoneMetadataDrift || statInventoryMetadataDrift) {
-    setMeta(db, STAT_INVENTORY_META_KEY, statInventoryHash)
+  if (
+    tombstoneMetadataDrift ||
+    getMeta(db, STAT_INVENTORY_META_KEY) !== exactStatInventoryHash
+  ) {
+    setMeta(db, STAT_INVENTORY_META_KEY, exactStatInventoryHash)
     setMeta(
       db,
       TOMBSTONE_LEDGER_META_KEY,
@@ -777,17 +769,17 @@ export async function isIndexFresh(
       checkpoint.log === checkpoint.checkpointed
   }
   await rememberFreshIndex(deskRoot, db, {
-    statInventoryHash,
+    statInventoryHash: exactStatInventoryHash,
     tombstoneLedgerFingerprint: tombstoneStatus.ledger_fingerprint,
     ignoreWal,
   })
   return true
 }
 
-function requiredStatInventoryHash(docs) {
+export function requiredStatInventoryHash(docs) {
   const hash = documentStatInventoryHash(docs)
   if (hash === null) {
-    throw new TypeError("document stat inventory requires unique path/mtime entries")
+    throw new TypeError("document stat inventory requires unique path/stat entries")
   }
   return hash
 }
@@ -853,7 +845,7 @@ async function fileStatFingerprint(filePath) {
   return statFingerprint(stat)
 }
 
-async function fileStatOrNull(filePath) {
+export async function fileStatOrNull(filePath) {
   try {
     return await fs.stat(filePath, { bigint: true })
   } catch (error) {

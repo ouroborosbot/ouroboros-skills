@@ -107,7 +107,6 @@ export async function ensureIndex(deskRoot, opts = {}) {
       const fresh = await isIndexFresh(deskRoot, db, {
         signal: effectiveOpts.signal,
         tombstones: effectiveOpts.tombstones,
-        rebaseStatInventory: rebaseRestoredSnapshot,
       })
       if (fresh && !snapshotNeedsReconcile(snapshot)) {
         const repair = await maybeRepairMissingEmbeddings(

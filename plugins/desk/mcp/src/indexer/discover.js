@@ -219,13 +219,25 @@ async function describeDoc(deskRoot, abs, rel, signal) {
   let raw
   let stat
   try {
-    raw = await fs.readFile(abs, "utf8")
-    throwIfAborted(signal)
-    stat = await fs.stat(abs)
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const before = await fs.stat(abs)
+      raw = await fs.readFile(abs, "utf8")
+      throwIfAborted(signal)
+      const after = await fs.stat(abs)
+      if (sameStatSnapshot(before, after)) {
+        stat = after
+        break
+      }
+    }
   } catch (err) {
     if (err.name === "AbortError") throw err
     // File vanished or unreadable mid-walk; skip silently.
     return null
+  }
+  if (!stat) {
+    const err = new Error("document changed repeatedly during discovery")
+    err.code = "ERR_DESK_DISCOVERY_UNSTABLE"
+    throw err
   }
 
   throwIfAborted(signal)
@@ -261,6 +273,9 @@ async function describeDoc(deskRoot, abs, rel, signal) {
     updated_at: normalizeDate(fm.updated ?? fm.updated_at ?? null),
     hash,
     mtime: Math.floor(stat.mtimeMs),
+    mtime_ms: stat.mtimeMs,
+    ctime_ms: stat.ctimeMs,
+    size: stat.size,
     is_archived,
     frontmatter: fm,
     body,
@@ -276,11 +291,22 @@ async function describeStat(_deskRoot, abs, rel, signal) {
     return {
       path: rel,
       mtime: Math.floor(stat.mtimeMs),
+      mtime_ms: stat.mtimeMs,
+      ctime_ms: stat.ctimeMs,
+      size: stat.size,
     }
   } catch (err) {
     if (err.name === "AbortError") throw err
     return null
   }
+}
+
+function sameStatSnapshot(left, right) {
+  return left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
 }
 
 function throwIfAborted(signal) {
