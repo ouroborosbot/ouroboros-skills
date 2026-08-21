@@ -655,6 +655,7 @@ test("production verifier propagates validator freshness for vector packs and sn
               freshness: {
                 artifact_source_scope: "stale",
                 document_tree: "stale",
+                discovery_grammar: "stale",
               },
             }],
           },
@@ -665,6 +666,7 @@ test("production verifier propagates validator freshness for vector packs and sn
               freshness: {
                 artifact_source_scope: "stale",
                 document_tree: "stale",
+                discovery_grammar: "stale",
               },
             }],
           },
@@ -707,8 +709,10 @@ test("production verifier propagates validator freshness for vector packs and sn
     assert.equal(result.ok, false)
     assert.match(result.errors.join("\n"), /production vector pack unit-pack artifact_source_scope_hash is stale/u)
     assert.match(result.errors.join("\n"), /production vector pack unit-pack document_tree_hash is stale/u)
+    assert.match(result.errors.join("\n"), /production vector pack unit-pack discovery_grammar_version is stale/u)
     assert.match(result.errors.join("\n"), /production snapshot unit-snapshot artifact_source_scope_hash is stale/u)
     assert.match(result.errors.join("\n"), /production snapshot unit-snapshot document_tree_hash is stale/u)
+    assert.match(result.errors.join("\n"), /production snapshot unit-snapshot discovery_grammar_version is stale/u)
   } finally {
     rmSync(tempDir, { recursive: true, force: true })
   }

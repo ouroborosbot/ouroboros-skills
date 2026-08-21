@@ -1057,6 +1057,18 @@ test("artifact script CLIs cover help, usage errors, repeated args, and targeted
         },
       )
     }
+    rewriteJson(
+      path.join(
+        pluginRoot,
+        "artifacts",
+        "vector-packs",
+        ACTIVE_EMBEDDING_SPEC.id,
+        `${nextPackId}.manifest.json`,
+      ),
+      (body) => {
+        delete body.represented_documents
+      },
+    )
 
     const missingDocsVerify = captureIo()
     assert.equal(
@@ -1088,6 +1100,12 @@ test("artifact script CLIs cover help, usage errors, repeated args, and targeted
     const directValidateBody = JSON.parse(directValidate.stdout.join(""))
     assert.equal(directValidateBody.vector_packs.count, 2)
     assert.equal(directValidateBody.snapshots.count, 2)
+    assert.equal(
+      directValidateBody.vector_packs.artifacts.find(
+        (artifact) => artifact.pack_id === nextPackId,
+      ).freshness.document_tree,
+      "stale",
+    )
 
     const emptyPluginRoot = makeTempDir("desk-artifact-scripts-empty-plugin-")
     try {

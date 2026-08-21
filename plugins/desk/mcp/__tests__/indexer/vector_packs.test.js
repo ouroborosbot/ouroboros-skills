@@ -433,6 +433,37 @@ test("older vector-pack grammar versions report stale freshness", async () => {
   })
 })
 
+test("vector-pack document-tree drift reports stale freshness", async () => {
+  const { validateVectorPackFile } = await loadVectorPackModule()
+  const root = await tmpRoot()
+  const pluginRoot = path.join(root, "plugins", "desk")
+  const identity = chunkIdentity({
+    docPath: "trackA/task-1/task.md",
+    chunk: { text: "stale document tree vector chunk" },
+  })
+  const paths = await writePack({
+    pluginRoot,
+    packId: "stale-document-tree-pack",
+    rows: [rowFor(identity)],
+    manifest: {
+      document_tree_hash: `sha256:${"b".repeat(64)}`,
+    },
+  })
+
+  const result = await validateVectorPackFile({
+    pluginRoot,
+    packPath: paths.packPath,
+    manifestPath: paths.manifestPath,
+    checksumPath: paths.checksumPath,
+    expectedSpec: ACTIVE_EMBEDDING_SPEC,
+    expectedDocumentTreeHash: `sha256:${"c".repeat(64)}`,
+  })
+
+  assert.deepEqual(result.freshness, {
+    document_tree: "stale",
+  })
+})
+
 test("vector pack validation rejects wrong specs, dimensions, hashes, and malformed vectors", async () => {
   const { validateVectorPackFile } = await loadVectorPackModule()
   const root = await tmpRoot()

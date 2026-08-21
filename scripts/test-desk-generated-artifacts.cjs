@@ -520,6 +520,12 @@ function propagateValidationFreshness({ artifacts, errors, idField, label }) {
     if (artifact.freshness.document_tree !== "fresh") {
       errors.push(`${label} ${artifactId} document_tree_hash is stale`);
     }
+    if (
+      artifact.freshness.discovery_grammar !== undefined &&
+      artifact.freshness.discovery_grammar !== "fresh"
+    ) {
+      errors.push(`${label} ${artifactId} discovery_grammar_version is stale`);
+    }
   }
 }
 

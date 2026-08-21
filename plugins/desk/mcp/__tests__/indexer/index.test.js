@@ -444,6 +444,12 @@ test("isIndexFresh rejects missing and stale discovery grammar metadata", async 
     setMeta(db, "discovery_grammar_version", "1")
     assert.equal(await isIndexFresh(root, db), false)
 
+    setMeta(db, "discovery_grammar_version", "not-a-version")
+    assert.equal(await isIndexFresh(root, db), false)
+
+    setMeta(db, "discovery_grammar_version", "3")
+    assert.equal(await isIndexFresh(root, db), false)
+
     setMeta(db, "discovery_grammar_version", "2")
     assert.equal(await isIndexFresh(root, db), true)
   } finally {
