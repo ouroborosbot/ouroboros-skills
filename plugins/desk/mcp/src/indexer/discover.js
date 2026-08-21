@@ -1,12 +1,6 @@
 // discover.js — walk a desk root and enumerate the .md files that get indexed.
 //
-// Per planning Unit 4 + desk-search-design §2 + 1.1 archive-search amendment:
-//   In scope: task.md, planning.md, doing.md, feedback.md, friction notes
-//             (cross-cutting at _meta/friction.md + track-local under
-//             _friction/*.md), lesson notes at _meta/tips/*.md. Docs under
-//             any _archive/ ancestor ARE indexed too, but flagged
-//             `is_archived: true` so search tools can scope them in or out.
-//   Skipped: node_modules/, .state/, .git/, and .bak files.
+// Every allowed Markdown file is in scope after gitignore, sensitive-path, hidden-path, node_modules, .state, .git, and .bak exclusions. Specialized path shapes keep stable kinds; unmatched Markdown is indexed as reference. Docs under any _archive/ ancestor are indexed but flagged `is_archived: true` so search tools can scope them in or out.
 //
 // 1.1 rationale: archive = preserve for future recall, not delete. The
 // reason we move things to _archive/ is precisely so we can come back to
@@ -135,8 +129,7 @@ function shouldSkipDirectory(relPath, rules) {
 }
 
 /**
- * Decide whether a relative path is one of the doc shapes we index. Exposed
- * for tests.
+ * Decide whether a relative path is Markdown that can be indexed. Exposed for tests. Filesystem/privacy exclusions run before this function.
  *
  * 1.1 amendment: any `.md` file under any `_archive/` ancestor is indexable
  * regardless of basename. Migrated archive content preserves legacy filenames
@@ -196,7 +189,7 @@ export function isIndexable(relPath) {
     return true
   }
 
-  return false
+  return base.endsWith(".md")
 }
 
 /**
@@ -231,6 +224,10 @@ export function classify(relPath) {
     return { kind: base.replace(/\.md$/, ""), track: null, task_slug: null }
   }
 
+  if (base === "track.md" && segments.length === 2) {
+    return { kind: "track", track: segments[0], task_slug: null }
+  }
+
   // 1.1: archived legacy filenames. Infer kind from the basename pattern
   // (`<date>-planning-<topic>.md`, `<date>-doing-<topic>.md`); fall back to
   // `archive` for anything else.
@@ -260,7 +257,7 @@ export function classify(relPath) {
     return { kind: "friction", track: segments[0], task_slug: null }
   }
 
-  return { kind: "other", track: null, task_slug: null }
+  return { kind: "reference", track: null, task_slug: null }
 }
 
 async function describeDoc(deskRoot, abs, rel, signal) {

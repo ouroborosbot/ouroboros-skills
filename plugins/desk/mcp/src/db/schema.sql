@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE TABLE IF NOT EXISTS docs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   path TEXT NOT NULL UNIQUE,                -- relative to deskRoot
-  kind TEXT NOT NULL,                       -- task | planning | doing | feedback | friction | lesson | other
+  kind TEXT NOT NULL,                       -- task | track | planning | doing | feedback | friction | lesson | shared | archive | reference
   track TEXT,                               -- nullable; null for top-level _meta/ docs
   task_slug TEXT,                           -- nullable; null for non-task docs
   status TEXT,                              -- task status field (null for non-task)
