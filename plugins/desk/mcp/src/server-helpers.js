@@ -9,7 +9,11 @@ import { existsSync, readFileSync, readdirSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { closeDb, getMeta, indexDbPath, openDb, setMeta } from "./db/init.js"
-import { DISCOVERY_GRAMMAR_VERSION, discover } from "./indexer/discover.js"
+import {
+  DISCOVERY_GRAMMAR_VERSION,
+  discover,
+  discoverStatInventory,
+} from "./indexer/discover.js"
 import { documentTreeHash } from "./indexer/document-tree.js"
 import {
   isIndexFresh,
@@ -92,12 +96,18 @@ export async function ensureIndex(deskRoot, opts = {}) {
   throwIfAborted(effectiveOpts.signal)
   const db = openDb(deskRoot)
   try {
+    const rebaseRestoredSnapshot =
+      snapshot?.restored && !snapshotNeedsReconcile(snapshot)
+    if (rebaseRestoredSnapshot) {
+      await markRestoredSnapshotFresh(deskRoot, db, effectiveOpts.signal)
+    }
     const semanticBefore = getSemanticCoverage(db)
     let repairMissing = false
     if (dbExisted) {
       const fresh = await isIndexFresh(deskRoot, db, {
         signal: effectiveOpts.signal,
         tombstones: effectiveOpts.tombstones,
+        rebaseStatInventory: rebaseRestoredSnapshot,
       })
       if (fresh && !snapshotNeedsReconcile(snapshot)) {
         const repair = await maybeRepairMissingEmbeddings(
@@ -114,7 +124,6 @@ export async function ensureIndex(deskRoot, opts = {}) {
           semanticBefore.embedding_available = true
         }
         if (snapshot?.restored) {
-          await markRestoredSnapshotFresh(deskRoot, db, effectiveOpts.signal)
           return withSnapshot(
             { built: false, reason: "snapshot_restored", semantic: semanticBefore },
             snapshot,
@@ -316,7 +325,7 @@ async function currentDocumentTreeHash(deskRoot, pluginRoot, signal) {
 }
 
 async function markRestoredSnapshotFresh(deskRoot, db, signal) {
-  const docs = await discover(deskRoot, { signal })
+  const docs = await discoverStatInventory(deskRoot, { signal })
   const newestDocMtime = docs.reduce((max, doc) => Math.max(max, doc.mtime), 0)
   const indexedAtMs = Math.max(Date.now(), newestDocMtime)
   setMeta(db, "last_indexed_at", new Date(indexedAtMs).toISOString())

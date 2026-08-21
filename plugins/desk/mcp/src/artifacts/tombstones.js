@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs"
+import { createHash } from "node:crypto"
 import * as path from "node:path"
 import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 
@@ -140,8 +141,13 @@ export function tombstoneDecisionForDoc({ ledger, doc } = {}) {
 
 export async function filterTombstonedDocuments({ pluginRoot, docs = [] } = {}) {
   const ledger = await validTombstoneLedger({ pluginRoot })
+  const ledgerFingerprint = tombstoneLedgerFingerprint(ledger)
   if (!ledger.present) {
-    return { docs: [...docs], tombstoned_count: 0 }
+    return {
+      docs: [...docs],
+      tombstoned_count: 0,
+      ledger_fingerprint: ledgerFingerprint,
+    }
   }
 
   const kept = []
@@ -154,7 +160,11 @@ export async function filterTombstonedDocuments({ pluginRoot, docs = [] } = {}) 
       kept.push(doc)
     }
   }
-  return { docs: kept, tombstoned_count: tombstonedCount }
+  return {
+    docs: kept,
+    tombstoned_count: tombstonedCount,
+    ledger_fingerprint: ledgerFingerprint,
+  }
 }
 
 export async function tombstoneStatusForDocuments({ pluginRoot, docs = [] } = {}) {
@@ -162,7 +172,17 @@ export async function tombstoneStatusForDocuments({ pluginRoot, docs = [] } = {}
   return {
     tombstoned: filtered.tombstoned_count > 0,
     tombstoned_count: filtered.tombstoned_count,
+    ledger_fingerprint: filtered.ledger_fingerprint,
   }
+}
+
+export function tombstoneLedgerFingerprint(ledger) {
+  if (!ledger?.valid || !Array.isArray(ledger.rows)) return null
+  const hash = createHash("sha256")
+  for (const row of ledger.rows) {
+    hash.update(`${JSON.stringify(row)}\0`)
+  }
+  return `sha256:${hash.digest("hex")}`
 }
 
 export async function assertArtifactDoesNotRepresentTombstones({

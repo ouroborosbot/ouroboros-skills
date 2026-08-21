@@ -75,17 +75,24 @@ export function stripPersonPrefix(relPath) {
  *                    hash, mtime, frontmatter, body }
  */
 export async function discover(deskRoot, { signal } = {}) {
+  return collectDocuments(deskRoot, describeDoc, { signal })
+}
+
+export async function discoverStatInventory(deskRoot, { signal } = {}) {
+  return collectDocuments(deskRoot, describeStat, { signal })
+}
+
+async function collectDocuments(deskRoot, describe, { signal } = {}) {
   throwIfAborted(signal)
   const results = []
   const exclusionRules = await loadExclusionRules({ deskRoot })
-  await walk(deskRoot, deskRoot, results, signal, exclusionRules)
+  await walk(deskRoot, deskRoot, results, signal, exclusionRules, describe)
   throwIfAborted(signal)
-  // Stable ordering — easier to reason about in tests and in CLI output.
   results.sort((a, b) => a.path.localeCompare(b.path))
   return results
 }
 
-async function walk(deskRoot, dir, out, signal, exclusionRules) {
+async function walk(deskRoot, dir, out, signal, exclusionRules, describe) {
   throwIfAborted(signal)
   let entries
   try {
@@ -106,7 +113,7 @@ async function walk(deskRoot, dir, out, signal, exclusionRules) {
       const sub = path.join(dir, name)
       const relDir = canonicalDocumentPath(path.relative(deskRoot, sub))
       if (shouldSkipDirectory(relDir, exclusionRules)) continue
-      await walk(deskRoot, sub, out, signal, exclusionRules)
+      await walk(deskRoot, sub, out, signal, exclusionRules, describe)
       continue
     }
     if (!ent.isFile()) continue
@@ -117,7 +124,7 @@ async function walk(deskRoot, dir, out, signal, exclusionRules) {
     const rel = canonicalDocumentPath(path.relative(deskRoot, abs))
     if (isExcluded(rel, exclusionRules)) continue
 
-    const desc = await describeDoc(deskRoot, abs, rel, signal)
+    const desc = await describe(deskRoot, abs, rel, signal)
     if (desc) out.push(desc)
   }
 }
@@ -220,6 +227,7 @@ async function describeDoc(deskRoot, abs, rel, signal) {
     // File vanished or unreadable mid-walk; skip silently.
     return null
   }
+
   throwIfAborted(signal)
   let parsed
   try {
@@ -257,6 +265,21 @@ async function describeDoc(deskRoot, abs, rel, signal) {
     frontmatter: fm,
     body,
     raw,
+  }
+}
+
+async function describeStat(_deskRoot, abs, rel, signal) {
+  throwIfAborted(signal)
+  try {
+    const stat = await fs.stat(abs)
+    throwIfAborted(signal)
+    return {
+      path: rel,
+      mtime: Math.floor(stat.mtimeMs),
+    }
+  } catch (err) {
+    if (err.name === "AbortError") throw err
+    return null
   }
 }
 

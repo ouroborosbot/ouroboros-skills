@@ -8,15 +8,21 @@
 // for new chunks are left absent so semantic search degrades gracefully.
 
 import { promises as fs } from "node:fs"
+import * as path from "node:path"
 import { openDb, closeDb, getMeta, setMeta } from "../db/init.js"
 import {
   filterTombstonedDocuments,
   tombstoneStatusForDocuments,
 } from "../artifacts/tombstones.js"
-import { DISCOVERY_GRAMMAR_VERSION, discover } from "./discover.js"
+import {
+  DISCOVERY_GRAMMAR_VERSION,
+  discover,
+  discoverStatInventory,
+} from "./discover.js"
 import { chunkBody } from "./chunk.js"
 import {
   canonicalDocumentPath,
+  documentStatInventoryHash,
   documentTreesEqual,
 } from "./document-tree.js"
 import {
@@ -33,6 +39,9 @@ import {
 import { importVectorPacks } from "./vector-packs.js"
 
 const SQLITE_PARAMETER_BATCH_SIZE = 500
+const STAT_INVENTORY_META_KEY = "document_stat_inventory_hash"
+const TOMBSTONE_LEDGER_META_KEY = "tombstone_ledger_fingerprint"
+const freshIndexCache = new Map()
 const ACTIVE_CHUNK_FAILURE_JOIN = `
   f.chunk_key = c.chunk_key AND
   f.text_hash = c.text_hash AND
@@ -62,6 +71,7 @@ const ACTIVE_CHUNK_FAILURE_JOIN = `
  *                     semantic_warnings: number }>}
  */
 export async function rebuildIndex(deskRoot, opts = {}) {
+  forgetFreshIndex(deskRoot)
   const ownsDb = !opts.db
   const db = opts.db ?? openDb(deskRoot, { dbPath: opts.dbPath })
 
@@ -172,9 +182,27 @@ export async function rebuildIndex(deskRoot, opts = {}) {
     repairFtsIndex(db)
 
     setMeta(db, "discovery_grammar_version", String(DISCOVERY_GRAMMAR_VERSION))
+    setMeta(
+      db,
+      STAT_INVENTORY_META_KEY,
+      requiredStatInventoryHash(discoveredRaw),
+    )
+    setMeta(
+      db,
+      TOMBSTONE_LEDGER_META_KEY,
+      tombstoneFilter.ledger_fingerprint,
+    )
     setMeta(db, "last_indexed_at", new Date().toISOString())
     setMeta(db, "embedding_dim", String(EMBEDDING_DIM))
     setMeta(db, "embedding_model", opts.embed?.model ?? "nomic-embed-text")
+    const checkpoint = db.pragma("wal_checkpoint(PASSIVE)")[0]
+    await rememberFreshIndex(deskRoot, db, {
+      statInventoryHash: requiredStatInventoryHash(discoveredRaw),
+      tombstoneLedgerFingerprint: tombstoneFilter.ledger_fingerprint,
+      ignoreWal:
+        checkpoint.busy === 0 &&
+        checkpoint.log === checkpoint.checkpointed,
+    })
   } finally {
     if (ownsDb) closeDb(db)
   }
@@ -665,19 +693,61 @@ export function isIndexedContentCurrent(
   return isFtsIndexCurrent(db) && isRefsGraphCurrent(db, docs)
 }
 
-export async function isIndexFresh(deskRoot, db, { signal, tombstones } = {}) {
-  if (!isDiscoveryGrammarCurrent(db)) return false
+export async function isIndexFresh(
+  deskRoot,
+  db,
+  { signal, tombstones, rebaseStatInventory = false } = {},
+) {
+  if (!isDiscoveryGrammarCurrent(db)) {
+    forgetFreshIndex(deskRoot)
+    return false
+  }
   const row = db
     .prepare("SELECT value FROM meta WHERE key = 'last_indexed_at'")
     .get()
-  if (!row) return false
+  if (!row) {
+    forgetFreshIndex(deskRoot)
+    return false
+  }
   const indexedMs = Date.parse(row.value)
-  if (Number.isNaN(indexedMs)) return false
+  if (Number.isNaN(indexedMs)) {
+    forgetFreshIndex(deskRoot)
+    return false
+  }
   const tombstoneStatus = await tombstoneStatusForDocuments({
     pluginRoot: tombstones?.pluginRoot,
     docs: db.prepare("SELECT path, hash FROM docs").all(),
   })
-  if (tombstoneStatus.tombstoned) return false
+  if (tombstoneStatus.tombstoned) {
+    forgetFreshIndex(deskRoot)
+    return false
+  }
+  const tombstoneMetadataDrift =
+    getMeta(db, TOMBSTONE_LEDGER_META_KEY) !==
+    tombstoneStatus.ledger_fingerprint
+  if (tombstoneMetadataDrift && !rebaseStatInventory) {
+    forgetFreshIndex(deskRoot)
+    return false
+  }
+  const statInventoryHash = requiredStatInventoryHash(
+    await discoverStatInventory(deskRoot, { signal }),
+  )
+  const statInventoryMetadataDrift =
+    getMeta(db, STAT_INVENTORY_META_KEY) !== statInventoryHash
+  if (statInventoryMetadataDrift && !rebaseStatInventory) {
+    forgetFreshIndex(deskRoot)
+    return false
+  }
+  if (
+    !tombstoneMetadataDrift &&
+    !statInventoryMetadataDrift &&
+    await hasFreshIndexCache(deskRoot, db, {
+      statInventoryHash,
+      tombstoneLedgerFingerprint: tombstoneStatus.ledger_fingerprint,
+    })
+  ) {
+    return true
+  }
   const discovered = await discover(deskRoot, { signal })
   const tombstoneFilter = await filterTombstonedDocuments({
     pluginRoot: tombstones?.pluginRoot,
@@ -685,7 +755,119 @@ export async function isIndexFresh(deskRoot, db, { signal, tombstones } = {}) {
   })
   const docs = tombstoneFilter.docs
   if (!await isIndexedDocumentTreeCurrent(deskRoot, db, { signal, docs })) {
+    forgetFreshIndex(deskRoot)
     return false
   }
-  return isIndexedContentCurrent(db, docs, { signal })
+  const fresh = isIndexedContentCurrent(db, docs, { signal })
+  if (!fresh) {
+    forgetFreshIndex(deskRoot)
+    return false
+  }
+  let ignoreWal = false
+  if (tombstoneMetadataDrift || statInventoryMetadataDrift) {
+    setMeta(db, STAT_INVENTORY_META_KEY, statInventoryHash)
+    setMeta(
+      db,
+      TOMBSTONE_LEDGER_META_KEY,
+      tombstoneStatus.ledger_fingerprint,
+    )
+    const checkpoint = db.pragma("wal_checkpoint(PASSIVE)")[0]
+    ignoreWal =
+      checkpoint.busy === 0 &&
+      checkpoint.log === checkpoint.checkpointed
+  }
+  await rememberFreshIndex(deskRoot, db, {
+    statInventoryHash,
+    tombstoneLedgerFingerprint: tombstoneStatus.ledger_fingerprint,
+    ignoreWal,
+  })
+  return true
+}
+
+function requiredStatInventoryHash(docs) {
+  const hash = documentStatInventoryHash(docs)
+  if (hash === null) {
+    throw new TypeError("document stat inventory requires unique path/mtime entries")
+  }
+  return hash
+}
+
+async function hasFreshIndexCache(
+  deskRoot,
+  db,
+  { statInventoryHash, tombstoneLedgerFingerprint },
+) {
+  const key = path.resolve(deskRoot)
+  const cached = freshIndexCache.get(key)
+  if (
+    !cached ||
+    cached.statInventoryHash !== statInventoryHash ||
+    cached.tombstoneLedgerFingerprint !== tombstoneLedgerFingerprint
+  ) {
+    return false
+  }
+  const storageFingerprint = await indexStorageFingerprint(db.name)
+  if (cached.storageFingerprint !== storageFingerprint) {
+    freshIndexCache.delete(key)
+    return false
+  }
+  return true
+}
+
+async function rememberFreshIndex(
+  deskRoot,
+  db,
+  {
+    statInventoryHash,
+    tombstoneLedgerFingerprint,
+    ignoreWal = false,
+  },
+) {
+  freshIndexCache.set(path.resolve(deskRoot), {
+    statInventoryHash,
+    tombstoneLedgerFingerprint,
+    storageFingerprint: await indexStorageFingerprint(db.name, { ignoreWal }),
+  })
+}
+
+function forgetFreshIndex(deskRoot) {
+  freshIndexCache.delete(path.resolve(deskRoot))
+}
+
+async function indexStorageFingerprint(dbPath, { ignoreWal = false } = {}) {
+  const main = await fileStatFingerprint(dbPath)
+  const wal = ignoreWal
+    ? "empty"
+    : await nonEmptyWalFingerprint(`${dbPath}-wal`)
+  return `${main}\0${wal}`
+}
+
+async function nonEmptyWalFingerprint(walPath) {
+  const stat = await fileStatOrNull(walPath)
+  if (!stat || stat.size === 0n) return "empty"
+  return statFingerprint(stat)
+}
+
+async function fileStatFingerprint(filePath) {
+  const stat = await fs.stat(filePath, { bigint: true })
+  return statFingerprint(stat)
+}
+
+async function fileStatOrNull(filePath) {
+  try {
+    return await fs.stat(filePath, { bigint: true })
+  } catch (error) {
+    if (error.code === "ENOENT") return null
+    throw error
+  }
+}
+
+function statFingerprint(stat) {
+  return [
+    stat.dev,
+    stat.ino,
+    stat.size,
+    stat.mtimeNs,
+    stat.ctimeNs,
+  ].join(":")
 }

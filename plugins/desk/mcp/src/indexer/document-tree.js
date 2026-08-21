@@ -35,6 +35,33 @@ export function documentTreeHash(docs) {
   return hash
 }
 
+export function documentStatInventoryHash(docs) {
+  if (!Array.isArray(docs)) return null
+  const normalized = []
+  const paths = new Set()
+  for (const doc of docs) {
+    if (
+      !doc ||
+      typeof doc !== "object" ||
+      Array.isArray(doc) ||
+      typeof doc.path !== "string" ||
+      !Number.isFinite(doc.mtime)
+    ) {
+      return null
+    }
+    const path = canonicalDocumentPath(doc.path)
+    if (paths.has(path)) return null
+    paths.add(path)
+    normalized.push({ path, mtime: Math.floor(doc.mtime) })
+  }
+  normalized.sort((left, right) => compareDocumentPaths(left.path, right.path))
+  const hash = createHash("sha256")
+  for (const doc of normalized) {
+    hash.update(`${doc.path}\0${doc.mtime}\0`)
+  }
+  return `sha256:${hash.digest("hex")}`
+}
+
 export function documentTreesEqual(leftDocs, rightDocs) {
   const left = documentMap(leftDocs)
   const right = documentMap(rightDocs)
