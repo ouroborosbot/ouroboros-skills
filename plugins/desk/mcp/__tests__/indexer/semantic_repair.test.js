@@ -173,8 +173,8 @@ test("semantic repair runs different roots independently", async () => {
   const started = []
   const gates = new Map()
   const coordinator = createSemanticRepairCoordinator({
-    repairBatch: ({ deskRoot }) => new Promise((resolve) => {
-      started.push(deskRoot)
+    repairBatch: ({ deskRoot, batchChunks, batchMs }) => new Promise((resolve) => {
+      started.push({ deskRoot, batchChunks, batchMs })
       gates.set(deskRoot, resolve)
     }),
     schedule: scheduler.schedule,
@@ -190,7 +190,10 @@ test("semantic repair runs different roots independently", async () => {
   const batchB = scheduler.runNext()
   await Promise.resolve()
 
-  assert.deepEqual(started.sort(), [rootA, rootB])
+  assert.deepEqual(started, [
+    { deskRoot: rootA, batchChunks: 100, batchMs: 5000 },
+    { deskRoot: rootB, batchChunks: 100, batchMs: 5000 },
+  ])
   gates.get(rootA)({ processed_chunks: 1, remaining_chunks: 0 })
   gates.get(rootB)({ processed_chunks: 1, remaining_chunks: 0 })
   await Promise.all([batchA, batchB])
@@ -201,23 +204,31 @@ test("semantic repair runs different roots independently", async () => {
 test("semantic repair schedules every batch at zero delay on an unref'ed timer", async () => {
   const { createSemanticRepairCoordinator } = await loadSemanticRepair()
   const scheduler = createManualScheduler()
-  let batches = 0
+  const batches = []
+  const root = path.resolve("/tmp/desk-root")
   const coordinator = createSemanticRepairCoordinator({
-    repairBatch: async () => {
-      batches += 1
+    repairBatch: async ({ deskRoot, batchChunks, batchMs }) => {
+      batches.push({ deskRoot, batchChunks, batchMs })
       return {
         processed_chunks: 1,
-        remaining_chunks: batches === 1 ? 1 : 0,
+        remaining_chunks: batches.length === 1 ? 1 : 0,
       }
     },
     schedule: scheduler.schedule,
     clearScheduled: scheduler.clearScheduled,
   })
 
-  const repair = coordinator.start({ deskRoot: "/tmp/desk-root" })
+  const repair = coordinator.start({
+    deskRoot: root,
+    batchChunks: 7,
+    batchMs: 250,
+  })
   await scheduler.drain()
   assert.equal((await repair).state, "complete")
-  assert.equal(batches, 2)
+  assert.deepEqual(batches, [
+    { deskRoot: root, batchChunks: 7, batchMs: 250 },
+    { deskRoot: root, batchChunks: 7, batchMs: 250 },
+  ])
   assert.deepEqual(
     scheduler.scheduled.map(({ delay, handle }) => ({
       delay,
