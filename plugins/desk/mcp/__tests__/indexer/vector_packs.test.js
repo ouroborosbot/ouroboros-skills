@@ -859,6 +859,79 @@ test("vector pack import is idempotent and deduplicates repeated chunk keys acro
   }
 })
 
+test("vector pack import skips stale source, document tree, and grammar artifacts", async () => {
+  const { importVectorPacks } = await loadVectorPackModule()
+  const root = await tmpRoot()
+  const pluginRoot = path.join(root, "plugins", "desk")
+  const deskRoot = path.join(root, "desk")
+  const db = openDb(deskRoot)
+  try {
+    const current = insertChunk(db, {
+      docPath: "trackA/task-1/task.md",
+      text: "current semantic chunk",
+      chunkIndex: 0,
+    })
+    const representedDocuments = [{
+      path: "trackA/task-1/task.md",
+      hash: `sha256:${"1".repeat(64)}`,
+    }]
+    const currentTreeHash = representedDocumentsHash(representedDocuments)
+    const staleDocuments = [{
+      path: "trackA/task-old/task.md",
+      hash: `sha256:${"2".repeat(64)}`,
+    }]
+
+    await writePack({
+      pluginRoot,
+      packId: "stale-source",
+      rows: [rowFor(current.identity, 1)],
+      manifest: {
+        artifact_source_scope_hash: `sha256:${"f".repeat(64)}`,
+        document_tree_hash: currentTreeHash,
+        discovery_grammar_version: DISCOVERY_GRAMMAR_VERSION,
+        represented_documents: representedDocuments,
+      },
+    })
+    await writePack({
+      pluginRoot,
+      packId: "stale-tree",
+      rows: [rowFor(current.identity, 2)],
+      manifest: {
+        artifact_source_scope_hash: SOURCE_SCOPE_HASH,
+        document_tree_hash: representedDocumentsHash(staleDocuments),
+        discovery_grammar_version: DISCOVERY_GRAMMAR_VERSION,
+        represented_documents: staleDocuments,
+      },
+    })
+    await writePack({
+      pluginRoot,
+      packId: "stale-grammar",
+      rows: [rowFor(current.identity, 3)],
+      manifest: {
+        artifact_source_scope_hash: SOURCE_SCOPE_HASH,
+        document_tree_hash: currentTreeHash,
+        discovery_grammar_version: DISCOVERY_GRAMMAR_VERSION - 1,
+        represented_documents: representedDocuments,
+      },
+    })
+
+    const imported = await importVectorPacks({
+      db,
+      pluginRoot,
+      expectedSpec: ACTIVE_EMBEDDING_SPEC,
+      expectedArtifactSourceScopeHash: SOURCE_SCOPE_HASH,
+      expectedDocumentTreeHash: currentTreeHash,
+      expectedDiscoveryGrammarVersion: DISCOVERY_GRAMMAR_VERSION,
+    })
+    assert.equal(imported.packs_considered, 3)
+    assert.equal(imported.packs_imported, 0)
+    assert.equal(imported.rows_imported, 0)
+    assert.equal(db.prepare("SELECT count(*) AS count FROM chunk_vecs").get().count, 0)
+  } finally {
+    closeDb(db)
+  }
+})
+
 test("vector pack import accepts empty active packs as no-op artifacts", async () => {
   const { importVectorPacks, validateVectorPackFile } = await loadVectorPackModule()
   const root = await tmpRoot()

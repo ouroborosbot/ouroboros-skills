@@ -20,7 +20,6 @@ import * as path from "node:path"
 import matter from "gray-matter"
 import {
   exclusionForPath,
-  hasGitignoreNegation,
   loadExclusionRules,
 } from "./exclusions.js"
 import { canonicalDocumentPath } from "./document-tree.js"
@@ -128,10 +127,7 @@ function isExcluded(relPath, rules) {
 }
 
 function shouldSkipDirectory(relPath, rules) {
-  const decision = exclusionForPath(relPath, rules)
-  if (!decision.excluded) return false
-  if (decision.reason !== "gitignore") return true
-  return !hasGitignoreNegation(rules)
+  return exclusionForPath(relPath, rules).excluded
 }
 
 /**

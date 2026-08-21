@@ -542,6 +542,7 @@ test("thread internals cover depth, path, hydration, and ordering boundaries", (
 
   assert.equal(normalizeStartPath(root, ""), "")
   assert.equal(normalizeStartPath(root, "./track/task.md"), "track/task.md")
+  assert.equal(normalizeStartPath(root, ".\\track\\task.md"), "track/task.md")
   assert.equal(
     normalizeStartPath(root, path.join(root, "track", "task.md")),
     "track/task.md",

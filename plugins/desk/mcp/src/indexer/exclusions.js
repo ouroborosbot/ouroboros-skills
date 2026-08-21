@@ -203,14 +203,19 @@ function validateGitignorePattern(pattern, match = matchesGitignorePattern) {
 }
 
 function matchesGitignore(relPath, patterns) {
-  let excluded = false
-  for (const pattern of patterns) {
-    const rule = normalizeGitignoreRule(pattern)
-    if (matchesGitignoreRule(relPath, rule)) {
-      excluded = !rule.negated
+  const segments = normalizeRelPath(relPath).split("/").filter(Boolean)
+  for (let end = 1; end <= segments.length; end += 1) {
+    const candidate = segments.slice(0, end).join("/")
+    let excluded = false
+    for (const pattern of patterns) {
+      const rule = normalizeGitignoreRule(pattern)
+      if (matchesGitignoreRule(candidate, rule)) {
+        excluded = !rule.negated
+      }
     }
+    if (excluded) return true
   }
-  return excluded
+  return false
 }
 
 function normalizeGitignoreRule(rule) {

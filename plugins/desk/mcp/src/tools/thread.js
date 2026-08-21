@@ -53,7 +53,7 @@ function normalizeStartPath(deskRoot, startPath) {
     return canonicalDocumentPath(rel)
   }
   // Strip leading ./ if present.
-  return canonicalDocumentPath(startPath.replace(/^\.\//, ""))
+  return canonicalDocumentPath(startPath).replace(/^\.\//u, "")
 }
 
 /**

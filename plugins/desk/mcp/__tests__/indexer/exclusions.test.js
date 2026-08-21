@@ -285,12 +285,12 @@ test("discover applies nested gitignore files and negated rules", async () => {
   await writeFile(
     root,
     ".gitignore",
-    "root-ignored/\n/anchored-ignored\n!root-ignored/reincluded/task.md\n!public/task.md\n",
+    "root-ignored/\n!root-ignored/\nroot-ignored/*\n!root-ignored/reincluded/\nroot-ignored/reincluded/*\n!root-ignored/reincluded/task.md\n/anchored-ignored\n!public/\n!public/task.md\n",
   )
   await writeFile(
     root,
     "trackA/.gitignore",
-    "local-ignored/\n!local-ignored/reincluded/task.md\n",
+    "local-ignored/\n!local-ignored/\nlocal-ignored/*\n!local-ignored/reincluded/\nlocal-ignored/reincluded/*\n!local-ignored/reincluded/task.md\n",
   )
   await writeFile(root, "trackA/visible/task.md", "# Visible\n\npublic body")
   await writeFile(root, "root-ignored/private/task.md", "# Root ignored\n\nfixture secret")
@@ -309,6 +309,40 @@ test("discover applies nested gitignore files and negated rules", async () => {
   assert.equal(paths.includes("trackA/local-ignored/private/task.md"), false)
   assert.equal(paths.includes("root-ignored/reincluded/task.md"), true)
   assert.equal(paths.includes("trackA/local-ignored/reincluded/task.md"), true)
+})
+
+test("ignored directory descendants stay excluded despite unrelated negations", async () => {
+  const { exclusionForPath, loadExclusionRules } = await loadExclusionsModule()
+  const root = await tmpRoot()
+  await writeFile(root, ".gitignore", "logs/current\n!public.md\n")
+  await writeFile(root, "logs/current/payload.md", "private payload")
+  await writeFile(root, "public.md", "public payload")
+
+  const rules = await loadExclusionRules({ deskRoot: root })
+  assert.equal(
+    exclusionForPath("logs/current/payload.md", rules).reason,
+    "gitignore",
+  )
+  assert.deepEqual(
+    (await discover(root)).map((doc) => doc.path),
+    ["public.md"],
+  )
+})
+
+test("ignored directories require explicit parent reinclusion before child negations", async () => {
+  const root = await tmpRoot()
+  await writeFile(
+    root,
+    ".gitignore",
+    "blocked/\n!blocked/\nblocked/*\n!blocked/keep.md\n",
+  )
+  await writeFile(root, "blocked/drop.md", "private payload")
+  await writeFile(root, "blocked/keep.md", "public payload")
+
+  assert.deepEqual(
+    (await discover(root)).map((doc) => doc.path),
+    ["blocked/keep.md"],
+  )
 })
 
 test("discover honors standard gitignore question, class, and recursive wildcards", async () => {
@@ -554,7 +588,7 @@ test("artifact publication guard honors nested gitignore files and negated rules
   await writeFile(
     root,
     "trackA/.gitignore",
-    "local-ignored/\n/anchored-local\n!local-ignored/reincluded/task.md\n!public/task.md\n",
+    "local-ignored/\n!local-ignored/\nlocal-ignored/*\n!local-ignored/reincluded/\nlocal-ignored/reincluded/*\n!local-ignored/reincluded/task.md\n/anchored-local\n!public/\n!public/task.md\n",
   )
 
   assert.deepEqual(

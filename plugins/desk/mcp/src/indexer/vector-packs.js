@@ -166,6 +166,7 @@ export async function importVectorPacks({
   pluginRoot,
   expectedSpec = ACTIVE_EMBEDDING_SPEC,
   expectedArtifactSourceScopeHash,
+  expectedDocumentTreeHash,
   expectedDiscoveryGrammarVersion,
   signal,
 } = {}) {
@@ -231,10 +232,12 @@ export async function importVectorPacks({
       checksumPath: sidecarPath(packPath, ".sha256"),
       expectedSpec,
       expectedArtifactSourceScopeHash,
+      expectedDocumentTreeHash,
       expectedDiscoveryGrammarVersion,
       signal,
     })
     throwIfAborted(signal)
+    if (Object.values(pack.freshness ?? {}).includes("stale")) continue
     summary.packs_imported += 1
 
     const txn = db.transaction((rows) => {

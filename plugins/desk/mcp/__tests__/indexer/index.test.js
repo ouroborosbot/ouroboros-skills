@@ -582,6 +582,48 @@ test("isIndexFresh rejects missing chunk and refs index contents", async () => {
   } finally {
     closeDb(ftsDb)
   }
+
+  await rebuildIndex(root, indexOpts)
+  const wrongFtsDb = openDb(root)
+  try {
+    const chunk = wrongFtsDb
+      .prepare("SELECT id, text FROM chunks ORDER BY id LIMIT 1")
+      .get()
+    wrongFtsDb.prepare(
+      "INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', ?, ?)",
+    ).run(chunk.id, chunk.text)
+    wrongFtsDb.prepare(
+      "INSERT INTO chunks_fts(rowid, text) VALUES(?, ?)",
+    ).run(chunk.id, "injected wrong terms")
+    assert.equal(await isIndexFresh(root, wrongFtsDb), false)
+  } finally {
+    closeDb(wrongFtsDb)
+  }
+
+  const repaired = await ensureIndex(root, {
+    skipEmbed: true,
+    snapshots: false,
+    vectorPacks: false,
+  })
+  assert.equal(repaired.built, true)
+  const repairedFtsDb = openDb(root)
+  try {
+    assert.equal(await isIndexFresh(root, repairedFtsDb), true)
+    assert.equal(
+      repairedFtsDb
+        .prepare("SELECT COUNT(*) AS n FROM chunks_fts WHERE chunks_fts MATCH ?")
+        .get("task").n,
+      1,
+    )
+    assert.equal(
+      repairedFtsDb
+        .prepare("SELECT COUNT(*) AS n FROM chunks_fts WHERE chunks_fts MATCH ?")
+        .get("injected").n,
+      0,
+    )
+  } finally {
+    closeDb(repairedFtsDb)
+  }
 })
 
 test("isIndexFresh compares against the tombstone-filtered live tree", async () => {

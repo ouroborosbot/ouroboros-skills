@@ -17,6 +17,7 @@ import { DISCOVERY_GRAMMAR_VERSION, discover } from "./discover.js"
 import { chunkBody } from "./chunk.js"
 import {
   canonicalDocumentPath,
+  documentTreeHash,
   documentTreesEqual,
 } from "./document-tree.js"
 import {
@@ -147,7 +148,10 @@ export async function rebuildIndex(deskRoot, opts = {}) {
     if (opts.vectorPacks?.pluginRoot) {
       summary.vector_packs = vectorPackImportStatus(await importVectorPackRoots({
         db,
-        vectorPacks: opts.vectorPacks,
+        vectorPacks: {
+          ...opts.vectorPacks,
+          expectedDocumentTreeHash: documentTreeHash(discovered),
+        },
         signal: opts.signal,
       }))
     }
@@ -162,6 +166,7 @@ export async function rebuildIndex(deskRoot, opts = {}) {
     // Refs graph — recompute from scratch each pass. Cheap (just a table
     // scan of docs frontmatter) and avoids stale edges.
     refreshRefs(db, discovered)
+    repairFtsIndex(db)
 
     setMeta(db, "discovery_grammar_version", String(DISCOVERY_GRAMMAR_VERSION))
     setMeta(db, "last_indexed_at", new Date().toISOString())
@@ -191,6 +196,8 @@ async function importVectorPackRoots({ db, vectorPacks, signal }) {
         signal,
         expectedArtifactSourceScopeHash:
           vectorPacks.expectedArtifactSourceScopeHash,
+        expectedDocumentTreeHash:
+          vectorPacks.expectedDocumentTreeHash,
         expectedDiscoveryGrammarVersion:
           vectorPacks.expectedDiscoveryGrammarVersion,
       })
@@ -300,7 +307,20 @@ function isFtsIndexCurrent(db) {
     .prepare("SELECT COUNT(*) AS n FROM chunks_fts_docsize")
     .get()
     .n
-  return chunks === indexed
+  if (chunks !== indexed) return false
+  try {
+    db.prepare(
+      "INSERT INTO chunks_fts(chunks_fts, rank) VALUES('integrity-check', 1)",
+    ).run()
+    return true
+  } catch {
+    return false
+  }
+}
+
+function repairFtsIndex(db) {
+  if (isFtsIndexCurrent(db)) return
+  db.prepare("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')").run()
 }
 
 function isRefsGraphCurrent(db, docs) {

@@ -140,14 +140,14 @@ test("computeRefs ignores missing structural and historical targets", () => {
     },
     {
       id: "planning-a",
-      path: "track-a/task-a/planning.md",
+      path: "orphan-a/planning.md",
       kind: "planning",
       track: null,
       task_slug: "task-a",
     },
     {
       id: "doing-a",
-      path: "track-a/task-a/doing.md",
+      path: "orphan-b/doing.md",
       kind: "doing",
       track: "track-a",
       task_slug: null,
@@ -155,4 +155,50 @@ test("computeRefs ignores missing structural and historical targets", () => {
   ]
 
   assert.deepEqual(computeRefs(docs), [])
+})
+
+test("computeRefs preserves person-scoped shared-workspace prefixes", () => {
+  const docs = [
+    {
+      path: "desks/ari/track-a/task-a/task.md",
+      kind: "task",
+      track: "track-a",
+      task_slug: "task-a",
+      frontmatter: {
+        iterations: {
+          history: [{ path: "planning.md", kind: "predecessor" }],
+        },
+      },
+    },
+    {
+      path: "desks/ari/track-a/task-a/planning.md",
+      kind: "planning",
+      track: "track-a",
+      task_slug: "task-a",
+    },
+    {
+      path: "desks/ari/track-a/task-a/doing.md",
+      kind: "doing",
+      track: "track-a",
+      task_slug: "task-a",
+    },
+  ]
+
+  assert.deepEqual(computeRefs(docs), [
+    {
+      from: "desks/ari/track-a/task-a/planning.md",
+      to: "desks/ari/track-a/task-a/task.md",
+      ref_kind: "predecessor_of",
+    },
+    {
+      from: "desks/ari/track-a/task-a/planning.md",
+      to: "desks/ari/track-a/task-a/task.md",
+      ref_kind: "planning_of",
+    },
+    {
+      from: "desks/ari/track-a/task-a/doing.md",
+      to: "desks/ari/track-a/task-a/task.md",
+      ref_kind: "doing_of",
+    },
+  ])
 })
