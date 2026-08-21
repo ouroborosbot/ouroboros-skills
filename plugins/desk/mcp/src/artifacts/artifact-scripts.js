@@ -391,6 +391,7 @@ async function validateAllVectorPacks({ pluginRoot, mcpRoot }) {
       pluginRoot,
       packPath,
       expectedArtifactSourceScopeHash: context.expectedArtifactSourceScopeHash,
+      expectedDocumentTreeHash: context.expectedDocumentTreeHash,
       expectedDiscoveryGrammarVersion: context.expectedDiscoveryGrammarVersion,
     })
     out.push({

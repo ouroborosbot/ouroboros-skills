@@ -93,6 +93,7 @@ export async function validateVectorPackFile({
   checksumPath,
   expectedSpec = ACTIVE_EMBEDDING_SPEC,
   expectedArtifactSourceScopeHash,
+  expectedDocumentTreeHash,
   expectedDiscoveryGrammarVersion,
   signal,
 } = {}) {
@@ -136,6 +137,12 @@ export async function validateVectorPackFile({
   if (expectedArtifactSourceScopeHash !== undefined) {
     freshness.artifact_source_scope =
       manifest.artifact_source_scope_hash === expectedArtifactSourceScopeHash
+        ? "fresh"
+        : "stale"
+  }
+  if (expectedDocumentTreeHash !== undefined) {
+    freshness.document_tree =
+      manifest.document_tree_hash === expectedDocumentTreeHash
         ? "fresh"
         : "stale"
   }
