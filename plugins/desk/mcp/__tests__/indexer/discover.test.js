@@ -9,7 +9,7 @@ import * as os from "node:os"
 import { promises as fs } from "node:fs"
 
 import { filterTombstonedDocuments } from "../../src/artifacts/tombstones.js"
-import { discover, classify, isIndexable, normalizeDate } from "../../src/indexer/discover.js"
+import { discover, classify, isIndexable, normalizeDate, stripPersonPrefix } from "../../src/indexer/discover.js"
 
 async function buildFixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-discover-"))
@@ -40,6 +40,7 @@ async function buildFixture() {
 
   // Skips.
   await w("trackA/_archive/old-task/task.md", "should be ignored")
+  await w("trackA/_archive-legacy/old-note.md", "# Legacy archived note")
   await w("node_modules/foo/task.md", "ignored")
   await w(".state/leftover.md", "ignored")
   await w(".git/internal.md", "ignored")
@@ -68,6 +69,7 @@ test("discover picks up only the indexable shapes", async () => {
     "_meta/tips/some-topic.md",
     "desks/ari/trackP/track.md",
     "references/guide.md",
+    "trackA/_archive-legacy/old-note.md",
     "trackA/_archive/old-task/task.md",
     "trackA/_friction/2026-05-01-flaky.md",
     "trackA/_planning/designs/2026-08-20-search.md",
@@ -241,6 +243,7 @@ test("discover flags _archive docs with is_archived=true", async () => {
   const byPath = Object.fromEntries(docs.map((d) => [d.path, d]))
 
   // _archive content is flagged
+  assert.equal(byPath["trackA/_archive-legacy/old-note.md"].is_archived, true)
   assert.equal(byPath["trackA/_archive/old-task/task.md"].is_archived, true)
 
   // Active content is not
@@ -269,6 +272,7 @@ test("discover classifies each doc correctly + extracts frontmatter", async () =
   assert.equal(byPath["_meta/tips/some-topic.md"].kind, "lesson")
   assert.equal(byPath["trackA/_friction/2026-05-01-flaky.md"].kind, "friction")
   assert.equal(byPath["trackA/_friction/2026-05-01-flaky.md"].track, "trackA")
+  assert.equal(byPath["trackA/_archive-legacy/old-note.md"].kind, "archive")
   assert.equal(byPath["trackA/track.md"].kind, "track")
   assert.equal(byPath["trackA/track.md"].track, "trackA")
   assert.equal(byPath["trackA/track.md"].task_slug, null)
@@ -289,6 +293,52 @@ test("discover returns hash + mtime for dirty-detection", async () => {
     assert.equal(typeof d.mtime, "number")
     assert.ok(d.mtime > 0)
   }
+})
+
+test("discovery path helpers normalize POSIX and Windows separators", () => {
+  const expectedTrackPath = path.join("trackA", "track.md")
+  assert.equal(stripPersonPrefix("desks/ari/trackA/track.md"), expectedTrackPath)
+  assert.equal(stripPersonPrefix("desks\\ari\\trackA\\track.md"), expectedTrackPath)
+  assert.equal(stripPersonPrefix(path.join("desks", "ari")), path.join("desks", "ari"))
+  assert.equal(isIndexable("_shared\\landscape\\glossary.md"), true)
+  assert.equal(isIndexable("desks\\ari\\trackA\\_planning\\deep\\design.md"), true)
+  assert.deepEqual(classify("_shared\\landscape\\glossary.md"), {
+    kind: "shared",
+    track: null,
+    task_slug: null,
+  })
+  assert.deepEqual(classify("desks\\ari\\trackA\\track.md"), {
+    kind: "track",
+    track: "trackA",
+    task_slug: null,
+  })
+  assert.deepEqual(classify("desks\\ari\\trackA\\_friction\\note.md"), {
+    kind: "friction",
+    track: "trackA",
+    task_slug: null,
+  })
+  assert.deepEqual(classify("_shared"), {
+    kind: "reference",
+    track: null,
+    task_slug: null,
+  })
+})
+
+test("discover handles a large nested Markdown layout with stable ordering", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-discover-large-"))
+  const expectedPaths = []
+  for (let i = 0; i < 128; i += 1) {
+    const rel = path.join("references", `group-${i % 8}`, "nested", `level-${i % 4}`, `note-${String(i).padStart(3, "0")}.md`)
+    const abs = path.join(root, rel)
+    await fs.mkdir(path.dirname(abs), { recursive: true })
+    await fs.writeFile(abs, `# Reference ${i}`, "utf8")
+    expectedPaths.push(rel)
+  }
+
+  const docs = await discover(root)
+  assert.equal(docs.length, expectedPaths.length)
+  assert.deepEqual(docs.map((doc) => doc.path), expectedPaths.toSorted((a, b) => a.localeCompare(b)))
+  assert.ok(docs.every((doc) => doc.kind === "reference"))
 })
 
 test("isIndexable matches the intended set", () => {
@@ -384,6 +434,39 @@ test("classify is purely path-driven", () => {
     task_slug: null,
   })
   assert.deepEqual(classify("trackA/_planning/2026-08-20-design.md"), {
+    kind: "reference",
+    track: null,
+    task_slug: null,
+  })
+})
+
+test("classify preserves specialized precedence for overlapping path shapes", () => {
+  assert.deepEqual(classify("_shared/landscape/task.md"), {
+    kind: "shared",
+    track: null,
+    task_slug: null,
+  })
+  assert.deepEqual(classify("trackA/_archive/task.md"), {
+    kind: "task",
+    track: "trackA",
+    task_slug: "_archive",
+  })
+  assert.deepEqual(classify("trackA/_friction/task.md"), {
+    kind: "task",
+    track: "trackA",
+    task_slug: "_friction",
+  })
+  assert.deepEqual(classify("trackA/_archive/track.md"), {
+    kind: "archive",
+    track: null,
+    task_slug: null,
+  })
+  assert.deepEqual(classify("trackA/_meta/tips/track.md"), {
+    kind: "lesson",
+    track: null,
+    task_slug: null,
+  })
+  assert.deepEqual(classify("trackA/task-1/track.md"), {
     kind: "reference",
     track: null,
     task_slug: null,
