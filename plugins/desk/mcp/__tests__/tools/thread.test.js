@@ -267,7 +267,7 @@ test("desk_thread — depth limit truncates a long chain", async () => {
       ids.push(
         insertSyntheticDoc(db, {
           path: `chain/${name}.md`,
-          kind: "other",
+          kind: "reference",
           updated_at: `2026-04-2${ids.length}`,
         }),
       )
@@ -312,12 +312,12 @@ test("desk_thread — cycle in refs_graph doesn't infinite-loop", async () => {
     db.exec("DELETE FROM refs_graph; DELETE FROM docs;")
     const aId = insertSyntheticDoc(db, {
       path: "cycle/A.md",
-      kind: "other",
+      kind: "reference",
       updated_at: "2026-04-20",
     })
     const bId = insertSyntheticDoc(db, {
       path: "cycle/B.md",
-      kind: "other",
+      kind: "reference",
       updated_at: "2026-04-21",
     })
     insertEdge(db, aId, bId, "linked_from_body")
@@ -413,7 +413,7 @@ test("desk_thread — ordering: start first, then hop_distance asc, then updated
     // Hop-2 doc reachable via newerId.
     const farId = insertSyntheticDoc(db, {
       path: "hop2-far.md",
-      kind: "other",
+      kind: "reference",
       updated_at: "2026-04-30",
     })
     insertEdge(db, newerId, startId, "doing_of")

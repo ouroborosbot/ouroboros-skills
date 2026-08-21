@@ -40,6 +40,13 @@ test("classify still works for the OFF (non-person) shape", () => {
   assert.equal(c.task_slug, "book-flights")
 })
 
+test("classify attributes person-prefixed track.md to the real track", () => {
+  const c = classify(path.join("desks", "ari", "europe-trip", "track.md"))
+  assert.equal(c.kind, "track")
+  assert.equal(c.track, "europe-trip")
+  assert.equal(c.task_slug, null)
+})
+
 test("classify attributes track-local friction under desks/<alias>/ correctly", () => {
   const c = classify(path.join("desks", "ari", "europe-trip", "_friction", "2026-06-10-x.md"))
   assert.equal(c.kind, "friction")
@@ -87,4 +94,17 @@ test("discover still finds + attributes OFF-mode (top-level) task docs unchanged
   assert.ok(d)
   assert.equal(d.track, "legacy-track")
   assert.equal(d.task_slug, "legacy-slug")
+})
+
+test("discover finds person-prefixed track cards", async () => {
+  const root = await mkRoot()
+  const trackPath = path.join("desks", "ari", "europe-trip", "track.md")
+  await writeFile(root, trackPath, "---\nstatus: active\n---\n# Europe trip")
+
+  const docs = await discover(root)
+  const track = docs.find((doc) => doc.path === trackPath)
+  assert.ok(track)
+  assert.equal(track.kind, "track")
+  assert.equal(track.track, "europe-trip")
+  assert.equal(track.task_slug, null)
 })

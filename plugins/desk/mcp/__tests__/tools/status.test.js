@@ -487,7 +487,7 @@ test("desk_status defaults unknown startup context and reports partial vector co
     try {
       db.prepare(
         `INSERT INTO docs (path, kind, hash, mtime, frontmatter)
-         VALUES ('notes.md', 'other', 'abc', 1, '{}')`,
+         VALUES ('notes.md', 'reference', 'abc', 1, '{}')`,
       ).run()
       db.prepare(
         `INSERT INTO chunks (doc_id, chunk_index, text, heading, start_offset, end_offset)
@@ -524,7 +524,7 @@ test("desk_status reports vector coverage against the active embedding spec", as
     try {
       const docId = db.prepare(
         `INSERT INTO docs (path, kind, hash, mtime, frontmatter)
-         VALUES ('notes.md', 'other', 'abc', 1, '{}')
+         VALUES ('notes.md', 'reference', 'abc', 1, '{}')
          RETURNING id`,
       ).get().id
       const activeChunkId = db.prepare(
@@ -589,7 +589,7 @@ test("desk_status treats known unembeddable chunks as non-repairable vector skip
     try {
       const docId = db.prepare(
         `INSERT INTO docs (path, kind, hash, mtime, frontmatter)
-         VALUES ('notes.md', 'other', 'abc', 1, '{}')
+         VALUES ('notes.md', 'reference', 'abc', 1, '{}')
          RETURNING id`,
       ).get().id
       const vectorChunkId = db.prepare(

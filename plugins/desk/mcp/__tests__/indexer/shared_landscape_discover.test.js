@@ -114,9 +114,9 @@ test("discover finds _shared/landscape facts AND person desk tasks together", as
   assert.equal(glossary.kind, "shared")
 })
 
-// ── behavior-preserving: no _shared/ dir → unchanged ──────────────────────────
+// ── specialized classification remains stable without _shared/ ────────────────
 
-test("discover unchanged when no _shared/ dir present (single-desk)", async () => {
+test("discover keeps task classification stable in a single desk", async () => {
   const root = await mkRoot()
   await writeFile(
     root,
@@ -124,6 +124,6 @@ test("discover unchanged when no _shared/ dir present (single-desk)", async () =
     "---\ntitle: L\n---\nx",
   )
   const docs = await discover(root)
-  assert.equal(docs.length, 1, "only the task doc; nothing new indexed")
+  assert.equal(docs.length, 1)
   assert.equal(docs[0].kind, "task")
 })

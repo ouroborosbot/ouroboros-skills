@@ -111,6 +111,7 @@ test("search internals cover defensive helper branches", async () => {
     helpers.buildDocsFilter({ track: "trackA", status: "processing", kind: "task" }).params,
     ["trackA", "processing", "task"],
   )
+  assert.deepEqual(helpers.buildDocsFilter({ kind: "reference" }).params, ["reference"])
 
   assert.deepEqual(helpers.gatherFtsCandidates({}, null, "", [], 10), [])
   assert.deepEqual(helpers.gatherVecCandidates({}, null, 10), [])
@@ -139,6 +140,8 @@ test("search internals cover defensive helper branches", async () => {
   assert.equal(helpers.passesFilter(row, { status: "processing" }), true)
   assert.equal(helpers.passesFilter(row, { kind: ["planning"] }), false)
   assert.equal(helpers.passesFilter(row, { kind: "task" }), true)
+  assert.equal(helpers.passesFilter({ ...row, kind: "reference" }, { kind: "reference" }), true)
+  assert.equal(helpers.passesFilter({ ...row, kind: "reference" }, { kind: "other" }), false)
   assert.equal(helpers.passesFilter(row, { since: "2026-01-01" }), false)
   assert.equal(helpers.passesFilter(row, { until: "2025-01-01" }), false)
   assert.equal(helpers.passesFilter(row, { until: "2026-01-01" }), true)
@@ -484,6 +487,22 @@ test("desk_search — kind array filter narrows by doc kind", async () => {
   for (const r of res.results) {
     assert.equal(r.kind, "planning")
   }
+})
+
+test("desk_search — reference kind filter has no hidden other-kind branch", async () => {
+  const root = await mkTempDeskRoot()
+  await writeFile(root, "references/alpha-guide.md", "# Alpha guide\n\nalpha reference material\n")
+  await buildFixtureIndex(root)
+
+  const res = await desk_search({
+    deskRoot: root,
+    input: { query: "alpha", filters: { kind: "reference" } },
+    opts: { embed: { fetch: makeEmbedFetch() } },
+  })
+
+  assert.equal(res.results.length, 1)
+  assert.equal(res.results[0].kind, "reference")
+  assert.equal(res.results[0].path, "references/alpha-guide.md")
 })
 
 test("desk_search — since filter excludes older docs", async () => {
