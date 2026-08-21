@@ -4,8 +4,6 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
 import { TOOL_NAMES } from "../../src/tool-names.js"
-import { ensureIndex } from "../../src/server-helpers.js"
-import { rebuildIndex } from "../../src/indexer/index.js"
 import { desk_reindex } from "../../src/tools/reindex.js"
 import { desk_search } from "../../src/tools/search.js"
 import {
@@ -48,7 +46,7 @@ async function loadMaintenance() {
       String(error.message).includes("maintenance.js")
     ) {
       assert.fail(
-        "missing search/reindex maintenance integration: add src/indexer/maintenance.js and wire both tools through it",
+        "missing search/reindex maintenance integration: add src/indexer/maintenance.js with createMaintenanceCoordinator(), shared default wiring, and __setMaintenanceCoordinatorForTests()",
       )
     }
     throw error
@@ -81,6 +79,21 @@ function deferred() {
   }
 }
 
+function observeSettlement(promise) {
+  const observed = { state: "pending", value: undefined }
+  Promise.resolve(promise).then(
+    (value) => {
+      observed.state = "fulfilled"
+      observed.value = value
+    },
+    (error) => {
+      observed.state = "rejected"
+      observed.value = error
+    },
+  )
+  return observed
+}
+
 async function awaitBounded(promise, message, timeoutMs = TEST_TIMEOUT_MS) {
   let timeout
   try {
@@ -97,6 +110,13 @@ async function awaitBounded(promise, message, timeoutMs = TEST_TIMEOUT_MS) {
   } finally {
     clearTimeout(timeout)
   }
+}
+
+async function flushAsyncWork(message) {
+  await awaitBounded(
+    new Promise((resolve) => setImmediate(resolve)),
+    message,
+  )
 }
 
 function recordingEmbedFetch(prompts) {
@@ -130,76 +150,24 @@ function completeIndexResult({
 }
 
 async function cleanupRoot(root) {
-  await fs.rm(root, { recursive: true, force: true })
+  await awaitBounded(
+    fs.rm(root, { recursive: true, force: true }),
+    `cleanup timed out for ${root}`,
+  )
 }
 
-test("desk_search sends skipEmbed freshness options and bypasses the old synchronous repair path", async () => {
-  const root = await mkTempDeskRoot()
-  const maintenanceCalls = []
-  const prompts = []
-  const embed = { fetch: recordingEmbedFetch(prompts) }
-  const maintenance = {
-    async ensureSearchFreshness(options) {
-      maintenanceCalls.push(options)
-      return {
-        index: completeIndexResult({ chunks: 1, vectors: 0 }),
-        repair: Promise.resolve({ state: "complete", last_error: null }),
-      }
-    },
-  }
-
-  try {
-    await writeFile(
-      root,
-      "trackA/task-1/task.md",
-      "---\nstatus: processing\nschema_version: 1\n---\nalpha document body requiring repair\n",
-    )
-    await rebuildIndex(root, { skipEmbed: true })
-
-    const result = await desk_search({
-      deskRoot: root,
-      input: { query: "alpha" },
-      opts: { embed, maintenance },
-    })
-
-    assert.ok(result.results.length >= 1)
-    assert.deepEqual(
-      {
-        maintenance_calls: maintenanceCalls.map((call) => ({
-          deskRoot: call.deskRoot,
-          embed_is_forwarded: call.ensureOptions?.embed === embed,
-          ensure_option_keys: Object.keys(call.ensureOptions ?? {}).sort(),
-          skipEmbed: call.ensureOptions?.skipEmbed,
-        })),
-        prompt_kinds_before_return: prompts.map((prompt) =>
-          prompt === "alpha" ? "query" : "old-synchronous-document-repair",
-        ),
-      },
-      {
-        maintenance_calls: [
-          {
-            deskRoot: root,
-            embed_is_forwarded: true,
-            ensure_option_keys: ["embed", "skipEmbed"],
-            skipEmbed: true,
-          },
-        ],
-        prompt_kinds_before_return: ["query"],
-      },
-      "desk_search must run freshness through maintenance with skipEmbed:true and must not enter the legacy synchronous missing-vector repair before returning",
-    )
-  } finally {
-    await cleanupRoot(root)
-  }
-})
-
-test("desk_search returns existing-vector hybrid results before gated background repair completes", async () => {
+test("desk_search awaits gated skipEmbed freshness, then returns query results before gated repair completes", async () => {
   const { createMaintenanceCoordinator } = await loadMaintenance()
   const root = await mkTempDeskRoot()
+  const freshnessEntered = deferred()
+  const freshnessRelease = deferred()
   const repairEntered = deferred()
   const repairRelease = deferred()
+  const repairCompleted = deferred()
   const prompts = []
   const embed = { fetch: recordingEmbedFetch(prompts) }
+  const ensureCalls = []
+  const repairCalls = []
   let maintenance
 
   try {
@@ -209,24 +177,47 @@ test("desk_search returns existing-vector hybrid results before gated background
       "---\nstatus: processing\nschema_version: 1\n---\nalpha existing vector content\n",
     )
     await buildFixtureIndex(root)
-    await writeFile(
-      root,
-      "trackB/new/task.md",
-      "---\nstatus: processing\nschema_version: 1\n---\nzulu gated background repair content\n",
-    )
 
-    const repairCalls = []
     maintenance = createMaintenanceCoordinator({
-      ensureIndex,
+      ensureIndex: async (deskRoot, options) => {
+        ensureCalls.push({ deskRoot, options })
+        freshnessEntered.resolve()
+        await freshnessRelease.promise
+        return completeIndexResult({ chunks: 2, vectors: 1 })
+      },
       repairBatch: async (options) => {
         repairCalls.push(options)
         repairEntered.resolve()
         await repairRelease.promise
+        repairCompleted.resolve()
         return {
           processed_chunks: 1,
           vectors_indexed: 1,
           remaining_chunks: 0,
           stopped_by: "complete",
+        }
+      },
+      createRepairCoordinator: ({ repairBatch }) => {
+        let active = null
+        let controller = null
+        return {
+          start(options) {
+            if (active) return active
+            controller = new AbortController()
+            active = repairBatch({
+              ...options,
+              signal: controller.signal,
+            })
+            return active
+          },
+          async cancel() {
+            controller?.abort()
+            await active
+            return { state: "idle", last_error: null, cancelled: true }
+          },
+          status() {
+            return { state: active ? "running" : "idle", last_error: null }
+          },
         }
       },
     })
@@ -236,17 +227,36 @@ test("desk_search returns existing-vector hybrid results before gated background
       input: { query: "alpha" },
       opts: { embed, maintenance },
     })
+    const observedSearch = observeSettlement(search)
 
     await awaitBounded(
+      freshnessEntered.promise,
+      "desk_search did not enter synchronous skipEmbed freshness",
+    )
+    assert.equal(observedSearch.state, "pending")
+    assert.equal(repairEntered.settled, false)
+    assert.deepEqual(prompts, [])
+    assert.equal(ensureCalls.length, 1)
+    assert.equal(ensureCalls[0].deskRoot, path.resolve(root))
+    assert.equal(ensureCalls[0].options.embed, embed)
+    assert.deepEqual(
+      Object.keys(ensureCalls[0].options).sort(),
+      ["embed", "skipEmbed"],
+    )
+    assert.equal(ensureCalls[0].options.skipEmbed, true)
+
+    freshnessRelease.resolve()
+    await awaitBounded(
       repairEntered.promise,
-      "background repair was not scheduled after search freshness",
+      "background repair was not scheduled after freshness completed",
     )
     const result = await awaitBounded(
       search,
-      "desk_search still awaited gated document-vector repair instead of returning existing-vector results",
+      "desk_search did not settle after freshness while background repair remained gated",
     )
 
     assert.equal(repairRelease.settled, false)
+    assert.equal(observedSearch.state, "fulfilled")
     assert.equal(result.search_mode, "hybrid")
     const existing = result.results.find(
       (entry) => entry.path === "trackA/existing/task.md",
@@ -261,7 +271,13 @@ test("desk_search returns existing-vector hybrid results before gated background
     assert.equal(repairCalls[0].deskRoot, path.resolve(root))
     assert.equal(repairCalls[0].embed, embed)
     assert.equal(repairCalls[0].signal instanceof AbortSignal, true)
+    repairRelease.resolve()
+    await awaitBounded(
+      repairCompleted.promise,
+      "background repair did not drain after release",
+    )
   } finally {
+    freshnessRelease.resolve()
     repairRelease.resolve()
     if (maintenance) {
       await awaitBounded(
@@ -273,7 +289,112 @@ test("desk_search returns existing-vector hybrid results before gated background
   }
 })
 
-test("shared maintenance prevents SQLITE_BUSY overlap from leaking to search or reindex callers", async () => {
+test("default-wired same-root searches share one replaceable coordinator and root lock", async () => {
+  const maintenanceModule = await loadMaintenance()
+  const {
+    __setMaintenanceCoordinatorForTests,
+    createMaintenanceCoordinator,
+  } = maintenanceModule
+  assert.equal(
+    typeof __setMaintenanceCoordinatorForTests,
+    "function",
+    "Unit 4e must expose internal __setMaintenanceCoordinatorForTests(coordinator), returning a restore callback, so default wiring can be tested without changing the MCP schema",
+  )
+
+  const root = await mkTempDeskRoot()
+  const firstFreshnessEntered = deferred()
+  const firstFreshnessRelease = deferred()
+  const ensureCalls = []
+  const prompts = []
+  const embed = { fetch: recordingEmbedFetch(prompts) }
+  let maintenance
+  let restoreDefault
+
+  try {
+    await writeFile(
+      root,
+      "trackA/task-1/task.md",
+      "---\nstatus: processing\nschema_version: 1\n---\nalpha shared coordinator body\n",
+    )
+    await buildFixtureIndex(root)
+
+    maintenance = createMaintenanceCoordinator({
+      ensureIndex: async (deskRoot, options) => {
+        ensureCalls.push({ deskRoot, options })
+        if (ensureCalls.length === 1) {
+          firstFreshnessEntered.resolve()
+          await firstFreshnessRelease.promise
+        }
+        return completeIndexResult()
+      },
+      repairBatch: async () => {
+        assert.fail("complete semantic coverage must not schedule repair")
+      },
+    })
+    restoreDefault = __setMaintenanceCoordinatorForTests(maintenance)
+    assert.equal(
+      typeof restoreDefault,
+      "function",
+      "the internal default-coordinator seam must return a restore callback",
+    )
+
+    const first = desk_search({
+      deskRoot: root,
+      input: { query: "alpha" },
+      opts: { embed },
+    })
+    await awaitBounded(
+      firstFreshnessEntered.promise,
+      "first default-wired search did not enter the installed coordinator",
+    )
+
+    const second = desk_search({
+      deskRoot: root,
+      input: { query: "alpha" },
+      opts: { embed },
+    })
+    const observedSecond = observeSettlement(second)
+    await flushAsyncWork(
+      "default-wiring overlap check did not reach a deterministic turn",
+    )
+
+    assert.equal(
+      ensureCalls.length,
+      1,
+      "two default-wired same-root searches must share one coordinator lock instead of instantiating isolated maintenance",
+    )
+    assert.equal(observedSecond.state, "pending")
+
+    firstFreshnessRelease.resolve()
+    const [firstResult, secondResult] = await awaitBounded(
+      Promise.all([first, second]),
+      "default-wired same-root searches did not drain through their shared lock",
+    )
+
+    assert.equal(ensureCalls.length, 2)
+    for (const call of ensureCalls) {
+      assert.equal(call.deskRoot, path.resolve(root))
+      assert.equal(call.options.embed, embed)
+      assert.equal(call.options.skipEmbed, true)
+      assert.equal("maintenance" in call.options, false)
+    }
+    assert.equal(firstResult.search_mode, "hybrid")
+    assert.equal(secondResult.search_mode, "hybrid")
+    assert.deepEqual(prompts, ["alpha", "alpha"])
+  } finally {
+    firstFreshnessRelease.resolve()
+    if (restoreDefault) restoreDefault()
+    if (maintenance) {
+      await awaitBounded(
+        maintenance.cancelBackgroundRepair(root),
+        "default coordinator did not settle during cleanup",
+      )
+    }
+    await cleanupRoot(root)
+  }
+})
+
+test("shared maintenance prevents SQLITE_BUSY overlap from leaking to search or force-reindex callers", async () => {
   const { createMaintenanceCoordinator } = await loadMaintenance()
   const root = await mkTempDeskRoot()
   const backgroundEntered = deferred()
@@ -281,6 +402,7 @@ test("shared maintenance prevents SQLITE_BUSY overlap from leaking to search or 
   const events = []
   const ensureCalls = []
   const repairCalls = []
+  const resetCalls = []
   let busyThrows = 0
   let maxSameRootWriters = 0
   let maintenance
@@ -348,6 +470,10 @@ test("shared maintenance prevents SQLITE_BUSY overlap from leaking to search or 
           }
         })
       },
+      resetIndex: async (options) => {
+        resetCalls.push(options)
+        return fakeWriter(options.deskRoot, "explicit-reset", async () => {})
+      },
     })
 
     const searchResult = await awaitBounded(
@@ -365,7 +491,7 @@ test("shared maintenance prevents SQLITE_BUSY overlap from leaking to search or 
     const reindexResult = await awaitBounded(
       desk_reindex({
         deskRoot: root,
-        input: {},
+        input: { force: true },
         opts: { embed: reindexEmbed, maintenance },
       }),
       "reindex caller leaked SQLITE_BUSY or failed to await background cleanup",
@@ -387,11 +513,14 @@ test("shared maintenance prevents SQLITE_BUSY overlap from leaking to search or 
     assert.equal(repairCalls.length, 1)
     assert.equal(repairCalls[0].deskRoot, path.resolve(root))
     assert.equal(repairCalls[0].embed, searchEmbed)
+    assert.deepEqual(resetCalls, [{ deskRoot: path.resolve(root) }])
     assert.deepEqual(events, [
       "search-freshness:start",
       "search-freshness:end",
       "background-repair:start",
       "background-repair:end",
+      "explicit-reset:start",
+      "explicit-reset:end",
       "explicit-reindex:start",
       "explicit-reindex:end",
     ])

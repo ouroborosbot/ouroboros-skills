@@ -7,6 +7,7 @@ import * as path from "node:path"
 
 import { __searchInternalsForTests, desk_search } from "../../src/tools/search.js"
 import { openDb, closeDb } from "../../src/db/init.js"
+import { ensureIndex } from "../../src/server-helpers.js"
 import {
   buildFixtureIndex,
   makeEmbedFetch,
@@ -14,6 +15,52 @@ import {
   mkTempDeskRoot,
   writeFile,
 } from "./_search_helpers.js"
+
+const TEST_TIMEOUT_MS = 1500
+
+function deferred() {
+  let resolve
+  let reject
+  let settled = false
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = (value) => {
+      if (settled) return
+      settled = true
+      resolvePromise(value)
+    }
+    reject = (error) => {
+      if (settled) return
+      settled = true
+      rejectPromise(error)
+    }
+  })
+  return {
+    promise,
+    reject,
+    resolve,
+    get settled() {
+      return settled
+    },
+  }
+}
+
+async function awaitBounded(promise, message, timeoutMs = TEST_TIMEOUT_MS) {
+  let timeout
+  try {
+    return await Promise.race([
+      Promise.resolve(promise),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => {
+          const error = new Error(message)
+          error.code = "ERR_TEST_TIMEOUT"
+          reject(error)
+        }, timeoutMs)
+      }),
+    ])
+  } finally {
+    clearTimeout(timeout)
+  }
+}
 
 // Build a fixture desk where chunks across multiple tracks share or differ
 // on the first-word "family" (deterministic 768-dim vectors per
@@ -301,28 +348,156 @@ test("desk_search — single-character query uses semantic candidates without FT
   assert.ok(res.results.length >= 1)
 })
 
-test("desk_search — repairs a fresh lexical-only index when embeddings are available", async () => {
+test("desk_search — returns a partial result from a lexical-only index before background repair, then uses repaired vectors", async () => {
   const root = await mkTempDeskRoot()
-  await writeFile(
-    root,
-    "trackA/task-1/task.md",
-    "---\nstatus: processing\nschema_version: 1\n---\nalpha semantic repair body\n",
-  )
-  const { rebuildIndex } = await import("../../src/indexer/index.js")
-  await rebuildIndex(root, { embed: { fetch: makeFailingFetch() } })
+  const repairStarted = deferred()
+  const repairRelease = deferred()
+  const prompts = []
+  const baseFetch = makeEmbedFetch()
+  const embed = {
+    fetch: async (url, options) => {
+      const body = JSON.parse(options?.body ?? "{}")
+      prompts.push(String(body.prompt ?? ""))
+      return baseFetch(url, options)
+    },
+  }
+  let maintenanceCalls = 0
+  let repairPromise = null
+  const maintenance = {
+    async ensureSearchFreshness({ deskRoot, ensureOptions }) {
+      maintenanceCalls += 1
+      const index = await ensureIndex(deskRoot, {
+        ...ensureOptions,
+        skipEmbed: true,
+      })
+      if (!repairPromise && index.semantic?.missing_vectors > 0) {
+        repairPromise = (async () => {
+          repairStarted.resolve()
+          await repairRelease.promise
+          return ensureIndex(deskRoot, {
+            embed: ensureOptions.embed,
+            snapshots: false,
+            vectorPacks: false,
+          })
+        })()
+      }
+      return {
+        index,
+        repair:
+          repairPromise ??
+          Promise.resolve({ state: "complete", last_error: null }),
+      }
+    },
+  }
 
-  const res = await desk_search({
-    deskRoot: root,
-    input: { query: "alpha" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
-  })
+  try {
+    await writeFile(
+      root,
+      "trackA/task-1/task.md",
+      "---\nstatus: processing\nschema_version: 1\n---\nalpha semantic repair body\n",
+    )
+    const { rebuildIndex } = await import("../../src/indexer/index.js")
+    await rebuildIndex(root, { embed: { fetch: makeFailingFetch() } })
 
-  assert.equal(res.semantic_unavailable, false)
-  assert.ok(res.results.length >= 1)
-  assert.ok(
-    res.results[0].score_breakdown.semantic > 0,
-    "semantic component should be restored after repair",
-  )
+    const first = await awaitBounded(
+      desk_search({
+        deskRoot: root,
+        input: { query: "alpha" },
+        opts: { embed, maintenance },
+      }),
+      "first search did not return before background vector repair",
+    )
+
+    assert.equal(
+      maintenanceCalls,
+      1,
+      "search must route freshness and repair through maintenance",
+    )
+    await awaitBounded(
+      repairStarted.promise,
+      "search maintenance did not separately start background repair",
+    )
+    assert.equal(repairRelease.settled, false)
+    assert.equal(first.search_mode, "hybrid")
+    assert.equal(first.semantic_unavailable, false)
+    assert.ok(first.results.length >= 1)
+    assert.equal(
+      first.results[0].score_breakdown.semantic,
+      0,
+      "the first response may use lexical candidates while vectors are still missing",
+    )
+    assert.deepEqual(
+      prompts,
+      ["alpha"],
+      "query embedding must still run before return",
+    )
+    assert.deepEqual(Object.keys(first).sort(), [
+      "latency_ms",
+      "query",
+      "results",
+      "search_mode",
+      "semantic_unavailable",
+    ])
+    assert.deepEqual(Object.keys(first.results[0]).sort(), [
+      "kind",
+      "path",
+      "score",
+      "score_breakdown",
+      "snippet",
+      "status",
+      "task_slug",
+      "track",
+      "updated_at",
+    ])
+
+    repairRelease.resolve()
+    await awaitBounded(
+      repairPromise,
+      "background vector repair did not drain",
+    )
+
+    const later = await awaitBounded(
+      desk_search({
+        deskRoot: root,
+        input: { query: "alpha" },
+        opts: { embed, maintenance },
+      }),
+      "later search did not use the repaired index",
+    )
+
+    assert.equal(maintenanceCalls, 2)
+    assert.deepEqual(Object.keys(later).sort(), Object.keys(first).sort())
+    assert.deepEqual(
+      Object.keys(later.results[0]).sort(),
+      Object.keys(first.results[0]).sort(),
+    )
+    assert.equal(later.semantic_unavailable, false)
+    assert.ok(
+      later.results[0].score_breakdown.semantic > 0,
+      "a later search should use vectors after background repair drains",
+    )
+    assert.equal(
+      prompts.filter((prompt) => prompt === "alpha").length,
+      2,
+      "each search must embed its query",
+    )
+    assert.ok(
+      prompts.some((prompt) => prompt !== "alpha"),
+      "background repair must embed the missing document chunk",
+    )
+  } finally {
+    repairRelease.resolve()
+    if (repairPromise) {
+      await awaitBounded(
+        repairPromise,
+        "background repair did not settle during cleanup",
+      ).catch(() => {})
+    }
+    await awaitBounded(
+      fs.rm(root, { recursive: true, force: true }),
+      "lexical-only search fixture cleanup timed out",
+    )
+  }
 })
 
 test("desk_search — default embed options use global fetch", async () => {
