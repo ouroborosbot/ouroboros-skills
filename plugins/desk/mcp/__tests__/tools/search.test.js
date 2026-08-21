@@ -366,19 +366,28 @@ test("desk_search — returns a partial result from a lexical-only index before 
   const maintenance = {
     async ensureSearchFreshness({ deskRoot, ensureOptions }) {
       maintenanceCalls += 1
-      const index = await ensureIndex(deskRoot, {
-        ...ensureOptions,
-        skipEmbed: true,
-      })
+      const index = await awaitBounded(
+        ensureIndex(deskRoot, {
+          ...ensureOptions,
+          skipEmbed: true,
+        }),
+        "direct search freshness maintenance did not settle",
+      )
       if (!repairPromise && index.semantic?.missing_vectors > 0) {
         repairPromise = (async () => {
           repairStarted.resolve()
-          await repairRelease.promise
-          return ensureIndex(deskRoot, {
-            embed: ensureOptions.embed,
-            snapshots: false,
-            vectorPacks: false,
-          })
+          await awaitBounded(
+            repairRelease.promise,
+            "direct search background repair was not released",
+          )
+          return awaitBounded(
+            ensureIndex(deskRoot, {
+              embed: ensureOptions.embed,
+              snapshots: false,
+              vectorPacks: false,
+            }),
+            "direct search background repair did not settle",
+          )
         })()
       }
       return {
@@ -397,7 +406,10 @@ test("desk_search — returns a partial result from a lexical-only index before 
       "---\nstatus: processing\nschema_version: 1\n---\nalpha semantic repair body\n",
     )
     const { rebuildIndex } = await import("../../src/indexer/index.js")
-    await rebuildIndex(root, { embed: { fetch: makeFailingFetch() } })
+    await awaitBounded(
+      rebuildIndex(root, { embed: { fetch: makeFailingFetch() } }),
+      "lexical-only fixture rebuild did not settle",
+    )
 
     const first = await awaitBounded(
       desk_search({

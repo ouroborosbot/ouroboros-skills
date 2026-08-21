@@ -3,6 +3,8 @@ import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
+import { closeDb, openDb } from "../../src/db/init.js"
+import { ensureIndex } from "../../src/server-helpers.js"
 import { TOOL_NAMES } from "../../src/tool-names.js"
 import { desk_reindex } from "../../src/tools/reindex.js"
 import { desk_search } from "../../src/tools/search.js"
@@ -156,19 +158,42 @@ async function cleanupRoot(root) {
   )
 }
 
-test("desk_search awaits gated skipEmbed freshness, then returns query results before gated repair completes", async () => {
+function findFtsRow(root, token) {
+  const db = openDb(root)
+  try {
+    return db
+      .prepare(
+        `SELECT d.path, c.text
+         FROM chunks_fts
+         JOIN chunks c ON c.id = chunks_fts.rowid
+         JOIN docs d ON d.id = c.doc_id
+         WHERE chunks_fts MATCH ?
+         LIMIT 1`,
+      )
+      .get(`"${token}"`)
+  } finally {
+    closeDb(db)
+  }
+}
+
+test("desk_search includes content indexed by gated freshness in its first response before repair completes", async () => {
   const { createMaintenanceCoordinator } = await loadMaintenance()
   const root = await mkTempDeskRoot()
   const freshnessEntered = deferred()
   const freshnessRelease = deferred()
+  const freshnessIndexed = deferred()
   const repairEntered = deferred()
   const repairRelease = deferred()
   const repairCompleted = deferred()
+  const queryToken = "unit4dfreshnessneedle"
+  const freshPath = "trackA/fresh/task.md"
   const prompts = []
+  const events = []
   const embed = { fetch: recordingEmbedFetch(prompts) }
   const ensureCalls = []
   const repairCalls = []
   let maintenance
+  let search
 
   try {
     await writeFile(
@@ -181,14 +206,42 @@ test("desk_search awaits gated skipEmbed freshness, then returns query results b
     maintenance = createMaintenanceCoordinator({
       ensureIndex: async (deskRoot, options) => {
         ensureCalls.push({ deskRoot, options })
+        events.push("freshness:start")
         freshnessEntered.resolve()
-        await freshnessRelease.promise
-        return completeIndexResult({ chunks: 2, vectors: 1 })
+        await awaitBounded(
+          freshnessRelease.promise,
+          "controlled freshness was not released",
+        )
+        await writeFile(
+          deskRoot,
+          freshPath,
+          `---\nstatus: processing\nschema_version: 1\n---\n${queryToken} content created during freshness\n`,
+        )
+        const result = await awaitBounded(
+          ensureIndex(deskRoot, {
+            ...options,
+            skipEmbed: true,
+            snapshots: false,
+            vectorPacks: false,
+          }),
+          "controlled freshness did not index the newly written document",
+        )
+        const indexed = findFtsRow(deskRoot, queryToken)
+        assert.equal(indexed?.path, freshPath)
+        assert.match(indexed?.text ?? "", new RegExp(queryToken, "u"))
+        events.push("freshness:indexed")
+        freshnessIndexed.resolve()
+        return result
       },
       repairBatch: async (options) => {
         repairCalls.push(options)
+        events.push("repair:start")
         repairEntered.resolve()
-        await repairRelease.promise
+        await awaitBounded(
+          repairRelease.promise,
+          "controlled background repair was not released",
+        )
+        events.push("repair:end")
         repairCompleted.resolve()
         return {
           processed_chunks: 1,
@@ -212,7 +265,10 @@ test("desk_search awaits gated skipEmbed freshness, then returns query results b
           },
           async cancel() {
             controller?.abort()
-            await active
+            await awaitBounded(
+              active,
+              "controlled background repair did not settle after cancellation",
+            )
             return { state: "idle", last_error: null, cancelled: true }
           },
           status() {
@@ -222,9 +278,9 @@ test("desk_search awaits gated skipEmbed freshness, then returns query results b
       },
     })
 
-    const search = desk_search({
+    search = desk_search({
       deskRoot: root,
-      input: { query: "alpha" },
+      input: { query: queryToken },
       opts: { embed, maintenance },
     })
     const observedSearch = observeSettlement(search)
@@ -236,6 +292,7 @@ test("desk_search awaits gated skipEmbed freshness, then returns query results b
     assert.equal(observedSearch.state, "pending")
     assert.equal(repairEntered.settled, false)
     assert.deepEqual(prompts, [])
+    assert.equal(findFtsRow(root, queryToken), undefined)
     assert.equal(ensureCalls.length, 1)
     assert.equal(ensureCalls[0].deskRoot, path.resolve(root))
     assert.equal(ensureCalls[0].options.embed, embed)
@@ -247,6 +304,10 @@ test("desk_search awaits gated skipEmbed freshness, then returns query results b
 
     freshnessRelease.resolve()
     await awaitBounded(
+      freshnessIndexed.promise,
+      "freshness did not create the new document, chunk, and FTS row",
+    )
+    await awaitBounded(
       repairEntered.promise,
       "background repair was not scheduled after freshness completed",
     )
@@ -256,29 +317,54 @@ test("desk_search awaits gated skipEmbed freshness, then returns query results b
     )
 
     assert.equal(repairRelease.settled, false)
+    assert.equal(repairCompleted.settled, false)
     assert.equal(observedSearch.state, "fulfilled")
     assert.equal(result.search_mode, "hybrid")
-    const existing = result.results.find(
-      (entry) => entry.path === "trackA/existing/task.md",
+    assert.equal(result.query, queryToken)
+    const fresh = result.results.find(
+      (entry) => entry.path === freshPath,
     )
-    assert.ok(existing, "search must retain the result backed by an existing vector")
     assert.ok(
-      existing.score_breakdown.semantic > 0,
-      "existing vectors must remain usable while missing vectors repair",
+      fresh,
+      "the first response must query after freshness and include the newly indexed document",
     )
-    assert.deepEqual(prompts, ["alpha"])
+    assert.match(fresh.snippet, new RegExp(queryToken, "u"))
+    assert.equal(
+      fresh.score_breakdown.semantic,
+      0,
+      "the new chunk must still be missing its vector while repair is gated",
+    )
+    assert.deepEqual(prompts, [queryToken])
     assert.equal(repairCalls.length, 1)
     assert.equal(repairCalls[0].deskRoot, path.resolve(root))
     assert.equal(repairCalls[0].embed, embed)
     assert.equal(repairCalls[0].signal instanceof AbortSignal, true)
+    events.push("search:return")
+    assert.deepEqual(events, [
+      "freshness:start",
+      "freshness:indexed",
+      "repair:start",
+      "search:return",
+    ])
     repairRelease.resolve()
     await awaitBounded(
       repairCompleted.promise,
       "background repair did not drain after release",
     )
+    assert.deepEqual(events, [
+      "freshness:start",
+      "freshness:indexed",
+      "repair:start",
+      "search:return",
+      "repair:end",
+    ])
   } finally {
     freshnessRelease.resolve()
     repairRelease.resolve()
+    await awaitBounded(
+      Promise.allSettled([search].filter(Boolean)),
+      "gated freshness search did not settle during cleanup",
+    ).catch(() => {})
     if (maintenance) {
       await awaitBounded(
         maintenance.cancelBackgroundRepair(root),
@@ -309,6 +395,8 @@ test("default-wired same-root searches share one replaceable coordinator and roo
   const embed = { fetch: recordingEmbedFetch(prompts) }
   let maintenance
   let restoreDefault
+  let first
+  let second
 
   try {
     await writeFile(
@@ -323,7 +411,10 @@ test("default-wired same-root searches share one replaceable coordinator and roo
         ensureCalls.push({ deskRoot, options })
         if (ensureCalls.length === 1) {
           firstFreshnessEntered.resolve()
-          await firstFreshnessRelease.promise
+          await awaitBounded(
+            firstFreshnessRelease.promise,
+            "first default-wired freshness was not released",
+          )
         }
         return completeIndexResult()
       },
@@ -338,7 +429,7 @@ test("default-wired same-root searches share one replaceable coordinator and roo
       "the internal default-coordinator seam must return a restore callback",
     )
 
-    const first = desk_search({
+    first = desk_search({
       deskRoot: root,
       input: { query: "alpha" },
       opts: { embed },
@@ -348,7 +439,7 @@ test("default-wired same-root searches share one replaceable coordinator and roo
       "first default-wired search did not enter the installed coordinator",
     )
 
-    const second = desk_search({
+    second = desk_search({
       deskRoot: root,
       input: { query: "alpha" },
       opts: { embed },
@@ -383,6 +474,10 @@ test("default-wired same-root searches share one replaceable coordinator and roo
     assert.deepEqual(prompts, ["alpha", "alpha"])
   } finally {
     firstFreshnessRelease.resolve()
+    await awaitBounded(
+      Promise.allSettled([first, second].filter(Boolean)),
+      "default-wired searches did not settle during cleanup",
+    ).catch(() => {})
     if (restoreDefault) restoreDefault()
     if (maintenance) {
       await awaitBounded(
@@ -390,6 +485,123 @@ test("default-wired same-root searches share one replaceable coordinator and roo
         "default coordinator did not settle during cleanup",
       )
     }
+    await cleanupRoot(root)
+  }
+})
+
+test("default-wired desk_reindex coordinates exact non-force and force requests without legacy direct maintenance", async () => {
+  const {
+    __setMaintenanceCoordinatorForTests,
+  } = await loadMaintenance()
+  const root = await mkTempDeskRoot()
+  const dbPath = path.join(root, ".state", "desk-index.sqlite")
+  const walPath = `${dbPath}-wal`
+  const shmPath = `${dbPath}-shm`
+  const sentinels = new Map([
+    [dbPath, "poison legacy ensure path"],
+    [walPath, "poison legacy force wal reset"],
+    [shmPath, "poison legacy force shm reset"],
+  ])
+  const embed = { fetch: makeEmbedFetch() }
+  const ensureOptions = {
+    embed,
+    marker: "default-shared-reindex",
+    snapshots: false,
+    vectorPacks: false,
+  }
+  const calls = []
+  const maintenance = {
+    async runExplicitReindex(args) {
+      calls.push(args)
+      if (args.force) {
+        return {
+          built: true,
+          reason: "missing",
+          summary: {
+            docs_indexed: 4,
+            docs_skipped: 1,
+            docs_removed: 2,
+          },
+          semantic: {
+            chunks_total: 5,
+            vectors_indexed: 5,
+            missing_vectors: 0,
+            embedding_available: true,
+          },
+        }
+      }
+      return completeIndexResult({ chunks: 3, vectors: 3 })
+    },
+  }
+  let restoreDefault
+
+  try {
+    await fs.mkdir(path.dirname(dbPath), { recursive: true })
+    await Promise.all(
+      [...sentinels].map(([filePath, body]) =>
+        fs.writeFile(filePath, body, "utf8"),
+      ),
+    )
+    restoreDefault = __setMaintenanceCoordinatorForTests(maintenance)
+
+    const nonForce = await awaitBounded(
+      desk_reindex({
+        deskRoot: root,
+        input: { force: false },
+        opts: ensureOptions,
+      }),
+      "default-wired non-force reindex did not use the shared coordinator",
+    )
+    const force = await awaitBounded(
+      desk_reindex({
+        deskRoot: root,
+        input: { force: true },
+        opts: ensureOptions,
+      }),
+      "default-wired force reindex did not use the shared coordinator",
+    )
+
+    assert.deepEqual(calls, [
+      {
+        deskRoot: path.resolve(root),
+        force: false,
+        ensureOptions,
+      },
+      {
+        deskRoot: path.resolve(root),
+        force: true,
+        ensureOptions,
+      },
+    ])
+    assert.deepEqual(Object.keys(calls[0]).sort(), [
+      "deskRoot",
+      "ensureOptions",
+      "force",
+    ])
+    assert.deepEqual(Object.keys(calls[1]).sort(), [
+      "deskRoot",
+      "ensureOptions",
+      "force",
+    ])
+    assert.equal("maintenance" in ensureOptions, false)
+    assert.equal(nonForce.built, false)
+    assert.equal(nonForce.reason, "fresh")
+    assert.equal(nonForce.chunks_total, 3)
+    assert.equal(force.built, true)
+    assert.equal(force.reason, "missing")
+    assert.equal(force.docs_indexed, 4)
+    assert.equal(force.docs_skipped, 1)
+    assert.equal(force.docs_pruned, 2)
+    assert.equal(force.chunks_total, 5)
+    for (const [filePath, body] of sentinels) {
+      assert.equal(
+        await fs.readFile(filePath, "utf8"),
+        body,
+        `legacy direct ensure/reset path touched ${path.basename(filePath)}`,
+      )
+    }
+  } finally {
+    if (restoreDefault) restoreDefault()
     await cleanupRoot(root)
   }
 })
@@ -406,6 +618,8 @@ test("shared maintenance prevents SQLITE_BUSY overlap from leaking to search or 
   let busyThrows = 0
   let maxSameRootWriters = 0
   let maintenance
+  let searchPromise
+  let reindexPromise
 
   async function fakeWriter(deskRoot, label, operation) {
     const canonical = path.resolve(deskRoot)
@@ -457,10 +671,13 @@ test("shared maintenance prevents SQLITE_BUSY overlap from leaking to search or 
         const { deskRoot, signal } = options
         return fakeWriter(deskRoot, "background-repair", async () => {
           backgroundEntered.resolve()
-          await new Promise((resolve) => {
-            if (signal.aborted) resolve()
-            else signal.addEventListener("abort", resolve, { once: true })
-          })
+          await awaitBounded(
+            new Promise((resolve) => {
+              if (signal.aborted) resolve()
+              else signal.addEventListener("abort", resolve, { once: true })
+            }),
+            "background repair did not observe explicit-reindex cancellation",
+          )
           return {
             processed_chunks: 0,
             vectors_indexed: 0,
@@ -476,24 +693,26 @@ test("shared maintenance prevents SQLITE_BUSY overlap from leaking to search or 
       },
     })
 
+    searchPromise = desk_search({
+      deskRoot: root,
+      input: { query: "alpha" },
+      opts: { embed: searchEmbed, maintenance },
+    })
     const searchResult = await awaitBounded(
-      desk_search({
-        deskRoot: root,
-        input: { query: "alpha" },
-        opts: { embed: searchEmbed, maintenance },
-      }),
+      searchPromise,
       "search caller did not return while background repair remained active",
     )
     await awaitBounded(
       backgroundEntered.promise,
       "search did not launch the fake background writer",
     )
+    reindexPromise = desk_reindex({
+      deskRoot: root,
+      input: { force: true },
+      opts: { embed: reindexEmbed, maintenance },
+    })
     const reindexResult = await awaitBounded(
-      desk_reindex({
-        deskRoot: root,
-        input: { force: true },
-        opts: { embed: reindexEmbed, maintenance },
-      }),
+      reindexPromise,
       "reindex caller leaked SQLITE_BUSY or failed to await background cleanup",
     )
 
@@ -531,6 +750,12 @@ test("shared maintenance prevents SQLITE_BUSY overlap from leaking to search or 
         "maintenance did not settle during SQLITE_BUSY test cleanup",
       )
     }
+    await awaitBounded(
+      Promise.allSettled(
+        [searchPromise, reindexPromise].filter(Boolean),
+      ),
+      "SQLITE_BUSY integration promises did not settle during cleanup",
+    ).catch(() => {})
     await cleanupRoot(root)
   }
 })
@@ -557,21 +782,27 @@ test("maintenance integration preserves the exact 15 tools and current search/re
     )
     await buildFixtureIndex(root)
 
-    const search = await desk_search({
-      deskRoot: root,
-      input: { query: "alpha" },
-      opts: { embed: { fetch: makeEmbedFetch() }, maintenance },
-    })
-    const reindex = await desk_reindex({
-      deskRoot: root,
-      input: {},
-      opts: {
-        maintenance,
-        skipEmbed: true,
-        snapshots: false,
-        vectorPacks: false,
-      },
-    })
+    const search = await awaitBounded(
+      desk_search({
+        deskRoot: root,
+        input: { query: "alpha" },
+        opts: { embed: { fetch: makeEmbedFetch() }, maintenance },
+      }),
+      "schema search did not settle through maintenance",
+    )
+    const reindex = await awaitBounded(
+      desk_reindex({
+        deskRoot: root,
+        input: {},
+        opts: {
+          maintenance,
+          skipEmbed: true,
+          snapshots: false,
+          vectorPacks: false,
+        },
+      }),
+      "schema reindex did not settle through maintenance",
+    )
 
     assert.deepEqual([...TOOL_NAMES].sort(), EXPECTED_TOOL_NAMES)
     assert.deepEqual(Object.keys(search).sort(), [

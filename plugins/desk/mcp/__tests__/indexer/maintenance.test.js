@@ -147,6 +147,10 @@ test("search freshness finishes before scheduling one reused same-root repair jo
   const repairCalls = []
   const embed = { fetch: async () => null }
   let ensureCallCount = 0
+  let first
+  let second
+  let firstResult
+  let secondResult
 
   const maintenance = createMaintenanceCoordinator({
     ensureIndex: async (deskRoot, options) => {
@@ -154,7 +158,10 @@ test("search freshness finishes before scheduling one reused same-root repair jo
       ensureCalls.push({ deskRoot, options })
       if (ensureCallCount === 1) {
         freshnessEntered.resolve()
-        await freshnessRelease.promise
+        await awaitBounded(
+          freshnessRelease.promise,
+          "first same-root search freshness was not released",
+        )
       }
       return {
         built: false,
@@ -184,7 +191,7 @@ test("search freshness finishes before scheduling one reused same-root repair jo
   })
 
   try {
-    const first = maintenance.ensureSearchFreshness({
+    first = maintenance.ensureSearchFreshness({
       deskRoot: root,
       ensureOptions: { embed, marker: "first", skipEmbed: false },
     })
@@ -192,7 +199,7 @@ test("search freshness finishes before scheduling one reused same-root repair jo
       freshnessEntered.promise,
       "first search freshness did not enter ensureIndex",
     )
-    const second = maintenance.ensureSearchFreshness({
+    second = maintenance.ensureSearchFreshness({
       deskRoot: root,
       ensureOptions: { embed, marker: "second" },
     })
@@ -204,10 +211,12 @@ test("search freshness finishes before scheduling one reused same-root repair jo
     )
 
     freshnessRelease.resolve()
-    const [firstResult, secondResult] = await awaitBounded(
+    const results = await awaitBounded(
       Promise.all([first, second]),
       "same-root search freshness calls did not settle",
     )
+    firstResult = results[0]
+    secondResult = results[1]
 
     assert.equal(ensureCalls.length, 2)
     for (const call of ensureCalls) {
@@ -243,103 +252,188 @@ test("search freshness finishes before scheduling one reused same-root repair jo
     assert.equal("marker" in repairCalls[0], false)
   } finally {
     freshnessRelease.resolve()
+    const settledFreshness = await awaitBounded(
+      Promise.allSettled([first, second].filter(Boolean)),
+      "same-root freshness calls did not settle during cleanup",
+    ).catch(() => [])
+    const repairPromises = [
+      firstResult?.repair,
+      secondResult?.repair,
+      ...settledFreshness
+        .filter((result) => result.status === "fulfilled")
+        .map((result) => result.value?.repair),
+    ].filter(Boolean)
+    await awaitBounded(
+      maintenance.cancelBackgroundRepair(root),
+      "same-root maintenance did not settle during cleanup",
+    ).catch(() => {})
+    await awaitBounded(
+      Promise.allSettled(repairPromises),
+      "same-root repair promises did not settle during cleanup",
+    ).catch(() => {})
     await removeRoots(root)
   }
 })
 
-test("one root queue serializes freshness, repair, and reindex while other roots stay independent", async () => {
-  const { createRootMaintenanceQueue } = await loadMaintenance()
+test("coordinator lets root B complete while root A search freshness holds its lock", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
   const [rootA, rootB] = await Promise.all([
     makeRoot("desk-maintenance-root-a-"),
     makeRoot("desk-maintenance-root-b-"),
   ])
-  const queue = createRootMaintenanceQueue()
-  const freshnessEntered = deferred()
-  const freshnessRelease = deferred()
+  const rootAEntered = deferred()
+  const rootARelease = deferred()
+  const rootBEntered = deferred()
   const events = []
+  const ensureCalls = []
+  const embedA = { fetch: async () => null }
+  const embedB = { fetch: async () => null }
+  let maintenance
+  let rootAFreshness
+  let rootBReindex
 
   try {
-    const freshness = queue.run(rootA, async () => {
-      events.push("a:freshness:start")
-      freshnessEntered.resolve()
-      await freshnessRelease.promise
-      events.push("a:freshness:end")
+    maintenance = createMaintenanceCoordinator({
+      ensureIndex: async (deskRoot, options) => {
+        ensureCalls.push({ deskRoot, options })
+        if (deskRoot === path.resolve(rootA)) {
+          events.push("a:freshness:start")
+          rootAEntered.resolve()
+          await awaitBounded(
+            rootARelease.promise,
+            "root A search freshness was not released",
+          )
+          events.push("a:freshness:end")
+          return {
+            built: false,
+            reason: "fresh",
+            semantic: {
+              chunks_total: 1,
+              vectors_indexed: 1,
+              missing_vectors: 0,
+            },
+          }
+        }
+        assert.equal(deskRoot, path.resolve(rootB))
+        events.push("b:reindex:start")
+        rootBEntered.resolve()
+        events.push("b:reindex:end")
+        return {
+          built: true,
+          reason: "semantic_missing",
+          semantic: {
+            chunks_total: 2,
+            vectors_indexed: 2,
+            missing_vectors: 0,
+          },
+        }
+      },
+      repairBatch: async () => {
+        assert.fail("complete semantic coverage must not schedule repair")
+      },
+    })
+
+    rootAFreshness = maintenance.ensureSearchFreshness({
+      deskRoot: rootA,
+      ensureOptions: { embed: embedA },
     })
     await awaitBounded(
-      freshnessEntered.promise,
-      "root A freshness writer did not enter the maintenance queue",
+      rootAEntered.promise,
+      "root A search freshness did not enter the coordinator",
     )
+    const observedRootA = observeSettlement(rootAFreshness)
 
-    const repair = queue.run(rootA, async () => {
-      events.push("a:repair:start")
-      events.push("a:repair:end")
+    rootBReindex = maintenance.runExplicitReindex({
+      deskRoot: rootB,
+      force: false,
+      ensureOptions: { embed: embedB },
     })
-    const reindex = queue.run(rootA, async () => {
-      events.push("a:reindex:start")
-      events.push("a:reindex:end")
-    })
-    const otherRoot = queue.run(rootB, async () => {
-      events.push("b:writer:start")
-      events.push("b:writer:end")
-      return "root-b-complete"
-    })
-
-    assert.equal(
-      await awaitBounded(
-        otherRoot,
-        "different-root maintenance was incorrectly blocked",
-      ),
-      "root-b-complete",
+    await awaitBounded(
+      rootBEntered.promise,
+      "root B coordinator operation did not start independently",
     )
+    const rootBResult = await awaitBounded(
+      rootBReindex,
+      "root B coordinator operation was incorrectly blocked by root A",
+    )
+    assert.equal(rootBResult.reason, "semantic_missing")
+    assert.equal(rootBResult.semantic.missing_vectors, 0)
+    assert.equal(observedRootA.state, "pending")
     assert.deepEqual(events, [
       "a:freshness:start",
-      "b:writer:start",
-      "b:writer:end",
+      "b:reindex:start",
+      "b:reindex:end",
     ])
 
-    freshnessRelease.resolve()
+    rootARelease.resolve()
+    const rootAResult = await awaitBounded(
+      rootAFreshness,
+      "root A search freshness did not settle after release",
+    )
     await awaitBounded(
-      Promise.all([freshness, repair, reindex]),
-      "same-root maintenance queue did not drain",
+      rootAResult.repair,
+      "root A no-op repair promise did not settle",
     )
     assert.deepEqual(events, [
       "a:freshness:start",
-      "b:writer:start",
-      "b:writer:end",
+      "b:reindex:start",
+      "b:reindex:end",
       "a:freshness:end",
-      "a:repair:start",
-      "a:repair:end",
-      "a:reindex:start",
-      "a:reindex:end",
+    ])
+    assert.deepEqual(ensureCalls, [
+      {
+        deskRoot: path.resolve(rootA),
+        options: { embed: embedA, skipEmbed: true },
+      },
+      {
+        deskRoot: path.resolve(rootB),
+        options: { embed: embedB },
+      },
     ])
   } finally {
-    freshnessRelease.resolve()
+    rootARelease.resolve()
+    if (maintenance) {
+      await awaitBounded(
+        Promise.all([
+          maintenance.cancelBackgroundRepair(rootA),
+          maintenance.cancelBackgroundRepair(rootB),
+        ]),
+        "different-root coordinator cleanup did not settle",
+      ).catch(() => {})
+    }
+    await awaitBounded(
+      Promise.allSettled([rootAFreshness, rootBReindex].filter(Boolean)),
+      "different-root coordinator promises did not settle during cleanup",
+    ).catch(() => {})
     await removeRoots(rootA, rootB)
   }
 })
 
-test("force reindex cancels cleanup, then locks reset and complete repair behind a competing writer", async () => {
+test("force reindex holds one continuous lock across reset and full repair before a queued same-root writer", async () => {
   const { createMaintenanceCoordinator } = await loadMaintenance()
   const root = await makeRoot("desk-maintenance-reindex-")
   const backgroundStarted = deferred()
   const backgroundAborted = deferred()
   const backgroundCleanupRelease = deferred()
-  const cancelReturnRelease = deferred()
-  const cancelDone = deferred()
-  const competingWriterStarted = deferred()
-  const competingWriterRelease = deferred()
+  const resetStarted = deferred()
+  const resetRelease = deferred()
   const fullRepairStarted = deferred()
   const fullRepairRelease = deferred()
+  const competingWriterStarted = deferred()
+  const competingWriterRelease = deferred()
   const events = []
   const resetCalls = []
   const ensureCalls = []
   const activeByRoot = new Map()
   const embed = { fetch: async () => null }
   let overlapThrows = 0
+  let maxSameRootWriters = 0
   let freshnessCalls = 0
   let explicitReindex
   let competingFreshness
+  let competingResult
   let searchFreshness
+  let maintenance
 
   async function guardedWriter(deskRoot, label, operation) {
     const canonical = path.resolve(deskRoot)
@@ -351,6 +445,7 @@ test("force reindex cancels cleanup, then locks reset and complete repair behind
       throw error
     }
     activeByRoot.set(canonical, label)
+    maxSameRootWriters = Math.max(maxSameRootWriters, activeByRoot.size)
     events.push(`${label}:start`)
     try {
       return await operation()
@@ -376,12 +471,15 @@ test("force reindex cancels cleanup, then locks reset and complete repair behind
       async cancel(deskRoot) {
         events.push("cancel:start")
         assert.equal(deskRoot, path.resolve(root))
-        controller.abort()
-        await active
+        controller?.abort()
+        if (active) {
+          await awaitBounded(
+            active,
+            "background repair cleanup was not awaited by cancellation",
+          )
+        }
         events.push("cancel:cleanup-awaited")
-        await cancelReturnRelease.promise
         events.push("cancel:done")
-        cancelDone.resolve()
         return {
           state: "idle",
           last_error: null,
@@ -394,7 +492,7 @@ test("force reindex cancels cleanup, then locks reset and complete repair behind
     }
   }
 
-  const maintenance = createMaintenanceCoordinator({
+  maintenance = createMaintenanceCoordinator({
     ensureIndex: async (deskRoot, options) => {
       ensureCalls.push({ deskRoot, options })
       if (options.skipEmbed) {
@@ -404,22 +502,28 @@ test("force reindex cancels cleanup, then locks reset and complete repair behind
         return guardedWriter(deskRoot, label, async () => {
           if (freshnessCalls > 1) {
             competingWriterStarted.resolve()
-            await competingWriterRelease.promise
+            await awaitBounded(
+              competingWriterRelease.promise,
+              "competing same-root writer was not released",
+            )
           }
           return {
             built: false,
             reason: "fresh",
             semantic: {
               chunks_total: 2,
-              vectors_indexed: 1,
-              missing_vectors: 1,
+              vectors_indexed: freshnessCalls === 1 ? 1 : 2,
+              missing_vectors: freshnessCalls === 1 ? 1 : 0,
             },
           }
         })
       }
       return guardedWriter(deskRoot, "reindex:ensure", async () => {
         fullRepairStarted.resolve()
-        await fullRepairRelease.promise
+        await awaitBounded(
+          fullRepairRelease.promise,
+          "full explicit repair was not released",
+        )
         return {
           built: true,
           reason: "semantic_missing",
@@ -434,16 +538,22 @@ test("force reindex cancels cleanup, then locks reset and complete repair behind
     repairBatch: async ({ deskRoot, signal }) => {
       return guardedWriter(deskRoot, "background", async () => {
         backgroundStarted.resolve()
-        await new Promise((resolve) => {
-          const onAbort = () => {
-            events.push("background:abort")
-            backgroundAborted.resolve()
-            resolve()
-          }
-          if (signal.aborted) onAbort()
-          else signal.addEventListener("abort", onAbort, { once: true })
-        })
-        await backgroundCleanupRelease.promise
+        await awaitBounded(
+          new Promise((resolve) => {
+            const onAbort = () => {
+              events.push("background:abort")
+              backgroundAborted.resolve()
+              resolve()
+            }
+            if (signal.aborted) onAbort()
+            else signal.addEventListener("abort", onAbort, { once: true })
+          }),
+          "background repair did not observe explicit-reindex cancellation",
+        )
+        await awaitBounded(
+          backgroundCleanupRelease.promise,
+          "background repair cleanup was not released",
+        )
         events.push("background:cleanup")
         return {
           processed_chunks: 0,
@@ -457,15 +567,24 @@ test("force reindex cancels cleanup, then locks reset and complete repair behind
     createRepairCoordinator,
     resetIndex: async (options) => {
       resetCalls.push(options)
-      return guardedWriter(options.deskRoot, "reindex:reset", async () => {})
+      return guardedWriter(options.deskRoot, "reindex:reset", async () => {
+        resetStarted.resolve()
+        await awaitBounded(
+          resetRelease.promise,
+          "force reset was not released",
+        )
+      })
     },
   })
 
   try {
-    searchFreshness = await maintenance.ensureSearchFreshness({
-      deskRoot: root,
-      ensureOptions: { embed },
-    })
+    searchFreshness = await awaitBounded(
+      maintenance.ensureSearchFreshness({
+        deskRoot: root,
+        ensureOptions: { embed },
+      }),
+      "initial search freshness did not settle",
+    )
     await awaitBounded(
       backgroundStarted.promise,
       "background repair did not start after search freshness",
@@ -482,83 +601,78 @@ test("force reindex cancels cleanup, then locks reset and complete repair behind
       backgroundAborted.promise,
       "explicit reindex did not abort the active background repair",
     )
-    competingFreshness = maintenance.ensureSearchFreshness({
-      deskRoot: root,
-      ensureOptions: { embed },
-    })
-    assert.equal(resetCalls.length, 0)
-    assert.equal(
-      ensureCalls.length,
-      1,
-      "explicit repair must not start until background cleanup completes",
-    )
+    assert.equal(resetStarted.settled, false)
+    assert.equal(ensureCalls.length, 1)
     assert.equal(observedReindex.state, "pending")
 
     backgroundCleanupRelease.resolve()
     await awaitBounded(
-      competingWriterStarted.promise,
-      "competing writer did not acquire the root lock after background cleanup",
+      resetStarted.promise,
+      "force reset did not start after background cleanup completed",
     )
-    assert.equal(resetCalls.length, 0)
-    assert.equal(overlapThrows, 0)
+    const cancellationOrder = [
+      "cancel:start",
+      "background:abort",
+      "background:cleanup",
+      "background:end",
+      "cancel:cleanup-awaited",
+      "cancel:done",
+      "reindex:reset:start",
+    ].map((event) => events.indexOf(event))
+    assert.ok(
+      cancellationOrder.every((index) => index >= 0),
+      "cancel, cleanup, and reset events must all be observable",
+    )
+    assert.deepEqual(
+      [...cancellationOrder].sort((a, b) => a - b),
+      cancellationOrder,
+      "explicit reindex must cancel, await cleanup, then enter the locked reset",
+    )
     assert.equal(observedReindex.state, "pending")
 
-    cancelReturnRelease.resolve()
-    await awaitBounded(
-      cancelDone.promise,
-      "explicit reindex cancellation did not finish after cleanup",
-    )
+    competingFreshness = maintenance.ensureSearchFreshness({
+      deskRoot: root,
+      ensureOptions: { embed },
+    })
     await flushAsyncWork(
-      "force-reindex reset overlap check did not reach a deterministic turn",
+      "queued same-root writer check did not reach a deterministic turn",
     )
     assert.equal(
-      resetCalls.length,
-      0,
-      "force reset must remain behind the same per-root mutex while another writer owns it",
+      competingWriterStarted.settled,
+      false,
+      "competing writer entered while force reset held the root lock",
+    )
+
+    resetRelease.resolve()
+    const nextWriter = await awaitBounded(
+      Promise.race([
+        fullRepairStarted.promise.then(() => "full-repair"),
+        competingWriterStarted.promise.then(() => "competitor"),
+      ]),
+      "neither full repair nor the competing writer started after reset",
     )
     assert.equal(
-      overlapThrows,
-      0,
-      "reset outside the root mutex would overlap the competing writer",
+      nextWriter,
+      "full-repair",
+      "separate reset and repair mutex acquisitions let the queued writer interleave",
     )
-    assert.equal(observedReindex.state, "pending")
-
-    competingWriterRelease.resolve()
-    const competingResult = await awaitBounded(
-      competingFreshness,
-      "competing writer did not release the root mutex",
-    )
-    await awaitBounded(
-      fullRepairStarted.promise,
-      "explicit reindex did not acquire the root lock after the competing writer",
-    )
-
+    assert.equal(competingWriterStarted.settled, false)
     assert.deepEqual(resetCalls, [{ deskRoot: path.resolve(root) }])
-    assert.equal(ensureCalls.length, 3)
-    assert.equal(ensureCalls[2].deskRoot, path.resolve(root))
-    assert.equal(ensureCalls[2].options.embed, embed)
+    assert.equal(ensureCalls.length, 2)
+    assert.equal(ensureCalls[1].deskRoot, path.resolve(root))
+    assert.equal(ensureCalls[1].options.embed, embed)
     assert.equal(
-      "skipEmbed" in ensureCalls[2].options,
+      "skipEmbed" in ensureCalls[1].options,
       false,
       "explicit reindex must run the complete embeddings-enabled repair path",
     )
-    assert.ok(events.indexOf("background:cleanup") < events.indexOf("cancel:done"))
-    assert.ok(
-      events.indexOf("competing-freshness:start") <
-        events.indexOf("cancel:done"),
+    await flushAsyncWork(
+      "full-repair lock check did not reach a deterministic turn",
     )
-    assert.ok(
-      events.indexOf("cancel:done") <
-        events.indexOf("competing-freshness:end"),
-    )
-    assert.ok(
-      events.indexOf("competing-freshness:end") <
-        events.indexOf("reindex:reset:start"),
-    )
-    assert.ok(
-      events.indexOf("reindex:reset:end") <
-        events.indexOf("reindex:ensure:start"),
-    )
+    assert.equal(competingWriterStarted.settled, false)
+    assert.equal(observedReindex.state, "pending")
+    assert.equal(overlapThrows, 0)
+    assert.equal(maxSameRootWriters, 1)
 
     fullRepairRelease.resolve()
     const result = await awaitBounded(
@@ -568,6 +682,31 @@ test("force reindex cancels cleanup, then locks reset and complete repair behind
     assert.equal(result.reason, "semantic_missing")
     assert.equal(result.semantic.missing_vectors, 0)
     await awaitBounded(
+      competingWriterStarted.promise,
+      "queued same-root writer did not start after explicit reindex completed",
+    )
+
+    const resetEnd = events.indexOf("reindex:reset:end")
+    const fullStart = events.indexOf("reindex:ensure:start")
+    const fullEnd = events.indexOf("reindex:ensure:end")
+    const competingStart = events.indexOf("competing-freshness:start")
+    assert.equal(
+      fullStart,
+      resetEnd + 1,
+      "reset and full repair must be adjacent inside one continuous root lock",
+    )
+    assert.ok(fullStart < fullEnd)
+    assert.ok(
+      fullEnd < competingStart,
+      "competing writer must start only after the complete reindex releases the lock",
+    )
+
+    competingWriterRelease.resolve()
+    competingResult = await awaitBounded(
+      competingFreshness,
+      "competing search freshness did not settle after release",
+    )
+    await awaitBounded(
       searchFreshness.repair,
       "cancelled background repair promise did not settle",
     )
@@ -575,15 +714,13 @@ test("force reindex cancels cleanup, then locks reset and complete repair behind
       competingResult.repair,
       "competing search repair promise did not settle",
     )
-    assert.ok(
-      events.indexOf("reindex:ensure:start") <
-        events.indexOf("reindex:ensure:end"),
-    )
+    assert.equal(overlapThrows, 0)
+    assert.equal(maxSameRootWriters, 1)
   } finally {
     backgroundCleanupRelease.resolve()
-    cancelReturnRelease.resolve()
-    competingWriterRelease.resolve()
+    resetRelease.resolve()
     fullRepairRelease.resolve()
+    competingWriterRelease.resolve()
     if (maintenance) {
       await awaitBounded(
         maintenance.cancelBackgroundRepair(root),
@@ -592,9 +729,12 @@ test("force reindex cancels cleanup, then locks reset and complete repair behind
     }
     await awaitBounded(
       Promise.allSettled(
-        [explicitReindex, competingFreshness, searchFreshness?.repair].filter(
-          Boolean,
-        ),
+        [
+          explicitReindex,
+          competingFreshness,
+          competingResult?.repair,
+          searchFreshness?.repair,
+        ].filter(Boolean),
       ),
       "force-reindex test promises did not settle during cleanup",
     ).catch(() => {})
@@ -606,17 +746,30 @@ test("root maintenance queue releases after success, rejection, and cancellation
   const { createRootMaintenanceQueue } = await loadMaintenance()
   const root = await makeRoot("desk-maintenance-release-")
   const queue = createRootMaintenanceQueue()
+  const successEntered = deferred()
+  const successRelease = deferred()
+  const rejectionEntered = deferred()
+  const rejectionRelease = deferred()
+  const cancellationEntered = deferred()
+  const controller = new AbortController()
+  let success
+  let afterSuccess
+  let rejected
+  let afterRejection
+  let cancelled
+  let afterCancellation
 
   try {
-    const successEntered = deferred()
-    const successRelease = deferred()
-    const success = queue.run(root, async () => {
+    success = queue.run(root, async () => {
       successEntered.resolve()
-      await successRelease.promise
+      await awaitBounded(
+        successRelease.promise,
+        "successful writer was not released",
+      )
       return "success"
     })
     await awaitBounded(successEntered.promise, "success writer did not enter")
-    const afterSuccess = queue.run(root, async () => "after-success")
+    afterSuccess = queue.run(root, async () => "after-success")
     const afterSuccessState = observeSettlement(afterSuccess)
     assert.equal(afterSuccessState.state, "pending")
     successRelease.resolve()
@@ -626,16 +779,17 @@ test("root maintenance queue releases after success, rejection, and cancellation
       "after-success",
     )
 
-    const rejectionEntered = deferred()
-    const rejectionRelease = deferred()
-    const rejected = queue.run(root, async () => {
+    rejected = queue.run(root, async () => {
       rejectionEntered.resolve()
-      await rejectionRelease.promise
+      await awaitBounded(
+        rejectionRelease.promise,
+        "rejecting writer was not released",
+      )
       throw new Error("writer rejected")
     })
     const rejectedAssertion = assert.rejects(rejected, /writer rejected/)
     await awaitBounded(rejectionEntered.promise, "rejecting writer did not enter")
-    const afterRejection = queue.run(root, async () => "after-rejection")
+    afterRejection = queue.run(root, async () => "after-rejection")
     rejectionRelease.resolve()
     await awaitBounded(rejectedAssertion, "rejecting writer did not settle")
     assert.equal(
@@ -643,19 +797,20 @@ test("root maintenance queue releases after success, rejection, and cancellation
       "after-rejection",
     )
 
-    const controller = new AbortController()
-    const cancellationEntered = deferred()
-    const cancelled = queue.run(root, async () => {
+    cancelled = queue.run(root, async () => {
       cancellationEntered.resolve()
-      await new Promise((_, reject) => {
-        const onAbort = () => {
-          const error = new Error("writer cancelled")
-          error.name = "AbortError"
-          reject(error)
-        }
-        if (controller.signal.aborted) onAbort()
-        else controller.signal.addEventListener("abort", onAbort, { once: true })
-      })
+      await awaitBounded(
+        new Promise((_, reject) => {
+          const onAbort = () => {
+            const error = new Error("writer cancelled")
+            error.name = "AbortError"
+            reject(error)
+          }
+          if (controller.signal.aborted) onAbort()
+          else controller.signal.addEventListener("abort", onAbort, { once: true })
+        }),
+        "cancellable writer did not observe abort",
+      )
     })
     const cancelledAssertion = assert.rejects(
       cancelled,
@@ -665,7 +820,7 @@ test("root maintenance queue releases after success, rejection, and cancellation
       cancellationEntered.promise,
       "cancellable writer did not enter",
     )
-    const afterCancellation = queue.run(root, async () => "after-cancellation")
+    afterCancellation = queue.run(root, async () => "after-cancellation")
     controller.abort()
     await awaitBounded(cancelledAssertion, "cancelled writer did not settle")
     assert.equal(
@@ -676,6 +831,22 @@ test("root maintenance queue releases after success, rejection, and cancellation
       "after-cancellation",
     )
   } finally {
+    successRelease.resolve()
+    rejectionRelease.resolve()
+    controller.abort()
+    await awaitBounded(
+      Promise.allSettled(
+        [
+          success,
+          afterSuccess,
+          rejected,
+          afterRejection,
+          cancelled,
+          afterCancellation,
+        ].filter(Boolean),
+      ),
+      "root queue promises did not settle during cleanup",
+    ).catch(() => {})
     await removeRoots(root)
   }
 })
