@@ -1,4 +1,4 @@
-// desk_reindex — rebuild the desk-index sqlite db.
+// desk_reindex — rebuild the desk-index sqlite db through shared maintenance.
 //
 // Two modes:
 //   - default (no args)     → behaves like ensureIndex (mtime-incremental).
@@ -15,9 +15,9 @@
 //            ms }. The summary fields are 0 when ensureIndex returned a
 // fresh/no-op response — nothing was reindexed in that pass.
 
-import { existsSync, rmSync } from "node:fs"
-import { ensureIndex } from "../server-helpers.js"
-import { indexDbPath } from "../db/init.js"
+import * as path from "node:path"
+
+import { maintenanceCoordinator } from "../indexer/maintenance.js"
 
 /**
  * @param {object} args
@@ -29,20 +29,12 @@ import { indexDbPath } from "../db/init.js"
 export async function desk_reindex({ deskRoot, input, opts = {} }) {
   const force = !!(input && input.force)
   const start = Date.now()
-
-  if (force) {
-    const dbPath = indexDbPath(deskRoot)
-    if (existsSync(dbPath)) {
-      // Drop the main DB file. WAL / SHM sidecars are recreated by
-      // better-sqlite3 on next open, so removing them is optional — but we
-      // do it anyway so a stale WAL can't shadow the rebuilt state.
-      rmSync(dbPath, { force: true })
-      rmSync(`${dbPath}-wal`, { force: true })
-      rmSync(`${dbPath}-shm`, { force: true })
-    }
-  }
-
-  const ensured = await ensureIndex(deskRoot, opts)
+  const { maintenance = maintenanceCoordinator, ...ensureOptions } = opts
+  const ensured = await maintenance.runExplicitReindex({
+    deskRoot: path.resolve(deskRoot),
+    force,
+    ensureOptions,
+  })
   const summary = ensured.summary ?? {}
 
   return {

@@ -20,6 +20,7 @@
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { openDb, closeDb } from "../db/init.js"
+import { maintenanceCoordinator } from "../indexer/maintenance.js"
 import { ensureIndex } from "../server-helpers.js"
 import { embedQuery } from "../util/embed-query.js"
 import {
@@ -443,7 +444,11 @@ export async function desk_search({ deskRoot, input, opts }) {
   const scope = input?.scope
   const now = opts?.now ?? Date.now()
 
-  await ensureIndex(deskRoot, { embed: opts?.embed ?? {} })
+  const maintenance = opts?.maintenance ?? maintenanceCoordinator
+  await maintenance.ensureSearchFreshness({
+    deskRoot: path.resolve(deskRoot),
+    ensureOptions: { embed: opts?.embed ?? {} },
+  })
   const db = openDb(deskRoot)
   try {
     const { matchExpr, terms } = buildFtsQuery(query)
