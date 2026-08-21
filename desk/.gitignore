@@ -1,1 +1,6 @@
 .state/
+
+# Keep the committed public bootstrap artifact scoped to its canonical fixture.
+tasks/2026-06-14-1335-doing-desk-dependency-activation.md
+tasks/2026-06-14-1335-planning-desk-dependency-activation.md
+tasks/2026-06-14-1335-doing-desk-dependency-activation/
