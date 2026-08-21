@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS docs (
   created_at TEXT,                          -- ISO 8601, from frontmatter
   updated_at TEXT,                          -- ISO 8601, from frontmatter
   hash TEXT NOT NULL,                       -- sha256 of file content for dirty-detection
-  mtime INTEGER NOT NULL,                   -- filesystem mtime for fast first-pass dirty check
+  mtime INTEGER NOT NULL,                   -- filesystem mtime retained as indexed document metadata
   is_archived INTEGER NOT NULL DEFAULT 0,   -- 1 if the doc lives under any _archive/ ancestor
   frontmatter TEXT                          -- raw JSON of full frontmatter object
 );

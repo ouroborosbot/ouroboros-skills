@@ -10,10 +10,12 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { closeDb, getMeta, indexDbPath, openDb, setMeta } from "./db/init.js"
 import { DISCOVERY_GRAMMAR_VERSION, discover } from "./indexer/discover.js"
+import { documentTreeHash } from "./indexer/document-tree.js"
 import {
   isIndexFresh,
   rebuildIndex,
 } from "./indexer/index.js"
+import { filterTombstonedDocuments } from "./artifacts/tombstones.js"
 import { probeEmbeddingService } from "./indexer/embed.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
 import { restoreSnapshotToState } from "./snapshots/restore.js"
@@ -35,8 +37,13 @@ const SNAPSHOT_PORTABLE_RUNTIME = Object.freeze({
   node_abi: "portable",
 })
 const ARTIFACT_SOURCE_SCOPE_PATHS = Object.freeze([
+  "plugins/desk/mcp/src/artifacts/tombstones.js",
+  "plugins/desk/mcp/src/indexer/chunk.js",
   "plugins/desk/mcp/src/indexer/discover.js",
+  "plugins/desk/mcp/src/indexer/document-tree.js",
+  "plugins/desk/mcp/src/indexer/exclusions.js",
   "plugins/desk/mcp/src/indexer/index.js",
+  "plugins/desk/mcp/src/indexer/refs.js",
   "plugins/desk/mcp/src/indexer/vector-packs.js",
   "plugins/desk/mcp/src/snapshots/manifest.js",
   "plugins/desk/mcp/src/snapshots/restore.js",
@@ -195,7 +202,7 @@ function resolveSnapshotOptions({ opts, pluginRoot, workspaceArtifactRoot, deskR
   if (opts.snapshots === false || opts.snapshots === null) return undefined
   if (opts.snapshots !== undefined) {
     return {
-      ...defaultSnapshotCompatibilityContext({ deskRoot, signal }),
+      ...defaultSnapshotCompatibilityContext({ deskRoot, pluginRoot, signal }),
       pluginRoot,
       ...opts.snapshots,
     }
@@ -209,7 +216,7 @@ function resolveSnapshotOptions({ opts, pluginRoot, workspaceArtifactRoot, deskR
     pluginRoot: artifactRoots[0],
     fallbackPluginRoots: artifactRoots.slice(1),
     ignoreInvalidRoots: true,
-    ...defaultSnapshotCompatibilityContext({ deskRoot, signal }),
+    ...defaultSnapshotCompatibilityContext({ deskRoot, pluginRoot, signal }),
   }
 }
 
@@ -283,7 +290,7 @@ async function restoreSnapshotWithFallback({
   return firstMiss
 }
 
-function defaultSnapshotCompatibilityContext({ deskRoot, signal } = {}) {
+function defaultSnapshotCompatibilityContext({ deskRoot, pluginRoot, signal } = {}) {
   return {
     expectedDbSchema: SNAPSHOT_DB_SCHEMA,
     expectedSqliteVec: {
@@ -293,13 +300,19 @@ function defaultSnapshotCompatibilityContext({ deskRoot, signal } = {}) {
     },
     expectedRuntime: SNAPSHOT_PORTABLE_RUNTIME,
     expectedArtifactSourceScopeHash: artifactSourceScopeHash(),
-    expectedDocumentTreeHash: () => currentDocumentTreeHash(deskRoot, signal),
+    expectedDocumentTreeHash: () =>
+      currentDocumentTreeHash(deskRoot, pluginRoot, signal),
     expectedDiscoveryGrammarVersion: DISCOVERY_GRAMMAR_VERSION,
   }
 }
 
-async function currentDocumentTreeHash(deskRoot, signal) {
-  return documentTreeHash(await discover(deskRoot, { signal }))
+async function currentDocumentTreeHash(deskRoot, pluginRoot, signal) {
+  const discovered = await discover(deskRoot, { signal })
+  const filtered = await filterTombstonedDocuments({
+    pluginRoot,
+    docs: discovered,
+  })
+  return documentTreeHash(filtered.docs)
 }
 
 async function markRestoredSnapshotFresh(deskRoot, db, signal) {
@@ -307,14 +320,6 @@ async function markRestoredSnapshotFresh(deskRoot, db, signal) {
   const newestDocMtime = docs.reduce((max, doc) => Math.max(max, doc.mtime), 0)
   const indexedAtMs = Math.max(Date.now(), newestDocMtime)
   setMeta(db, "last_indexed_at", new Date(indexedAtMs).toISOString())
-}
-
-function documentTreeHash(docs) {
-  const hash = createHash("sha256")
-  for (const doc of docs) {
-    hash.update(`${normalizeArtifactPath(doc.path)}\0sha256:${doc.hash}\0`)
-  }
-  return `sha256:${hash.digest("hex")}`
 }
 
 function artifactSourceScopeHash() {

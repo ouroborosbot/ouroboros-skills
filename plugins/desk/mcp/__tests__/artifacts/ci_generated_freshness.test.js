@@ -443,6 +443,17 @@ test("discovery grammar participates in every artifact source-scope hash", () =>
   assert.match(serverHelpersSource, /const ARTIFACT_SOURCE_SCOPE_PATHS = Object\.freeze\(\[[\s\S]*?"plugins\/desk\/mcp\/src\/indexer\/discover\.js"[\s\S]*?\]\)/u)
   assert.match(artifactScriptsSource, /const DEFAULT_SOURCE_PATHS = Object\.freeze\(\[[\s\S]*?"plugins\/desk\/mcp\/src\/indexer\/discover\.js"[\s\S]*?\]\)/u)
   assert.match(generatedVerifierSource, /const snapshotSourceScopePaths = Object\.freeze\(\[[\s\S]*?"plugins\/desk\/mcp\/src\/indexer\/discover\.js"[\s\S]*?\]\)/u)
+  for (const sourcePath of [
+    "plugins/desk/mcp/src/artifacts/tombstones.js",
+    "plugins/desk/mcp/src/indexer/chunk.js",
+    "plugins/desk/mcp/src/indexer/document-tree.js",
+    "plugins/desk/mcp/src/indexer/exclusions.js",
+    "plugins/desk/mcp/src/indexer/refs.js",
+  ]) {
+    assert.ok(serverHelpersSource.includes(`"${sourcePath}"`))
+    assert.ok(artifactScriptsSource.includes(`"${sourcePath}"`))
+    assert.ok(generatedVerifierSource.includes(`"${sourcePath}"`))
+  }
 
   const tempMcpRoot = mkdtempSync(path.join(tmpdir(), "desk-discovery-source-scope-"))
   try {

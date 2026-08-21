@@ -12,6 +12,7 @@ import {
   assertArtifactInputsDoNotContainTombstones,
 } from "../artifacts/tombstones.js"
 import { assertArtifactInputsAllowed } from "./exclusions.js"
+import { representedDocumentTreeHash } from "./document-tree.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./spec.js"
 
 const VECTOR_ENCODING = "float32-json"
@@ -141,12 +142,12 @@ export async function validateVectorPackFile({
         : "stale"
   }
   if (expectedDocumentTreeHash !== undefined) {
-    const representedDocumentTreeHash =
-      hashRepresentedDocuments(manifest.represented_documents)
+    const representedHash =
+      representedDocumentTreeHash(manifest.represented_documents)
     freshness.document_tree =
-      representedDocumentTreeHash !== null &&
-      representedDocumentTreeHash === manifest.document_tree_hash &&
-      representedDocumentTreeHash === expectedDocumentTreeHash
+      representedHash !== null &&
+      representedHash === manifest.document_tree_hash &&
+      representedHash === expectedDocumentTreeHash
         ? "fresh"
         : "stale"
   }
@@ -312,29 +313,6 @@ function validateManifestHash({ manifest, packSha, label }) {
   if (manifest.rows_sha256 !== packSha) {
     throw new Error(`${label}: manifest rows_sha256 must match vector pack`)
   }
-}
-
-function hashRepresentedDocuments(docs) {
-  if (!Array.isArray(docs)) return null
-  if (docs.some((doc) =>
-    !doc ||
-    typeof doc !== "object" ||
-    Array.isArray(doc) ||
-    typeof doc.path !== "string" ||
-    typeof doc.hash !== "string"
-  )) {
-    return null
-  }
-  const hash = createHash("sha256")
-  for (const doc of [...docs].sort((left, right) =>
-    left.path.localeCompare(right.path)
-  )) {
-    const documentHash = doc.hash.startsWith("sha256:")
-      ? doc.hash
-      : `sha256:${doc.hash}`
-    hash.update(`${normalizePath(doc.path)}\0${documentHash}\0`)
-  }
-  return `sha256:${hash.digest("hex")}`
 }
 
 async function readPackRowsAndSha({ packPath, expectedSpec, label, signal }) {

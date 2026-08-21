@@ -25,8 +25,13 @@ const productionCurrentSourceHashField = "current_artifact_source_scope_hash";
 const productionCurrentDocumentHashField = "current_document_tree_hash";
 const productionArtifactTypes = Object.freeze(["vector-pack", "snapshot"]);
 const snapshotSourceScopePaths = Object.freeze([
+  "plugins/desk/mcp/src/artifacts/tombstones.js",
+  "plugins/desk/mcp/src/indexer/chunk.js",
   "plugins/desk/mcp/src/indexer/discover.js",
+  "plugins/desk/mcp/src/indexer/document-tree.js",
+  "plugins/desk/mcp/src/indexer/exclusions.js",
   "plugins/desk/mcp/src/indexer/index.js",
+  "plugins/desk/mcp/src/indexer/refs.js",
   "plugins/desk/mcp/src/indexer/vector-packs.js",
   "plugins/desk/mcp/src/snapshots/manifest.js",
   "plugins/desk/mcp/src/snapshots/restore.js",
@@ -46,7 +51,7 @@ function readJson(filePath) {
 }
 
 function normalizePath(filePath) {
-  return filePath.replaceAll(path.sep, "/");
+  return String(filePath).replace(/\\/gu, "/");
 }
 
 function relativeToRepo(repoRoot, filePath) {
@@ -878,7 +883,11 @@ function artifactSourceScopeHash(mcpRoot) {
 
 function documentTreeHash(docs) {
   const hash = createHash("sha256");
-  for (const doc of [...docs].sort((left, right) => String(left.path).localeCompare(String(right.path)))) {
+  for (const doc of [...docs].sort((left, right) => {
+    const leftPath = normalizePath(left.path);
+    const rightPath = normalizePath(right.path);
+    return leftPath < rightPath ? -1 : leftPath > rightPath ? 1 : 0;
+  })) {
     hash.update(`${normalizePath(doc.path)}\0${canonicalSha(doc.hash)}\0`);
   }
   return `sha256:${hash.digest("hex")}`;

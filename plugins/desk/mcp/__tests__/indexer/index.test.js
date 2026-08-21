@@ -533,6 +533,20 @@ test("isIndexFresh rejects missing chunk and refs index contents", async () => {
   } finally {
     closeDb(refsDb)
   }
+
+  await rebuildIndex(root, indexOpts)
+  const ftsDb = openDb(root)
+  try {
+    const chunk = ftsDb
+      .prepare("SELECT id, text FROM chunks ORDER BY id LIMIT 1")
+      .get()
+    ftsDb.prepare(
+      "INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', ?, ?)",
+    ).run(chunk.id, chunk.text)
+    assert.equal(await isIndexFresh(root, ftsDb), false)
+  } finally {
+    closeDb(ftsDb)
+  }
 })
 
 test("isIndexFresh compares against the tombstone-filtered live tree", async () => {

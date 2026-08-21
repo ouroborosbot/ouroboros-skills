@@ -653,6 +653,10 @@ test("artifact build scripts can stamp a source provenance commit", async () => 
     assert.equal(snapshotManifest.discovery_grammar_version, 2)
     assert.ok(packManifest.source_paths.includes("plugins/desk/mcp/src/indexer/discover.js"))
     assert.ok(snapshotManifest.source_paths.includes("plugins/desk/mcp/src/indexer/discover.js"))
+    assert.ok(packManifest.source_paths.includes("plugins/desk/mcp/src/indexer/document-tree.js"))
+    assert.ok(snapshotManifest.source_paths.includes("plugins/desk/mcp/src/indexer/document-tree.js"))
+    assert.ok(packManifest.source_paths.includes("plugins/desk/mcp/src/indexer/exclusions.js"))
+    assert.ok(snapshotManifest.source_paths.includes("plugins/desk/mcp/src/indexer/exclusions.js"))
   } finally {
     rmSync(deskRoot, { recursive: true, force: true })
     rmSync(pluginRoot, { recursive: true, force: true })
@@ -741,6 +745,60 @@ test("artifact build scripts reject tombstoned local DB docs before writing byte
       assertScriptFailedWithCode(result, "artifact_input_redacted")
       assertOutputDoesNotLeak(result, doc.body)
       assertArtifactTreeUnchanged(pluginRoot, before)
+    }
+  } finally {
+    rmSync(deskRoot, { recursive: true, force: true })
+    rmSync(pluginRoot, { recursive: true, force: true })
+  }
+})
+
+test("artifact builders compare against the tombstone-filtered live tree", async () => {
+  const deskRoot = makeTempDir("desk-artifact-scripts-filtered-tombstone-desk-")
+  const pluginRoot = makeTempDir("desk-artifact-scripts-filtered-tombstone-plugin-")
+  try {
+    writeApprovedPolicy(pluginRoot)
+    const visibleBody = "visible release fixture text\n"
+    const redactedBody = "redacted release fixture text\n"
+    writeFile(deskRoot, "references/visible.md", visibleBody)
+    writeFile(deskRoot, "references/redacted.md", redactedBody)
+    writeTombstoneLedger(pluginRoot, [
+      {
+        schema_version: 1,
+        document_path: "references/redacted.md",
+        document_hash: sha256(redactedBody),
+        reason: "redacted",
+        redacted_at: "2026-08-21T00:00:00.000Z",
+        effective_from: "2026-08-21T00:00:00.000Z",
+        artifact_rotation_id: "unit-2-filtered-tree",
+        actor: "unit-test-reviewer",
+      },
+    ])
+    await rebuildIndex(deskRoot, {
+      skipEmbed: true,
+      tombstones: { pluginRoot },
+    })
+
+    for (const [run, idFlag, id] of [
+      [runVectorPackBuildCli, "--pack-id", "filtered-tombstone-pack"],
+      [runSnapshotBuildCli, "--snapshot-id", "filtered-tombstone-snapshot"],
+    ]) {
+      const captured = captureIo()
+      assert.equal(
+        await run({
+          argv: [
+            "--desk-root",
+            deskRoot,
+            "--plugin-root",
+            pluginRoot,
+            idFlag,
+            id,
+            "--from-local-db",
+          ],
+          io: captured.io,
+        }),
+        0,
+      )
+      assert.equal(captured.stderr.join(""), "")
     }
   } finally {
     rmSync(deskRoot, { recursive: true, force: true })

@@ -353,6 +353,67 @@ test("discover honors standard gitignore question, class, and recursive wildcard
   ])
 })
 
+test("discover honors escaped gitignore markers and negated character classes", async () => {
+  const root = await tmpRoot()
+  await writeFile(
+    root,
+    ".gitignore",
+    [
+      "\\#private.md",
+      "\\!private.md",
+      "literal\\?.md",
+      "draft[!a].md",
+      "hyphen[a\\-c].md",
+      "posix[[:digit:]].md",
+      "space\\ name.md",
+      "trimmed.md   ",
+      "",
+    ].join("\n"),
+  )
+  for (const rel of [
+    "#private.md",
+    "!private.md",
+    "literal?.md",
+    "draftb.md",
+    "hyphen-.md",
+    "posix7.md",
+    "space name.md",
+    "trimmed.md",
+  ]) {
+    await writeFile(root, rel, "# Ignored\n\nfixture secret")
+  }
+  for (const rel of [
+    "literal1.md",
+    "drafta.md",
+    "hyphenb.md",
+    "posixx.md",
+    "public.md",
+  ]) {
+    await writeFile(root, rel, "# Visible\n\npublic body")
+  }
+
+  assert.deepEqual(
+    (await discover(root)).map((doc) => doc.path),
+    ["drafta.md", "hyphenb.md", "literal1.md", "posixx.md", "public.md"],
+  )
+})
+
+test("discover fails closed on unsupported gitignore character-class syntax", async () => {
+  const root = await tmpRoot()
+  await writeFile(root, ".gitignore", "private[[.a.]].md\n")
+  await writeFile(root, "public.md", "# Visible\n\npublic body")
+
+  await assert.rejects(
+    () => discover(root),
+    (error) => {
+      assert.equal(error.code, "exclusion_rules_unavailable")
+      assert.equal(error.reason, "gitignore_unsupported")
+      assertPublicErrorDoesNotLeak(error)
+      return true
+    },
+  )
+})
+
 test("discover excludes symlink and hidden docs while preserving person and shared docs", async () => {
   const root = await tmpRoot()
   await writeFile(root, "trackA/task-1/task.md", "# Visible\n\npublic body")

@@ -28,6 +28,7 @@
 import * as path from "node:path"
 import { openDb, closeDb } from "../db/init.js"
 import { ensureIndex } from "../server-helpers.js"
+import { canonicalDocumentPath } from "../indexer/document-tree.js"
 
 const DEFAULT_DEPTH = 4
 const MAX_DEPTH = 32
@@ -49,10 +50,10 @@ function normalizeStartPath(deskRoot, startPath) {
     const rel = path.relative(deskRoot, startPath)
     // Don't accept paths that escape deskRoot.
     if (rel.startsWith("..")) return startPath
-    return rel
+    return canonicalDocumentPath(rel)
   }
   // Strip leading ./ if present.
-  return startPath.replace(/^\.\//, "")
+  return canonicalDocumentPath(startPath.replace(/^\.\//, ""))
 }
 
 /**
@@ -155,7 +156,7 @@ function bfs(db, startDocId, depth, direction) {
  * @param {"forward"|"backward"|"both"} [args.input.direction] — default "both"
  * @returns {Promise<{ start, chain } | { error, note }>}
  */
-export async function desk_thread({ deskRoot, input }) {
+export async function desk_thread({ deskRoot, input, ensure = ensureIndex }) {
   const rawPath = String(input?.start_path ?? "").trim()
   if (!rawPath) {
     return {
@@ -171,7 +172,7 @@ export async function desk_thread({ deskRoot, input }) {
       ? directionRaw
       : "both"
 
-  await ensureIndex(deskRoot)
+  await ensure(deskRoot)
   const db = openDb(deskRoot)
   try {
     const startDoc = db

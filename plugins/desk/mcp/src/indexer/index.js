@@ -16,6 +16,10 @@ import {
 import { DISCOVERY_GRAMMAR_VERSION, discover } from "./discover.js"
 import { chunkBody } from "./chunk.js"
 import {
+  canonicalDocumentPath,
+  documentTreesEqual,
+} from "./document-tree.js"
+import {
   embedChunksDetailed,
   EMBEDDING_DIM,
   isChunkLocalEmbeddingFailure,
@@ -244,48 +248,87 @@ function throwIfAborted(signal) {
   throw err
 }
 
-function docNeedsActiveChunkMetadata(db, docId, doc) {
-  const expectedKeys = chunkBody(doc.body).map((chunk) =>
-    chunkIdentity({ docPath: doc.path, chunk }).chunk_key
-  )
-  const row = db
+function docNeedsActiveChunkMetadata(
+  db,
+  docId,
+  doc,
+  { requireActiveSpec = true } = {},
+) {
+  const expected = chunkBody(doc.body).map((chunk) => ({
+    ...chunk,
+    ...chunkIdentity({ docPath: doc.path, chunk }),
+  }))
+  const stored = db
     .prepare(
       `SELECT
-         COUNT(*) AS total,
-         COALESCE(SUM(
-           CASE
-             WHEN chunk_key IS NULL OR
-                  text_hash IS NULL OR
-                  embedding_spec_id IS NULL OR
-                  embedding_spec_id != ? OR
-                  chunker_id IS NULL OR
-                  chunker_id != ? OR
-                  normalization_id IS NULL OR
-                  normalization_id != ?
-             THEN 1 ELSE 0 END
-         ), 0) AS stale
-       FROM chunks
-       WHERE doc_id = ?`,
-    )
-    .get(
-      ACTIVE_EMBEDDING_SPEC.id,
-      ACTIVE_EMBEDDING_SPEC.chunker_id,
-      ACTIVE_EMBEDDING_SPEC.normalization_id,
-      docId,
-    )
-  if (row.stale > 0) return true
-  if (row.total !== expectedKeys.length) return true
-  if (expectedKeys.length === 0) return false
-  const storedKeys = db
-    .prepare(
-      `SELECT chunk_key
+         chunk_index,
+         chunk_key,
+         text_hash,
+         embedding_spec_id,
+         chunker_id,
+         normalization_id,
+         text,
+         heading,
+         start_offset,
+         end_offset
        FROM chunks
        WHERE doc_id = ?
        ORDER BY chunk_index`,
     )
     .all(docId)
-    .map((chunk) => chunk.chunk_key)
-  return storedKeys.some((chunkKey, index) => chunkKey !== expectedKeys[index])
+  if (stored.length !== expected.length) return true
+  return stored.some((chunk, index) => {
+    const wanted = expected[index]
+    return chunk.chunk_index !== wanted.index ||
+      chunk.chunk_key !== wanted.chunk_key ||
+      chunk.text_hash !== wanted.text_hash ||
+      (requireActiveSpec &&
+        (chunk.embedding_spec_id !== ACTIVE_EMBEDDING_SPEC.id ||
+          chunk.chunker_id !== ACTIVE_EMBEDDING_SPEC.chunker_id ||
+          chunk.normalization_id !== ACTIVE_EMBEDDING_SPEC.normalization_id)) ||
+      chunk.text !== wanted.text ||
+      chunk.heading !== wanted.heading ||
+      chunk.start_offset !== wanted.start_offset ||
+      chunk.end_offset !== wanted.end_offset
+  })
+}
+
+function isFtsIndexCurrent(db) {
+  const chunks = db.prepare("SELECT COUNT(*) AS n FROM chunks").get().n
+  const indexed = db
+    .prepare("SELECT COUNT(*) AS n FROM chunks_fts_docsize")
+    .get()
+    .n
+  return chunks === indexed
+}
+
+function isRefsGraphCurrent(db, docs) {
+  const expected = new Set(computeRefs(docs).map((edge) =>
+    refEdgeKey(edge.from, edge.to, edge.ref_kind)
+  ))
+  const actual = new Set(db
+    .prepare(
+      `SELECT
+         src.path AS source_path,
+         dst.path AS target_path,
+         refs.ref_kind
+       FROM refs_graph refs
+       JOIN docs src ON src.id = refs.src_doc_id
+       JOIN docs dst ON dst.id = refs.dst_doc_id`,
+    )
+    .all()
+    .map((edge) =>
+      refEdgeKey(edge.source_path, edge.target_path, edge.ref_kind)
+    ))
+  if (actual.size !== expected.size) return false
+  for (const edge of expected) {
+    if (!actual.has(edge)) return false
+  }
+  return true
+}
+
+function refEdgeKey(sourcePath, targetPath, refKind) {
+  return `${canonicalDocumentPath(sourcePath)}\0${canonicalDocumentPath(targetPath)}\0${refKind}`
 }
 
 function docHasMissingActiveEmbeddings(db, docId) {
@@ -566,14 +609,34 @@ export async function isIndexedDocumentTreeCurrent(
   const indexedDocs = db
     .prepare("SELECT path, hash FROM docs ORDER BY path")
     .all()
-  const sortedCurrentDocs = [...currentDocs].sort((left, right) =>
-    left.path.localeCompare(right.path)
-  )
-  if (indexedDocs.length !== sortedCurrentDocs.length) return false
-  return indexedDocs.every((doc, index) =>
-    doc.path === sortedCurrentDocs[index].path &&
-    doc.hash === sortedCurrentDocs[index].hash
-  )
+  return documentTreesEqual(indexedDocs, currentDocs)
+}
+
+export function isIndexedContentCurrent(
+  db,
+  docs,
+  { signal, requireActiveSpec = false } = {},
+) {
+  const indexedDocs = db
+    .prepare("SELECT id, path FROM docs")
+    .all()
+  const indexedByPath = new Map()
+  for (const doc of indexedDocs) {
+    const canonicalPath = canonicalDocumentPath(doc.path)
+    if (indexedByPath.has(canonicalPath)) return false
+    indexedByPath.set(canonicalPath, doc)
+  }
+  for (const doc of docs) {
+    throwIfAborted(signal)
+    const indexed = indexedByPath.get(canonicalDocumentPath(doc.path))
+    if (
+      !indexed ||
+      docNeedsActiveChunkMetadata(db, indexed.id, doc, { requireActiveSpec })
+    ) {
+      return false
+    }
+  }
+  return isFtsIndexCurrent(db) && isRefsGraphCurrent(db, docs)
 }
 
 export async function isIndexFresh(deskRoot, db, { signal, tombstones } = {}) {
@@ -589,6 +652,14 @@ export async function isIndexFresh(deskRoot, db, { signal, tombstones } = {}) {
     docs: db.prepare("SELECT path, hash FROM docs").all(),
   })
   if (tombstoneStatus.tombstoned) return false
-  const docs = await discover(deskRoot, { signal })
-  return isIndexedDocumentTreeCurrent(deskRoot, db, { signal, docs })
+  const discovered = await discover(deskRoot, { signal })
+  const tombstoneFilter = await filterTombstonedDocuments({
+    pluginRoot: tombstones?.pluginRoot,
+    docs: discovered,
+  })
+  const docs = tombstoneFilter.docs
+  if (!await isIndexedDocumentTreeCurrent(deskRoot, db, { signal, docs })) {
+    return false
+  }
+  return isIndexedContentCurrent(db, docs, { signal })
 }

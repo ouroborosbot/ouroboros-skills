@@ -18,6 +18,20 @@ const SENSITIVE_SEGMENTS = new Set([
   "secrets",
 ])
 const SENSITIVE_NAME_RE = /(?:^|[-_.])(api[-_]?key|credential|credentials|private[-_]?key|secret|secrets)(?:[-_.]|$)/u
+const POSIX_CHARACTER_CLASSES = Object.freeze({
+  alnum: "A-Za-z0-9",
+  alpha: "A-Za-z",
+  blank: " \\t",
+  cntrl: "\\x00-\\x1F\\x7F",
+  digit: "0-9",
+  graph: "\\x21-\\x2E\\x30-\\x7E",
+  lower: "a-z",
+  print: "\\x20-\\x2E\\x30-\\x7E",
+  punct: "\\x21-\\x2E\\x3A-\\x40\\x5B-\\x60\\x7B-\\x7E",
+  space: " \\t\\r\\n\\v\\f",
+  upper: "A-Z",
+  xdigit: "A-Fa-f0-9",
+})
 
 export async function loadExclusionRules({ deskRoot } = {}) {
   if (!deskRoot) return { gitignore: [] }
@@ -153,24 +167,38 @@ async function readGitignoreAtBase(deskRoot, baseDir) {
 function parseGitignore(raw, baseDir = "") {
   return raw
     .split(/\r?\n/u)
-    .map((line) => line.trim())
     .map((line) => parseGitignoreLine(line, baseDir))
     .filter(Boolean)
 }
 
 function parseGitignoreLine(line, baseDir) {
-  if (line === "" || line.startsWith("#")) return null
+  const normalizedLine = stripUnescapedTrailingSpaces(line)
+  if (normalizedLine === "") return null
   let negated = false
-  let pattern = line
-  if (pattern.startsWith("!")) {
+  let pattern = normalizedLine
+  if (pattern.startsWith("\\#") || pattern.startsWith("\\!")) {
+    pattern = pattern.slice(1)
+  } else if (pattern.startsWith("#")) {
+    return null
+  } else if (pattern.startsWith("!")) {
     negated = true
-    pattern = pattern.slice(1).trim()
+    pattern = pattern.slice(1)
   }
   if (pattern === "") return null
+  validateGitignorePattern(pattern)
   return {
     baseDir: normalizeRelPath(baseDir),
     pattern,
     negated,
+  }
+
+  function validateGitignorePattern(pattern) {
+    try {
+      matchesGitignorePattern("", pattern)
+    } catch (error) {
+      if (error?.code === "exclusion_rules_unavailable") throw error
+      throw unsupportedGitignorePatternError()
+    }
   }
 }
 
@@ -269,18 +297,62 @@ function isHiddenPath(relPath) {
 }
 
 function globPathToRegExp(pattern) {
-  return new RegExp(`^${globToRegexSource(pattern)}$`, "u")
+  return new RegExp(`^${globToRegexSource(pattern, { pathPattern: true })}$`, "u")
 }
 
 function globSegmentToRegExp(pattern) {
   return new RegExp(`^${globToRegexSource(pattern)}$`, "u")
 }
 
-function globToRegexSource(pattern) {
-  return pattern
-    .split("*")
-    .map(escapeRegExp)
-    .join("[^/]*")
+function globToRegexSource(pattern, { pathPattern = false } = {}) {
+  let source = ""
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index]
+    if (char === "\\") {
+      const next = pattern[index + 1]
+      if (next === undefined) {
+        source += "\\\\"
+      } else {
+        source += escapeRegExp(next)
+        index += 1
+      }
+      continue
+    }
+    if (char === "*") {
+      let end = index + 1
+      while (pattern[end] === "*") end += 1
+      const doubleStar =
+        pathPattern &&
+        end - index >= 2 &&
+        (index === 0 || pattern[index - 1] === "/") &&
+        (end === pattern.length || pattern[end] === "/")
+      if (doubleStar && pattern[end] === "/") {
+        source += "(?:[^/]+/)*"
+        index = end
+      } else if (doubleStar) {
+        source += ".*"
+        index = end - 1
+      } else {
+        source += "[^/]*"
+        index = end - 1
+      }
+      continue
+    }
+    if (char === "?") {
+      source += "[^/]"
+      continue
+    }
+    if (char === "[") {
+      const characterClass = parseCharacterClass(pattern, index)
+      if (characterClass !== null) {
+        source += characterClass.source
+        index = characterClass.end
+        continue
+      }
+    }
+    source += escapeRegExp(char)
+  }
+  return source
 }
 
 function escapeRegExp(value) {
@@ -294,9 +366,97 @@ function normalizeRelPath(relPath) {
 }
 
 function normalizePattern(pattern) {
-  return String(pattern ?? "").replace(/\\/gu, "/")
+  return String(pattern ?? "")
 }
 
 function joinRel(baseDir, name) {
   return baseDir ? `${normalizeRelPath(baseDir)}/${name}` : name
+}
+
+function parseCharacterClass(pattern, start) {
+  let cursor = start + 1
+  if (pattern[cursor] === "!" || pattern[cursor] === "^") cursor += 1
+  if (pattern[cursor] === "]") cursor += 1
+  let end = cursor
+  while (end < pattern.length) {
+    if (pattern.startsWith("[:", end)) {
+      const posixEnd = pattern.indexOf(":]", end + 2)
+      if (posixEnd === -1) throw unsupportedGitignorePatternError()
+      end = posixEnd + 2
+      continue
+    }
+    if (pattern.startsWith("[.", end) || pattern.startsWith("[=", end)) {
+      throw unsupportedGitignorePatternError()
+    }
+    if (pattern[end] === "]") break
+    if (pattern[end] === "\\" && end + 1 < pattern.length) end += 1
+    end += 1
+  }
+  if (end >= pattern.length || end === start + 1) return null
+  let body = pattern.slice(start + 1, end)
+  let negated = false
+  if (body.startsWith("!") || body.startsWith("^")) {
+    negated = true
+    body = body.slice(1)
+  }
+  if (body === "") return null
+  const escapedBody = translateCharacterClassBody(body)
+  return {
+    source: negated ? `[^/${escapedBody}]` : `[${escapedBody}]`,
+    end,
+  }
+}
+
+function translateCharacterClassBody(body) {
+  let source = ""
+  for (let index = 0; index < body.length; index += 1) {
+    if (body.startsWith("[:", index)) {
+      const end = body.indexOf(":]", index + 2)
+      if (end === -1) throw unsupportedGitignorePatternError()
+      const name = body.slice(index + 2, end)
+      const characterClass = POSIX_CHARACTER_CLASSES[name]
+      if (characterClass === undefined) throw unsupportedGitignorePatternError()
+      source += characterClass
+      index = end + 1
+      continue
+    }
+    const char = body[index]
+    if (char === "/") throw unsupportedGitignorePatternError()
+    if (char === "\\") {
+      const next = body[index + 1]
+      if (next === undefined) {
+        source += "\\\\"
+      } else {
+        source += next.replace(/[\\\]^\-]/gu, "\\$&")
+        index += 1
+      }
+      continue
+    }
+    source += escapeCharacterClassLiteral(char)
+  }
+  return source
+}
+
+function escapeCharacterClassLiteral(value) {
+  return value.replace(/[\\\]^]/gu, "\\$&")
+}
+
+function unsupportedGitignorePatternError() {
+  const error = new Error("gitignore exclusion rules use an unsupported pattern")
+  error.code = "exclusion_rules_unavailable"
+  error.reason = "gitignore_unsupported"
+  return error
+}
+
+function stripUnescapedTrailingSpaces(line) {
+  let end = line.length
+  while (end > 0 && line[end - 1] === " ") {
+    let backslashes = 0
+    for (let index = end - 2; index >= 0 && line[index] === "\\"; index -= 1) {
+      backslashes += 1
+    }
+    if (backslashes % 2 === 1) break
+    end -= 1
+  }
+  return line.slice(0, end)
 }

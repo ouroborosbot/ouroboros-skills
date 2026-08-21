@@ -23,6 +23,7 @@ import {
   hasGitignoreNegation,
   loadExclusionRules,
 } from "./exclusions.js"
+import { canonicalDocumentPath } from "./document-tree.js"
 
 export const DISCOVERY_GRAMMAR_VERSION = 2
 
@@ -104,7 +105,7 @@ async function walk(deskRoot, dir, out, signal, exclusionRules) {
       // is_archived=true in describeDoc and per-tool search defaults
       // decide whether to include them.
       const sub = path.join(dir, name)
-      const relDir = path.relative(deskRoot, sub)
+      const relDir = canonicalDocumentPath(path.relative(deskRoot, sub))
       if (shouldSkipDirectory(relDir, exclusionRules)) continue
       await walk(deskRoot, sub, out, signal, exclusionRules)
       continue
@@ -114,7 +115,7 @@ async function walk(deskRoot, dir, out, signal, exclusionRules) {
     if (!name.endsWith(".md")) continue
 
     const abs = path.join(dir, name)
-    const rel = path.relative(deskRoot, abs)
+    const rel = canonicalDocumentPath(path.relative(deskRoot, abs))
     if (isExcluded(rel, exclusionRules)) continue
 
     const desc = await describeDoc(deskRoot, abs, rel, signal)

@@ -7,12 +7,20 @@ import * as zlib from "node:zlib"
 import { fileURLToPath } from "node:url"
 
 import { closeDb, getMeta, indexDbPath, openDb } from "../db/init.js"
-import { assertArtifactInputsDoNotContainTombstones } from "./tombstones.js"
+import {
+  assertArtifactInputsDoNotContainTombstones,
+  filterTombstonedDocuments,
+} from "./tombstones.js"
 import {
   DISCOVERY_GRAMMAR_VERSION,
   discover,
 } from "../indexer/discover.js"
+import {
+  documentTreeHash,
+  documentTreesEqual,
+} from "../indexer/document-tree.js"
 import { assertArtifactInputsAllowed } from "../indexer/exclusions.js"
+import { isIndexedContentCurrent } from "../indexer/index.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 import {
   deriveVectorPackPaths,
@@ -43,8 +51,13 @@ const SNAPSHOT_PORTABLE_RUNTIME = Object.freeze({
 })
 const VECTOR_ENCODING = "float32-json"
 const DEFAULT_SOURCE_PATHS = Object.freeze([
+  "plugins/desk/mcp/src/artifacts/tombstones.js",
+  "plugins/desk/mcp/src/indexer/chunk.js",
   "plugins/desk/mcp/src/indexer/discover.js",
+  "plugins/desk/mcp/src/indexer/document-tree.js",
+  "plugins/desk/mcp/src/indexer/exclusions.js",
   "plugins/desk/mcp/src/indexer/index.js",
+  "plugins/desk/mcp/src/indexer/refs.js",
   "plugins/desk/mcp/src/indexer/vector-packs.js",
   "plugins/desk/mcp/src/snapshots/manifest.js",
   "plugins/desk/mcp/src/snapshots/restore.js",
@@ -292,7 +305,7 @@ export async function verifySnapshotArtifact({
   assertBudgetAllowsStart({ budgetMs, label: "snapshot verify" })
   const startedAt = now()
   const currentDocs = hasText(deskRoot)
-    ? await currentDeskDocuments(deskRoot)
+    ? await currentDeskDocuments(deskRoot, pluginRoot)
     : undefined
   if (!hasText(snapshotId)) {
     const snapshots = await validateAllSnapshots({
@@ -354,7 +367,7 @@ export async function validateArtifacts({
   const budgetMs = budgetValue(budgets, "artifacts", "validate_ms")
   assertBudgetAllowsStart({ budgetMs, label: "artifact validation" })
   const startedAt = now()
-  const currentDocs = await currentDeskDocuments(deskRoot)
+  const currentDocs = await currentDeskDocuments(deskRoot, pluginRoot)
   const vectorPacks = await validateAllVectorPacks({
     pluginRoot,
     mcpRoot,
@@ -486,11 +499,19 @@ function snapshotCompatibilityContext({ mcpRoot = DEFAULT_MCP_ROOT, docs = [] } 
   }
 }
 
-async function currentDeskDocuments(deskRoot) {
-  return (await discover(requiredPath(deskRoot, "deskRoot"))).map((doc) => ({
+async function currentDeskDocuments(deskRoot, pluginRoot) {
+  return (await currentDeskDiscovery(deskRoot, pluginRoot)).map((doc) => ({
     path: doc.path,
     hash: canonicalSha(doc.hash),
   }))
+}
+
+async function currentDeskDiscovery(deskRoot, pluginRoot) {
+  const discovered = await discover(requiredPath(deskRoot, "deskRoot"))
+  return (await filterTombstonedDocuments({
+    pluginRoot,
+    docs: discovered,
+  })).docs
 }
 
 async function assertCurrentArtifactIndex({
@@ -517,10 +538,17 @@ async function assertCurrentArtifactIndex({
       `local Desk index discovery grammar version ${actualGrammar ?? "missing"} is stale; run desk_reindex before building artifacts`,
     )
   }
-  const currentDocs = await currentDeskDocuments(deskRoot)
-  if (documentTreeHash(sourceDocs) !== documentTreeHash(currentDocs)) {
+  const currentDiscovered = await currentDeskDiscovery(deskRoot, pluginRoot)
+  if (!documentTreesEqual(sourceDocs, currentDiscovered)) {
     throw new Error(
       "local Desk index document tree is stale; run desk_reindex before building artifacts",
+    )
+  }
+  if (!isIndexedContentCurrent(db, currentDiscovered, {
+    requireActiveSpec: true,
+  })) {
+    throw new Error(
+      "local Desk index contents are stale; run desk_reindex before building artifacts",
     )
   }
 }
@@ -532,14 +560,6 @@ function artifactSourceScopeHash(mcpRoot) {
     hash.update(`${repoPath}\0`)
     hash.update(readFileOrEmpty(path.join(mcpRoot, relFromMcp)))
     hash.update("\0")
-  }
-  return `sha256:${hash.digest("hex")}`
-}
-
-function documentTreeHash(docs) {
-  const hash = createHash("sha256")
-  for (const doc of [...docs].sort((left, right) => left.path.localeCompare(right.path))) {
-    hash.update(`${normalizePath(doc.path)}\0${canonicalSha(doc.hash)}\0`)
   }
   return `sha256:${hash.digest("hex")}`
 }
