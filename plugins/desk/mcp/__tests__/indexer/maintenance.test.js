@@ -988,6 +988,301 @@ test("active background repair holds the same-root lock while other roots stay i
   }
 })
 
+test("explicit reindex reserves the root before cancelling active repair so fresh reads cannot deadlock it", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const root = await makeRoot("desk-maintenance-reindex-reservation-")
+  const scheduler = createManualScheduler()
+  const activeRepairEntered = deferred()
+  const activeRepairAborted = deferred()
+  const activeRepairCleanupRelease = deferred()
+  const secondFreshReadEntered = deferred()
+  const secondFreshReadRelease = deferred()
+  const fullReindexEntered = deferred()
+  const laterFreshReadEntered = deferred()
+  const events = []
+  let reindexed = false
+  let repairBatchCalls = 0
+  let replacementTimerFired = false
+  let maintenance
+  let initialFreshRead
+  let activeRepair
+  let reindex
+  let firstFreshRead
+  let secondFreshRead
+  let replacementRepair
+  let laterFreshRead
+
+  try {
+    maintenance = createMaintenanceCoordinator({
+      ensureIndex: async (_deskRoot, options) => {
+        const marker = options.marker
+        if (!options.skipEmbed) {
+          events.push("reindex:ensure")
+          reindexed = true
+          fullReindexEntered.resolve()
+          return {
+            built: true,
+            reason: "semantic_missing",
+            semantic: {
+              chunks_total: 2,
+              vectors_indexed: 2,
+              missing_vectors: 0,
+            },
+          }
+        }
+
+        events.push(`${marker}:ensure`)
+        if (marker === "second") {
+          secondFreshReadEntered.resolve()
+          await awaitBounded(
+            secondFreshReadRelease.promise,
+            "second fresh read was not released",
+          )
+        } else if (marker === "later") {
+          laterFreshReadEntered.resolve()
+        }
+        return {
+          built: false,
+          reason: "fresh",
+          semantic: {
+            chunks_total: 2,
+            vectors_indexed: reindexed ? 2 : 1,
+            missing_vectors: reindexed ? 0 : 1,
+          },
+        }
+      },
+      openIndex: () => ({ open: true }),
+      closeIndex: (db) => {
+        db.open = false
+      },
+      repairBatch: async ({ signal }) => {
+        repairBatchCalls += 1
+        if (repairBatchCalls > 1) {
+          events.push("replacement-repair:run")
+          return {
+            processed_chunks: 1,
+            vectors_indexed: 1,
+            remaining_chunks: 0,
+            stopped_by: "complete",
+          }
+        }
+
+        events.push("active-repair:start")
+        activeRepairEntered.resolve()
+        await awaitBounded(
+          new Promise((resolve) => {
+            const onAbort = () => {
+              events.push("active-repair:abort")
+              activeRepairAborted.resolve()
+              resolve()
+            }
+            if (signal.aborted) onAbort()
+            else signal.addEventListener("abort", onAbort, { once: true })
+          }),
+          "active repair did not observe reindex cancellation",
+        )
+        await awaitBounded(
+          activeRepairCleanupRelease.promise,
+          "active repair cleanup was not released",
+        )
+        events.push("active-repair:end")
+        return {
+          processed_chunks: 0,
+          vectors_indexed: 0,
+          remaining_chunks: 1,
+          stopped_by: "cancelled",
+          cancelled: true,
+        }
+      },
+      createRepairCoordinator: (options) => {
+        const repair = createSemanticRepairCoordinator({
+          ...options,
+          schedule: scheduler.schedule,
+          clearScheduled: scheduler.clear,
+        })
+        return {
+          start: repair.start,
+          status: repair.status,
+          async cancel(deskRoot) {
+            events.push("cancel:start")
+            const result = await repair.cancel(deskRoot)
+            events.push("cancel:done")
+            return result
+          },
+        }
+      },
+    })
+
+    initialFreshRead = maintenance.runFreshRead({
+      deskRoot: root,
+      ensureOptions: {
+        embed: { fetch: async () => null },
+        marker: "initial",
+      },
+      read: () => "initial",
+    })
+    assert.equal(
+      await awaitBounded(initialFreshRead, "initial fresh read did not settle"),
+      "initial",
+    )
+    assert.equal(scheduler.size, 1)
+
+    activeRepair = scheduler.runNext()
+    await awaitBounded(
+      activeRepairEntered.promise,
+      "active repair did not enter before reindex",
+    )
+
+    reindex = maintenance.runExplicitReindex({
+      deskRoot: root,
+      ensureOptions: { marker: "explicit-reindex" },
+    })
+    const observedReindex = observeSettlement(reindex)
+    await awaitBounded(
+      activeRepairAborted.promise,
+      "reindex did not abort the active repair",
+    )
+
+    firstFreshRead = maintenance.runFreshRead({
+      deskRoot: root,
+      ensureOptions: {
+        embed: { fetch: async () => null },
+        marker: "first",
+      },
+      read: () => "first",
+    })
+    secondFreshRead = maintenance.runFreshRead({
+      deskRoot: root,
+      ensureOptions: {
+        embed: { fetch: async () => null },
+        marker: "second",
+      },
+      read: () => "second",
+    })
+
+    activeRepairCleanupRelease.resolve()
+    const nextOperation = await awaitBounded(
+      Promise.race([
+        fullReindexEntered.promise.then(() => "reindex"),
+        secondFreshReadEntered.promise.then(() => "second-fresh-read"),
+      ]),
+      "neither reindex nor the overtaking fresh reads entered",
+    )
+
+    if (nextOperation === "second-fresh-read") {
+      assert.equal(
+        await awaitBounded(
+          firstFreshRead,
+          "first overtaking fresh read did not settle",
+        ),
+        "first",
+      )
+      assert.equal(
+        scheduler.size,
+        1,
+        "first overtaking read did not register replacement repair",
+      )
+      replacementTimerFired = true
+      replacementRepair = scheduler.runNext()
+      laterFreshRead = maintenance.runFreshRead({
+        deskRoot: root,
+        ensureOptions: { marker: "later" },
+        read: () => "later",
+      })
+      secondFreshReadRelease.resolve()
+      assert.equal(
+        await awaitBounded(
+          secondFreshRead,
+          "second overtaking fresh read did not settle",
+        ),
+        "second",
+      )
+      await flushAsyncWork(
+        "deadlocked reindex state did not reach a deterministic turn",
+      )
+    } else {
+      assert.equal(
+        await awaitBounded(reindex, "reserved reindex did not settle"),
+        observedReindex.value,
+      )
+      await awaitBounded(
+        secondFreshReadEntered.promise,
+        "second fresh read did not resume after reindex",
+      )
+      secondFreshReadRelease.resolve()
+      assert.deepEqual(
+        await awaitBounded(
+          Promise.all([firstFreshRead, secondFreshRead]),
+          "fresh reads did not settle after reserved reindex",
+        ),
+        ["first", "second"],
+      )
+      assert.equal(scheduler.size, 0)
+      laterFreshRead = maintenance.runFreshRead({
+        deskRoot: root,
+        ensureOptions: { marker: "later" },
+        read: () => "later",
+      })
+      assert.equal(
+        await awaitBounded(
+          laterFreshRead,
+          "later same-root read did not resume",
+        ),
+        "later",
+      )
+    }
+
+    assert.deepEqual(
+      {
+        nextOperation,
+        fullReindexEntered: fullReindexEntered.settled,
+        reindexState: observedReindex.state,
+        replacementTimerFired,
+        repairBatchCalls,
+        laterFreshReadEntered: laterFreshReadEntered.settled,
+      },
+      {
+        nextOperation: "reindex",
+        fullReindexEntered: true,
+        reindexState: "fulfilled",
+        replacementTimerFired: false,
+        repairBatchCalls: 1,
+        laterFreshReadEntered: true,
+      },
+      "reindex must settle before fresh reads, without replacement repair, and release later same-root work",
+    )
+    assert.equal(
+      events.includes("replacement-repair:run"),
+      false,
+      "replacement repair batch ran after explicit reindex",
+    )
+  } finally {
+    activeRepairCleanupRelease.resolve()
+    secondFreshReadRelease.resolve()
+    if (fullReindexEntered.settled && maintenance) {
+      await awaitBounded(
+        maintenance.cancelBackgroundRepair(root),
+        "reindex-reservation maintenance did not settle during cleanup",
+      ).catch(() => {})
+      await awaitBounded(
+        Promise.allSettled(
+          [
+            initialFreshRead,
+            activeRepair,
+            reindex,
+            firstFreshRead,
+            secondFreshRead,
+            replacementRepair,
+            laterFreshRead,
+          ].filter(Boolean),
+        ),
+        "reindex-reservation promises did not settle during cleanup",
+      ).catch(() => {})
+    }
+    await removeRoots(root)
+  }
+})
+
 test("coordinator lets root B complete while root A search freshness holds its lock", async () => {
   const { createMaintenanceCoordinator } = await loadMaintenance()
   const [rootA, rootB] = await Promise.all([
