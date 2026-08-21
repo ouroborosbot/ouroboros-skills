@@ -1,12 +1,17 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
+import { spawnSync } from "node:child_process"
 import { promises as fs } from "node:fs"
-import * as os from "node:os"
 import * as path from "node:path"
+import { fileURLToPath } from "node:url"
 
 import { closeDb, openDb } from "../../src/db/init.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
 
+const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
+const repairProcessFixturePath = fileURLToPath(
+  new URL("../fixtures/semantic_repair_process_fixture.js", import.meta.url),
+)
 const semanticRepairModuleUrl = new URL(
   "../../src/indexer/semantic-repair.js",
   import.meta.url,
@@ -24,7 +29,50 @@ function vector(seed = 1) {
 }
 
 async function makeRoot(prefix = "desk-semantic-repair-") {
-  return fs.mkdtemp(path.join(os.tmpdir(), prefix))
+  return fs.mkdtemp(path.join(mcpRoot, `.${prefix}`))
+}
+
+function runRepairProcessPhase(phase, root, observationPath) {
+  const result = spawnSync(
+    process.execPath,
+    [repairProcessFixturePath, phase, root, observationPath],
+    {
+      cwd: mcpRoot,
+      encoding: "utf8",
+      timeout: 10000,
+    },
+  )
+  const failure = [
+    `semantic repair child ${phase} failed`,
+    `status=${String(result.status)}`,
+    `signal=${String(result.signal)}`,
+    `error=${result.error?.stack ?? "none"}`,
+    `stdout:\n${result.stdout || "<empty>"}`,
+    `stderr:\n${result.stderr || "<empty>"}`,
+  ].join("\n")
+  assert.equal(result.error, undefined, failure)
+  assert.equal(result.signal, null, failure)
+  assert.equal(result.status, 0, failure)
+}
+
+function waitWithTimeout(promise, timeoutMs, message) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      const error = new Error(message)
+      error.code = "ERR_TEST_TIMEOUT"
+      reject(error)
+    }, timeoutMs)
+    promise.then(
+      (value) => {
+        clearTimeout(timeout)
+        resolve(value)
+      },
+      (error) => {
+        clearTimeout(timeout)
+        reject(error)
+      },
+    )
+  })
 }
 
 function insertDocument(db, {
@@ -335,9 +383,14 @@ test("semantic repair cancellation aborts the active batch and permits a later r
   let calls = 0
   let abortCleanupFinished = false
   let activeBatchSettled = false
+  let releaseBatchCleanup
   let batchStarted
+  let markAbortObserved
   const started = new Promise((resolve) => {
     batchStarted = resolve
+  })
+  const abortObserved = new Promise((resolve) => {
+    markAbortObserved = resolve
   })
   const coordinator = createSemanticRepairCoordinator({
     repairBatch: ({ signal }) => {
@@ -346,18 +399,24 @@ test("semantic repair cancellation aborts the active batch and permits a later r
         return Promise.resolve({ processed_chunks: 1, remaining_chunks: 0 })
       }
       return new Promise((resolve) => {
+        let cleanupScheduled = false
+        releaseBatchCleanup = () => {
+          if (cleanupScheduled) return
+          cleanupScheduled = true
+          setImmediate(() => {
+            abortCleanupFinished = true
+            resolve({
+              processed_chunks: 0,
+              remaining_chunks: 1,
+              cancelled: true,
+            })
+          })
+        }
         batchStarted()
         signal.addEventListener(
           "abort",
           () => {
-            setImmediate(() => {
-              abortCleanupFinished = true
-              resolve({
-                processed_chunks: 0,
-                remaining_chunks: 1,
-                cancelled: true,
-              })
-            })
+            markAbortObserved()
           },
           { once: true },
         )
@@ -373,13 +432,49 @@ test("semantic repair cancellation aborts the active batch and permits a later r
     activeBatchSettled = true
   })
   await started
-  const cancelled = await coordinator.cancel(root)
+  let cancellation
+  let cancellationSettled = false
+  try {
+    cancellation = Promise.resolve(coordinator.cancel(root))
+    cancellation.then(
+      () => {
+        cancellationSettled = true
+      },
+      () => {
+        cancellationSettled = true
+      },
+    )
+    await waitWithTimeout(
+      abortObserved,
+      250,
+      "semantic repair cancel did not abort the active batch before awaiting it",
+    )
+    await Promise.resolve()
+    assert.equal(cancellationSettled, false)
+    assert.equal(abortCleanupFinished, false)
+    assert.equal(activeBatchSettled, false)
+
+    releaseBatchCleanup()
+    const cancelled = await cancellation
+    assert.equal(cancelled.cancelled, true)
+    assert.equal(abortCleanupFinished, true)
+    assert.equal(activeBatchSettled, true)
+  } finally {
+    releaseBatchCleanup?.()
+    await activeBatch
+    if (cancellation !== undefined) {
+      await waitWithTimeout(
+        cancellation.catch(() => undefined),
+        1000,
+        "semantic repair cancel did not settle after fallback batch cleanup",
+      )
+    }
+  }
+
   assert.equal(abortCleanupFinished, true)
   assert.equal(activeBatchSettled, true)
-  assert.equal(cancelled.cancelled, true)
   assert.equal(scheduler.queued.length, 0)
   assert.equal(scheduler.scheduled.length, 1)
-  await activeBatch
   assert.equal((await first).state, "idle")
   assert.equal(coordinator.status(root).state, "idle")
 
@@ -424,84 +519,53 @@ test("semantic repair cancellation clears a pending batch without running repair
 })
 
 test("a new coordinator resumes persisted missing work after process interruption", async () => {
-  const {
-    createSemanticRepairCoordinator,
-    repairMissingVectorBatch,
-  } = await loadSemanticRepair()
+  await loadSemanticRepair()
   const root = await makeRoot()
-  const interruptedScheduler = createManualScheduler()
-  const resumedScheduler = createManualScheduler()
-  const embeddedTexts = []
-  const embedChunkDetailed = async (text) => {
-    embeddedTexts.push(text)
-    return {
-      vector: vector(embeddedTexts.length),
-      available: true,
-      diagnostic: null,
-    }
-  }
-  let interruptedDb = openDb(root)
-  let resumedDb
-  let interrupted
-  let abandoned
+  const observationPath = path.join(root, "repair-process-observation.json")
+  let db = openDb(root)
   try {
-    insertDocument(interruptedDb, {
+    insertDocument(db, {
       documentPath: "active/reference.md",
       updatedAt: "2026-01-01T00:00:00.000Z",
       texts: ["chunk-0", "chunk-1", "chunk-2"],
     })
-    interrupted = createSemanticRepairCoordinator({
-      repairBatch: (options) => repairMissingVectorBatch({
-        ...options,
-        db: interruptedDb,
-        embedChunkDetailed,
-      }),
-      schedule: interruptedScheduler.schedule,
-      clearScheduled: interruptedScheduler.clearScheduled,
-    })
+    closeDb(db)
+    db = undefined
 
-    abandoned = interrupted.start({
-      deskRoot: root,
-      batchChunks: 1,
-      batchMs: 5000,
-    })
-    await interruptedScheduler.runNext()
-
+    runRepairProcessPhase("phase1", root, observationPath)
+    db = openDb(root)
     assert.equal(
-      interruptedDb.prepare("SELECT COUNT(*) AS count FROM chunk_vecs").get().count,
+      db.prepare("SELECT COUNT(*) AS count FROM chunk_vecs").get().count,
       1,
     )
-    assert.deepEqual(embeddedTexts, ["chunk-0"])
-    assert.equal(interruptedScheduler.queued.length, 1)
-    assert.equal(interruptedScheduler.scheduled.length, 2)
-    assert.equal(interruptedScheduler.queued[0].delay, 0)
-    assert.equal(interruptedScheduler.queued[0].handle.unrefCalls, 1)
+    const firstPersisted = db.prepare(
+      `SELECT c.text
+       FROM chunk_vecs v
+       JOIN chunks c ON c.id = v.chunk_id`,
+    ).get()
+    assert.ok(firstPersisted)
+    closeDb(db)
+    db = undefined
 
-    closeDb(interruptedDb)
-    resumedDb = openDb(root)
-    const resumed = createSemanticRepairCoordinator({
-      repairBatch: (options) => repairMissingVectorBatch({
-        ...options,
-        db: resumedDb,
-        embedChunkDetailed,
-      }),
-      schedule: resumedScheduler.schedule,
-      clearScheduled: resumedScheduler.clearScheduled,
-    })
-    const resumedRepair = resumed.start({
-      deskRoot: root,
-      batchChunks: 1,
-      batchMs: 5000,
-    })
-    await resumedScheduler.drain()
+    const phaseOneObservation = JSON.parse(
+      await fs.readFile(observationPath, "utf8"),
+    ).phase1
+    assert.equal(phaseOneObservation.repair_calls, 1)
+    assert.equal(phaseOneObservation.repair_settled, false)
+    assert.deepEqual(phaseOneObservation.embedded_texts, [firstPersisted.text])
+    assert.deepEqual(phaseOneObservation.scheduled, [
+      { delay: 0, unref_calls: 1, has_ref: false },
+      { delay: 0, unref_calls: 1, has_ref: false },
+    ])
 
-    assert.equal((await resumedRepair).state, "complete")
+    runRepairProcessPhase("phase2", root, observationPath)
+    db = openDb(root)
     assert.equal(
-      resumedDb.prepare("SELECT COUNT(*) AS count FROM chunk_vecs").get().count,
+      db.prepare("SELECT COUNT(*) AS count FROM chunk_vecs").get().count,
       3,
     )
     assert.equal(
-      resumedDb.prepare(
+      db.prepare(
         `SELECT COUNT(*) AS count
          FROM chunks c
          LEFT JOIN chunk_vecs v ON v.chunk_id = c.id
@@ -509,20 +573,26 @@ test("a new coordinator resumes persisted missing work after process interruptio
       ).get().count,
       0,
     )
-    assert.deepEqual(embeddedTexts, ["chunk-0", "chunk-1", "chunk-2"])
-
-    const cancelled = await interrupted.cancel(root)
-    await interruptedScheduler.drain()
-    assert.equal(cancelled.cancelled, true)
-    assert.equal((await abandoned).state, "idle")
-    interrupted = null
+    const observation = JSON.parse(await fs.readFile(observationPath, "utf8"))
+    assert.equal(observation.phase2.state, "complete")
+    assert.equal(observation.phase2.repair_calls, 2)
+    assert.equal(
+      observation.phase2.embedded_texts.includes(firstPersisted.text),
+      false,
+    )
+    assert.deepEqual(observation.phase2.scheduled, [
+      { delay: 0, unref_calls: 1 },
+      { delay: 0, unref_calls: 1 },
+    ])
+    assert.deepEqual(
+      [
+        ...observation.phase1.embedded_texts,
+        ...observation.phase2.embedded_texts,
+      ].sort(),
+      ["chunk-0", "chunk-1", "chunk-2"],
+    )
   } finally {
-    if (interrupted !== null && interrupted !== undefined) {
-      await interrupted.cancel(root)
-      await interruptedScheduler.drain()
-    }
-    closeDb(interruptedDb)
-    closeDb(resumedDb)
+    closeDb(db)
     await fs.rm(root, { recursive: true, force: true })
   }
 })
