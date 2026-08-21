@@ -173,7 +173,7 @@ test("discover retries a document that changes during its first read", async (t)
   assert.equal(docs[0].body, "stable body")
 })
 
-test("discover fails explicitly when a document keeps changing", async (t) => {
+test("discover returns its latest complete read when a document keeps changing", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-discover-unstable-"))
   const docPath = path.join(root, "reference.md")
   await fs.writeFile(docPath, "unstable body", "utf8")
@@ -192,12 +192,9 @@ test("discover fails explicitly when a document keeps changing", async (t) => {
     }
   })
 
-  await assert.rejects(
-    discover(root),
-    (error) =>
-      error.code === "ERR_DESK_DISCOVERY_UNSTABLE" &&
-      error.message === "document changed repeatedly during discovery",
-  )
+  const docs = await discover(root)
+  assert.equal(docs.length, 1)
+  assert.equal(docs[0].body, "unstable body")
 })
 
 test("stat inventory uses the discovery exclusions without reading Markdown bodies", async (t) => {

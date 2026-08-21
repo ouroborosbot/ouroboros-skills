@@ -218,12 +218,14 @@ async function describeDoc(deskRoot, abs, rel, signal) {
   throwIfAborted(signal)
   let raw
   let stat
+  let lastStat
   try {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const before = await fs.stat(abs)
       raw = await fs.readFile(abs, "utf8")
       throwIfAborted(signal)
       const after = await fs.stat(abs)
+      lastStat = after
       if (sameStatSnapshot(before, after)) {
         stat = after
         break
@@ -234,11 +236,7 @@ async function describeDoc(deskRoot, abs, rel, signal) {
     // File vanished or unreadable mid-walk; skip silently.
     return null
   }
-  if (!stat) {
-    const err = new Error("document changed repeatedly during discovery")
-    err.code = "ERR_DESK_DISCOVERY_UNSTABLE"
-    throw err
-  }
+  stat ??= lastStat
 
   throwIfAborted(signal)
   let parsed

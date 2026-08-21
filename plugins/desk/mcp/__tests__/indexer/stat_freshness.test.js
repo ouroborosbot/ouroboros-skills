@@ -237,7 +237,7 @@ test("transient stat failures fall back to exact discovery", async (t) => {
   }
 })
 
-test("rebuild fails explicitly when the stat inventory never settles", async (t) => {
+test("rebuild leaves freshness metadata stale when the stat inventory never settles", async (t) => {
   const root = await mkRoot()
   const docPath = await writeFile(root, "references/context.md", "context body")
   const stat = fs.stat.bind(fs)
@@ -256,13 +256,51 @@ test("rebuild fails explicitly when the stat inventory never settles", async (t)
     }
   })
 
-  await assert.rejects(
-    rebuildIndex(root, indexOpts),
-    (error) =>
-      error.code === "ERR_DESK_STAT_INVENTORY_UNSTABLE" &&
-      error.message ===
-        "document stat inventory changed repeatedly during discovery",
+  const summary = await rebuildIndex(root, indexOpts)
+  assert.equal(summary.docs_indexed, 1)
+  const db = openDb(root)
+  try {
+    assert.equal(getMeta(db, "document_stat_inventory_hash"), null)
+  } finally {
+    closeDb(db)
+  }
+})
+
+test("unstable stat inventories degrade to exact freshness without throwing", async (t) => {
+  const root = await mkRoot()
+  const docPath = await writeFile(root, "references/context.md", "context body")
+  await rebuildIndex(root, indexOpts)
+  const stat = fs.stat.bind(fs)
+  let calls = 0
+  const generations = [1, 1, 1, 2, 2, 2, 3]
+  t.mock.method(fs, "stat", async (file, ...args) => {
+    const value = await stat(file, ...args)
+    if (file !== docPath) return value
+    const cycle = Math.floor(calls / generations.length) * 3
+    const generation = cycle + generations[calls % generations.length]
+    calls += 1
+    return {
+      dev: value.dev,
+      ino: value.ino,
+      size: value.size,
+      mtimeMs: value.mtimeMs + generation,
+      ctimeMs: value.ctimeMs + generation,
+    }
+  })
+
+  const first = await captureMarkdownReads(root, () =>
+    ensureIndex(root, indexOpts)
   )
+  assert.equal(first.value.built, false)
+  assert.equal(first.value.reason, "fresh")
+  assert.ok(first.reads.includes("references/context.md"))
+
+  const second = await captureMarkdownReads(root, () =>
+    ensureIndex(root, indexOpts)
+  )
+  assert.equal(second.value.built, false)
+  assert.equal(second.value.reason, "fresh")
+  assert.ok(second.reads.includes("references/context.md"))
 })
 
 test("ignored Markdown stat drift does not invalidate a warm index", async () => {

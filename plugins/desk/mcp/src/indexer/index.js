@@ -106,24 +106,28 @@ export async function rebuildIndex(deskRoot, opts = {}) {
     // Compare against existing docs table. Anything no longer on disk gets
     // deleted (cascade clears chunks + refs).
     const existing = db
-      .prepare("SELECT id, path, hash, mtime FROM docs")
+      .prepare(
+        "SELECT id, path, kind, track, task_slug, hash, mtime, is_archived FROM docs",
+      )
       .all()
     const existingByPath = new Map(existing.map((r) => [r.path, r]))
 
-    const deletedPaths = []
-    for (const row of existing) {
-      throwIfAborted(opts.signal)
-      if (!discoveredByPath.has(row.path)) {
-        deletedPaths.push(row.path)
+    if (statInventoryHash !== null) {
+      const deletedPaths = []
+      for (const row of existing) {
+        throwIfAborted(opts.signal)
+        if (!discoveredByPath.has(row.path)) {
+          deletedPaths.push(row.path)
+        }
       }
-    }
-    if (deletedPaths.length) {
-      const delStmt = db.prepare("DELETE FROM docs WHERE path = ?")
-      const delTxn = db.transaction((paths) => {
-        for (const p of paths) delStmt.run(p)
-      })
-      delTxn(deletedPaths)
-      summary.docs_removed = deletedPaths.length
+      if (deletedPaths.length) {
+        const delStmt = db.prepare("DELETE FROM docs WHERE path = ?")
+        const delTxn = db.transaction((paths) => {
+          for (const p of paths) delStmt.run(p)
+        })
+        delTxn(deletedPaths)
+        summary.docs_removed = deletedPaths.length
+      }
     }
 
     // Decide which docs need reindexing.
@@ -132,6 +136,7 @@ export async function rebuildIndex(deskRoot, opts = {}) {
       throwIfAborted(opts.signal)
       const existingRow = existingByPath.get(doc.path)
       if (existingRow && existingRow.hash === doc.hash) {
+        refreshPathDerivedMetadata(db, existingRow, doc)
         if (docNeedsActiveChunkMetadata(db, existingRow.id, doc)) {
           toReindex.push(doc)
           continue
@@ -187,7 +192,11 @@ export async function rebuildIndex(deskRoot, opts = {}) {
     repairFtsIndex(db)
 
     setMeta(db, "discovery_grammar_version", String(DISCOVERY_GRAMMAR_VERSION))
-    setMeta(db, STAT_INVENTORY_META_KEY, statInventoryHash)
+    if (statInventoryHash === null) {
+      db.prepare("DELETE FROM meta WHERE key = ?").run(STAT_INVENTORY_META_KEY)
+    } else {
+      setMeta(db, STAT_INVENTORY_META_KEY, statInventoryHash)
+    }
     setMeta(
       db,
       TOMBSTONE_LEDGER_META_KEY,
@@ -197,13 +206,15 @@ export async function rebuildIndex(deskRoot, opts = {}) {
     setMeta(db, "embedding_dim", String(EMBEDDING_DIM))
     setMeta(db, "embedding_model", opts.embed?.model ?? "nomic-embed-text")
     const checkpoint = db.pragma("wal_checkpoint(PASSIVE)")[0]
-    await rememberFreshIndex(deskRoot, db, {
-      statInventoryHash,
-      tombstoneLedgerFingerprint: tombstoneFilter.ledger_fingerprint,
-      ignoreWal:
-        checkpoint.busy === 0 &&
-        checkpoint.log === checkpoint.checkpointed,
-    })
+    if (statInventoryHash !== null) {
+      await rememberFreshIndex(deskRoot, db, {
+        statInventoryHash,
+        tombstoneLedgerFingerprint: tombstoneFilter.ledger_fingerprint,
+        ignoreWal:
+          checkpoint.busy === 0 &&
+          checkpoint.log === checkpoint.checkpointed,
+      })
+    }
   } finally {
     if (ownsDb) closeDb(db)
   }
@@ -757,6 +768,10 @@ export async function isIndexFresh(deskRoot, db, { signal, tombstones } = {}) {
     forgetFreshIndex(deskRoot)
     return false
   }
+  if (exactStatInventoryHash === null) {
+    forgetFreshIndex(deskRoot)
+    return true
+  }
   let ignoreWal = false
   if (
     tombstoneMetadataDrift ||
@@ -788,8 +803,10 @@ async function discoverStableDocumentState(
   const before = initialStatInventory ??
     await discoverStatInventory(deskRoot, { signal })
   let beforeHash = requiredStatInventoryHash(before)
+  let lastDocs = []
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const docs = await discover(deskRoot, { signal })
+    lastDocs = docs
     const after = await discoverStatInventory(deskRoot, { signal })
     const afterHash = requiredStatInventoryHash(after)
     if (beforeHash === afterHash) {
@@ -797,9 +814,31 @@ async function discoverStableDocumentState(
     }
     beforeHash = afterHash
   }
-  const error = new Error("document stat inventory changed repeatedly during discovery")
-  error.code = "ERR_DESK_STAT_INVENTORY_UNSTABLE"
-  throw error
+  return { docs: lastDocs, statInventoryHash: null }
+}
+
+function refreshPathDerivedMetadata(db, existingRow, doc) {
+  if (
+    existingRow.kind === doc.kind &&
+    existingRow.track === doc.track &&
+    existingRow.task_slug === doc.task_slug &&
+    existingRow.mtime === doc.mtime &&
+    existingRow.is_archived === Number(doc.is_archived)
+  ) {
+    return
+  }
+  db.prepare(`
+    UPDATE docs
+    SET kind = ?, track = ?, task_slug = ?, mtime = ?, is_archived = ?
+    WHERE id = ?
+  `).run(
+    doc.kind,
+    doc.track,
+    doc.task_slug,
+    doc.mtime,
+    Number(doc.is_archived),
+    existingRow.id,
+  )
 }
 
 export function requiredStatInventoryHash(docs) {

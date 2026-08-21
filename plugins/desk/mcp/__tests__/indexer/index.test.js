@@ -777,6 +777,58 @@ test("ensureIndex rediscovers old-mtime documents exactly once after a grammar m
   assert.equal(second.reason, "fresh")
 })
 
+test("grammar reconciliation refreshes path-derived metadata without replacing chunks", async () => {
+  const root = await mkRoot()
+  const docPath = "_friction/note.md"
+  await w(root, docPath, "# Historical note")
+  await rebuildIndex(root, indexOpts)
+
+  const before = openDb(root)
+  let chunkIds
+  try {
+    before.prepare("UPDATE docs SET kind = 'other' WHERE path = ?").run(docPath)
+    setMeta(before, "discovery_grammar_version", "1")
+    chunkIds = before
+      .prepare(`
+        SELECT chunks.id
+        FROM chunks
+        JOIN docs ON docs.id = chunks.doc_id
+        WHERE docs.path = ?
+        ORDER BY chunks.id
+      `)
+      .all(docPath)
+  } finally {
+    closeDb(before)
+  }
+
+  const reconciled = await ensureIndex(root, indexOpts)
+  assert.equal(reconciled.built, true)
+  assert.equal(reconciled.reason, "stale")
+  assert.equal(reconciled.summary.docs_indexed, 0)
+
+  const after = openDb(root)
+  try {
+    assert.equal(
+      after.prepare("SELECT kind FROM docs WHERE path = ?").get(docPath).kind,
+      "reference",
+    )
+    assert.deepEqual(
+      after
+        .prepare(`
+          SELECT chunks.id
+          FROM chunks
+          JOIN docs ON docs.id = chunks.doc_id
+          WHERE docs.path = ?
+          ORDER BY chunks.id
+        `)
+        .all(docPath),
+      chunkIds,
+    )
+  } finally {
+    closeDb(after)
+  }
+})
+
 test("modifying one doc → that doc reindexed, others skipped", async () => {
   const root = await mkRoot()
   await w(root, "trackA/task-1/task.md", "---\nstatus: processing\n---\nbody")
