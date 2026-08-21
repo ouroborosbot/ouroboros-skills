@@ -19,7 +19,7 @@
     "arch": "portable",
     "node_abi": "portable"
   },
-  "artifact_source_scope_hash": "sha256:bb07ee3a92c89a91fe5bd5c97ff88976415f356469fc0fad32d7b542ffea15b7",
+  "artifact_source_scope_hash": "sha256:4410ce06da370794276309f574e3a9e877209f7fb416092c0213b8bbf7675397",
   "document_tree_hash": "sha256:b8268841c4877dfe293de7c463eadf38339c741daa6416ffd5b1ec652087fba8",
   "discovery_grammar_version": 2,
   "included_pack_ids": [
@@ -31,7 +31,7 @@
       "hash": "sha256:3886140d5ca53b11e39d670572bce11535d9f980e4d168dbdcbbd72bc10edf59"
     }
   ],
-  "created_at": "2026-08-21T02:47:47.373Z",
+  "created_at": "2026-08-21T03:11:40.838Z",
   "artifact": {
     "file": "repo-public-bootstrap-2026-06-15.sqlite.zst",
     "format": "sqlite-zstd",
@@ -41,7 +41,7 @@
   "provenance": {
     "builder": "plugins/desk/mcp/scripts/build-snapshot.js",
     "source": "local-db",
-    "commit": "579a055c8761d5cad862c8a5edf8a6e766f96f4a"
+    "commit": "cf6945f8889e5836b6254cd0dab7ce2e30e7a5c2"
   },
   "source_paths": [
     "plugins/desk/mcp/src/indexer/discover.js",
