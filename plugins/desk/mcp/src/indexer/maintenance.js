@@ -135,8 +135,9 @@ export function createMaintenanceCoordinator({
   } = {}) {
     const root = canonicalRoot(deskRoot)
     reindexGenerations.set(root, currentReindexGeneration(root) + 1)
-    await repairCoordinator.cancel(root)
+    const initialCancellation = repairCoordinator.cancel(root)
     return rootQueue.run(root, async () => {
+      await initialCancellation
       await repairCoordinator.cancel(root)
       if (force) await resetIndex({ deskRoot: root })
       return ensureIndex(root, ensureOptions)
