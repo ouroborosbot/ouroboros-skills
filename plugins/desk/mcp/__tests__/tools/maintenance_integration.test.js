@@ -164,6 +164,23 @@ function recordingEmbedFetch(prompts) {
   }
 }
 
+function recordingFixedEmbedFetch(calls, vector) {
+  return async (url, options) => {
+    const body = JSON.parse(options?.body ?? "{}")
+    calls.push({
+      url: String(url),
+      method: options?.method,
+      contentType: options?.headers?.["content-type"],
+      body,
+      hasAbortSignal: options?.signal instanceof AbortSignal,
+    })
+    return {
+      ok: true,
+      json: async () => ({ embedding: vector }),
+    }
+  }
+}
+
 function completeIndexResult({
   built = false,
   reason = "fresh",
@@ -207,7 +224,56 @@ function findFtsRow(root, token) {
   }
 }
 
-test("desk_search includes content indexed by gated freshness in its first response before repair completes", async () => {
+function seedStoredVector(root, documentPath, vector) {
+  const db = openDb(root)
+  try {
+    const chunks = db
+      .prepare(
+        `SELECT c.id
+         FROM chunks c
+         JOIN docs d ON d.id = c.doc_id
+         WHERE d.path = ?
+         ORDER BY c.chunk_index`,
+      )
+      .all(documentPath)
+    assert.equal(
+      chunks.length,
+      1,
+      `expected exactly one deterministic chunk for ${documentPath}`,
+    )
+    const chunkId = BigInt(chunks[0].id)
+    db.prepare("DELETE FROM chunk_vecs WHERE chunk_id = ?").run(chunkId)
+    db.prepare(
+      "INSERT INTO chunk_vecs (chunk_id, embedding) VALUES (?, ?)",
+    ).run(chunkId, new Float32Array(vector))
+  } finally {
+    closeDb(db)
+  }
+}
+
+function readDocumentVectorCoverage(root, documentPaths) {
+  const db = openDb(root)
+  try {
+    const placeholders = documentPaths.map(() => "?").join(", ")
+    return db
+      .prepare(
+        `SELECT d.path,
+                COUNT(c.id) AS chunks,
+                COUNT(v.chunk_id) AS vectors
+         FROM docs d
+         JOIN chunks c ON c.doc_id = d.id
+         LEFT JOIN chunk_vecs v ON v.chunk_id = c.id
+         WHERE d.path IN (${placeholders})
+         GROUP BY d.path
+         ORDER BY d.path`,
+      )
+      .all(...documentPaths)
+  } finally {
+    closeDb(db)
+  }
+}
+
+test("desk_search returns fresh lexical and retained semantic hits before gated repair completes", async () => {
   const { createMaintenanceCoordinator } = await loadMaintenance()
   const root = await mkTempDeskRoot()
   const freshnessEntered = deferred()
@@ -218,21 +284,34 @@ test("desk_search includes content indexed by gated freshness in its first respo
   const repairCompleted = deferred()
   const queryToken = "unit4dfreshnessneedle"
   const freshPath = "trackA/fresh/task.md"
-  const prompts = []
+  const existingPath = "trackA/existing/task.md"
+  const existingText = "alpha existing vector content"
+  const queryVector = topicVector("zulu deterministic semantic bridge")
+  const queryEmbeddingCalls = []
   const events = []
-  const embed = { fetch: recordingEmbedFetch(prompts) }
+  const embed = {
+    endpoint: "http://127.0.0.1:43123/api/embeddings",
+    model: "unit4d-query-model",
+    fetch: recordingFixedEmbedFetch(queryEmbeddingCalls, queryVector),
+  }
   const ensureCalls = []
   const repairCalls = []
   let maintenance
   let search
 
   try {
+    assert.doesNotMatch(existingText, new RegExp(queryToken, "u"))
     await writeFile(
       root,
-      "trackA/existing/task.md",
-      "---\nstatus: processing\nschema_version: 1\n---\nalpha existing vector content\n",
+      existingPath,
+      `---\nstatus: processing\nschema_version: 1\n---\n${existingText}\n`,
     )
     await buildFixtureIndex(root)
+    seedStoredVector(root, existingPath, queryVector)
+    assert.deepEqual(
+      readDocumentVectorCoverage(root, [existingPath]),
+      [{ path: existingPath, chunks: 1, vectors: 1 }],
+    )
 
     maintenance = createMaintenanceCoordinator({
       ensureIndex: async (deskRoot, options) => {
@@ -260,6 +339,14 @@ test("desk_search includes content indexed by gated freshness in its first respo
         const indexed = findFtsRow(deskRoot, queryToken)
         assert.equal(indexed?.path, freshPath)
         assert.match(indexed?.text ?? "", new RegExp(queryToken, "u"))
+        assert.deepEqual(
+          readDocumentVectorCoverage(deskRoot, [existingPath, freshPath]),
+          [
+            { path: existingPath, chunks: 1, vectors: 1 },
+            { path: freshPath, chunks: 1, vectors: 0 },
+          ],
+          "freshness must preserve the existing vector while adding one vectorless lexical chunk",
+        )
         events.push("freshness:indexed")
         freshnessIndexed.resolve()
         return result
@@ -322,7 +409,7 @@ test("desk_search includes content indexed by gated freshness in its first respo
     )
     assert.equal(observedSearch.state, "pending")
     assert.equal(repairEntered.settled, false)
-    assert.deepEqual(prompts, [])
+    assert.deepEqual(queryEmbeddingCalls, [])
     assert.equal(findFtsRow(root, queryToken), undefined)
     assert.equal(ensureCalls.length, 1)
     assert.equal(ensureCalls[0].deskRoot, path.resolve(root))
@@ -352,12 +439,24 @@ test("desk_search includes content indexed by gated freshness in its first respo
     assert.equal(observedSearch.state, "fulfilled")
     assert.equal(result.search_mode, "hybrid")
     assert.equal(result.query, queryToken)
+    assert.deepEqual(
+      result.results.map((entry) => entry.path).sort(),
+      [existingPath, freshPath].sort(),
+      "the first response must union lexical candidates with KNN candidates under partial vector coverage",
+    )
     const fresh = result.results.find(
       (entry) => entry.path === freshPath,
+    )
+    const existing = result.results.find(
+      (entry) => entry.path === existingPath,
     )
     assert.ok(
       fresh,
       "the first response must query after freshness and include the newly indexed document",
+    )
+    assert.ok(
+      existing,
+      "the first response must retain the lexically nonmatching existing vector candidate",
     )
     assert.match(fresh.snippet, new RegExp(queryToken, "u"))
     assert.equal(
@@ -365,7 +464,29 @@ test("desk_search includes content indexed by gated freshness in its first respo
       0,
       "the new chunk must still be missing its vector while repair is gated",
     )
-    assert.deepEqual(prompts, [queryToken])
+    assert.doesNotMatch(existing.snippet, new RegExp(queryToken, "u"))
+    assert.equal(
+      existing.score_breakdown.bm25,
+      0,
+      "the existing vector hit must not enter through lexical matching",
+    )
+    assert.ok(
+      existing.score_breakdown.semantic > 0,
+      "the retained vector hit must carry a positive semantic ranking signal",
+    )
+    assert.ok(existing.score > 0)
+    assert.deepEqual(queryEmbeddingCalls, [
+      {
+        url: embed.endpoint,
+        method: "POST",
+        contentType: "application/json",
+        body: {
+          model: embed.model,
+          prompt: queryToken,
+        },
+        hasAbortSignal: true,
+      },
+    ])
     assert.equal(repairCalls.length, 1)
     assert.equal(repairCalls[0].deskRoot, path.resolve(root))
     assert.equal(repairCalls[0].embed, embed)
