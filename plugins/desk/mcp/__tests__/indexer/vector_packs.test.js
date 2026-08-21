@@ -17,6 +17,8 @@ import {
 const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
 const repoRoot = path.resolve(mcpRoot, "..", "..", "..")
 const deskPluginRoot = path.join(repoRoot, "plugins", "desk")
+const SOURCE_SCOPE_HASH = `sha256:${"a".repeat(64)}`
+const DISCOVERY_GRAMMAR_VERSION = 2
 
 async function loadVectorPackModule() {
   return import(pathToFileURL(path.join(mcpRoot, "src", "indexer", "vector-packs.js")))
@@ -395,6 +397,40 @@ test("valid vector packs require adjacent manifest and checksum sidecars", async
     }),
     /pack path is required/u,
   )
+})
+
+test("older vector-pack grammar versions report stale freshness", async () => {
+  const { validateVectorPackFile } = await loadVectorPackModule()
+  const root = await tmpRoot()
+  const pluginRoot = path.join(root, "plugins", "desk")
+  const identity = chunkIdentity({
+    docPath: "trackA/task-1/task.md",
+    chunk: { text: "stale grammar vector chunk" },
+  })
+  const paths = await writePack({
+    pluginRoot,
+    packId: "stale-grammar-pack",
+    rows: [rowFor(identity)],
+    manifest: {
+      artifact_source_scope_hash: SOURCE_SCOPE_HASH,
+      discovery_grammar_version: 1,
+    },
+  })
+
+  const result = await validateVectorPackFile({
+    pluginRoot,
+    packPath: paths.packPath,
+    manifestPath: paths.manifestPath,
+    checksumPath: paths.checksumPath,
+    expectedSpec: ACTIVE_EMBEDDING_SPEC,
+    expectedArtifactSourceScopeHash: SOURCE_SCOPE_HASH,
+    expectedDiscoveryGrammarVersion: DISCOVERY_GRAMMAR_VERSION,
+  })
+
+  assert.deepEqual(result.freshness, {
+    artifact_source_scope: "fresh",
+    discovery_grammar: "stale",
+  })
 })
 
 test("vector pack validation rejects wrong specs, dimensions, hashes, and malformed vectors", async () => {

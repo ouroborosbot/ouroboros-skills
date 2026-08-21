@@ -10,6 +10,8 @@ import Database from "better-sqlite3"
 
 import { isIndexFresh, rebuildIndex } from "../../src/indexer/index.js"
 import { openDb, closeDb, getMeta, setMeta } from "../../src/db/init.js"
+import * as discovery from "../../src/indexer/discover.js"
+import { ensureIndex } from "../../src/server-helpers.js"
 
 async function mkRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "desk-idx-"))
@@ -153,6 +155,21 @@ test("indexer records active embedding spec metadata and stable chunk keys", asy
     assert.deepEqual(secondKeys, firstKeys)
   } finally {
     closeDb(dbAfter)
+  }
+})
+
+test("indexer persists the current discovery grammar version", async () => {
+  const root = await mkRoot()
+  await w(root, "trackA/task-1/task.md", "---\nstatus: processing\n---\nbody")
+
+  assert.equal(discovery.DISCOVERY_GRAMMAR_VERSION, 2)
+  await rebuildIndex(root, indexOpts)
+
+  const db = openDb(root)
+  try {
+    assert.equal(getMeta(db, "discovery_grammar_version"), "2")
+  } finally {
+    closeDb(db)
   }
 })
 
@@ -405,6 +422,78 @@ test("isIndexFresh covers missing, invalid, stale, and fresh metadata states", a
   } finally {
     closeDb(db)
   }
+})
+
+test("isIndexFresh rejects missing and stale discovery grammar metadata", async () => {
+  const root = await mkRoot()
+  const docPath = path.join(root, "trackA", "task-1", "task.md")
+  await w(root, "trackA/task-1/task.md", "---\nstatus: processing\n---\ngrammar freshness body")
+  const old = new Date("2000-01-01T00:00:00.000Z")
+  await fs.utimes(docPath, old, old)
+
+  const db = openDb(root)
+  try {
+    setMeta(db, "last_indexed_at", "2999-01-01T00:00:00.000Z")
+    assert.equal(await isIndexFresh(root, db), false)
+
+    setMeta(db, "discovery_grammar_version", "1")
+    assert.equal(await isIndexFresh(root, db), false)
+
+    setMeta(db, "discovery_grammar_version", "2")
+    assert.equal(await isIndexFresh(root, db), true)
+  } finally {
+    closeDb(db)
+  }
+})
+
+test("ensureIndex rediscovers old-mtime documents exactly once after a grammar mismatch", async () => {
+  const root = await mkRoot()
+  const taskPath = "trackA/task-1/task.md"
+  const referencePath = "references/old-note.md"
+  await w(root, taskPath, "---\nstatus: processing\n---\nexisting task")
+  await w(root, referencePath, "# Newly eligible old reference")
+  const old = new Date("2000-01-01T00:00:00.000Z")
+  await fs.utimes(path.join(root, taskPath), old, old)
+  await fs.utimes(path.join(root, referencePath), old, old)
+  await rebuildIndex(root, indexOpts)
+
+  const db = openDb(root)
+  try {
+    db.prepare("DELETE FROM docs WHERE path = ?").run(referencePath)
+    setMeta(db, "last_indexed_at", "2999-01-01T00:00:00.000Z")
+    setMeta(db, "discovery_grammar_version", "1")
+  } finally {
+    closeDb(db)
+  }
+
+  const first = await ensureIndex(root, {
+    skipEmbed: true,
+    snapshots: false,
+    vectorPacks: false,
+  })
+  assert.equal(first.built, true)
+  assert.equal(first.reason, "stale")
+  assert.equal(first.summary.docs_indexed, 1)
+  assert.equal(first.summary.docs_skipped, 1)
+
+  const dbAfter = openDb(root)
+  try {
+    assert.equal(getMeta(dbAfter, "discovery_grammar_version"), "2")
+    assert.deepEqual(
+      dbAfter.prepare("SELECT path FROM docs ORDER BY path").all(),
+      [{ path: referencePath }, { path: taskPath }],
+    )
+  } finally {
+    closeDb(dbAfter)
+  }
+
+  const second = await ensureIndex(root, {
+    skipEmbed: true,
+    snapshots: false,
+    vectorPacks: false,
+  })
+  assert.equal(second.built, false)
+  assert.equal(second.reason, "fresh")
 })
 
 test("modifying one doc → that doc reindexed, others skipped", async () => {

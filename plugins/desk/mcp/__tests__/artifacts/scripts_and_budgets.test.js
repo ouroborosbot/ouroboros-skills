@@ -648,6 +648,10 @@ test("artifact build scripts can stamp a source provenance commit", async () => 
 
     assert.equal(packManifest.provenance.commit, provenanceCommit)
     assert.equal(snapshotManifest.provenance.commit, provenanceCommit)
+    assert.equal(packManifest.discovery_grammar_version, 2)
+    assert.equal(snapshotManifest.discovery_grammar_version, 2)
+    assert.ok(packManifest.source_paths.includes("plugins/desk/mcp/src/indexer/discover.js"))
+    assert.ok(snapshotManifest.source_paths.includes("plugins/desk/mcp/src/indexer/discover.js"))
   } finally {
     rmSync(deskRoot, { recursive: true, force: true })
     rmSync(pluginRoot, { recursive: true, force: true })

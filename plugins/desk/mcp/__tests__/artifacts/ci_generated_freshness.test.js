@@ -433,6 +433,31 @@ test("root generated-artifact verifier exports the production freshness contract
   }
 })
 
+test("discovery grammar participates in every artifact source-scope hash", () => {
+  const discoverRepoPath = "plugins/desk/mcp/src/indexer/discover.js"
+  const generatedArtifacts = require(path.join(repoRoot, generatedArtifactsScript))
+  const serverHelpersSource = readFileSync(path.join(mcpRoot, "src", "server-helpers.js"), "utf8")
+  const artifactScriptsSource = readFileSync(path.join(mcpRoot, "src", "artifacts", "artifact-scripts.js"), "utf8")
+  const generatedVerifierSource = readFileSync(path.join(repoRoot, generatedArtifactsScript), "utf8")
+
+  assert.match(serverHelpersSource, /const ARTIFACT_SOURCE_SCOPE_PATHS = Object\.freeze\(\[[\s\S]*?"plugins\/desk\/mcp\/src\/indexer\/discover\.js"[\s\S]*?\]\)/u)
+  assert.match(artifactScriptsSource, /const DEFAULT_SOURCE_PATHS = Object\.freeze\(\[[\s\S]*?"plugins\/desk\/mcp\/src\/indexer\/discover\.js"[\s\S]*?\]\)/u)
+  assert.match(generatedVerifierSource, /const snapshotSourceScopePaths = Object\.freeze\(\[[\s\S]*?"plugins\/desk\/mcp\/src\/indexer\/discover\.js"[\s\S]*?\]\)/u)
+
+  const tempMcpRoot = mkdtempSync(path.join(tmpdir(), "desk-discovery-source-scope-"))
+  try {
+    const discoverPath = path.join(tempMcpRoot, discoverRepoPath.replace(/^plugins\/desk\/mcp\//u, ""))
+    mkdirSync(path.dirname(discoverPath), { recursive: true })
+    writeFileSync(discoverPath, "export const DISCOVERY_GRAMMAR_VERSION = 1\n", "utf8")
+    const before = generatedArtifacts.artifactSourceScopeHash(tempMcpRoot)
+    writeFileSync(discoverPath, "export const DISCOVERY_GRAMMAR_VERSION = 2\n", "utf8")
+    const after = generatedArtifacts.artifactSourceScopeHash(tempMcpRoot)
+    assert.notEqual(after, before)
+  } finally {
+    rmSync(tempMcpRoot, { recursive: true, force: true })
+  }
+})
+
 test("root generated-artifact verifier fails closed when required runtime packs are absent", async () => {
   const generatedArtifacts = require(path.join(repoRoot, generatedArtifactsScript))
   const stdout = []

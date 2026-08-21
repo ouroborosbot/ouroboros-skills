@@ -16,6 +16,7 @@ const deskPluginRoot = path.join(repoRoot, "plugins", "desk")
 const SNAPSHOT_ID = "desk-base-20260615T000000Z"
 const SOURCE_SCOPE_HASH = `sha256:${"a".repeat(64)}`
 const DOCUMENT_TREE_HASH = `sha256:${"b".repeat(64)}`
+const DISCOVERY_GRAMMAR_VERSION = 2
 const DB_SCHEMA = { id: "desk-index-sqlite-v1", version: 1 }
 const SQLITE_VEC = { package: "sqlite-vec", version: "0.1.6", table: "vec0" }
 const RUNTIME = { platform: "darwin", arch: "arm64", node_abi: "node-127" }
@@ -231,6 +232,34 @@ test("manifest source/document hash mismatch is freshness, not compatibility fai
   assert.deepEqual(result.freshness, {
     artifact_source_scope: "stale",
     document_tree: "stale",
+  })
+})
+
+test("older snapshot grammar versions report stale freshness", async () => {
+  const { validateSnapshotManifest } = await loadManifestModule()
+  const artifactSha = `sha256:${"d".repeat(64)}`
+  const manifest = {
+    ...validManifest({ artifactSha }),
+    discovery_grammar_version: 1,
+  }
+
+  const result = validateSnapshotManifest({
+    manifest,
+    artifactSha256: artifactSha,
+    expectedSpec: ACTIVE_EMBEDDING_SPEC,
+    expectedDbSchema: DB_SCHEMA,
+    expectedSqliteVec: SQLITE_VEC,
+    expectedRuntime: RUNTIME,
+    expectedArtifactSourceScopeHash: SOURCE_SCOPE_HASH,
+    expectedDocumentTreeHash: DOCUMENT_TREE_HASH,
+    expectedDiscoveryGrammarVersion: DISCOVERY_GRAMMAR_VERSION,
+  })
+
+  assert.equal(result.compatible, true)
+  assert.deepEqual(result.freshness, {
+    artifact_source_scope: "fresh",
+    document_tree: "fresh",
+    discovery_grammar: "stale",
   })
 })
 

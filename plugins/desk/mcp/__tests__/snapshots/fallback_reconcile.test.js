@@ -10,7 +10,7 @@ import * as path from "node:path"
 import { zstdCompressSync } from "node:zlib"
 import matter from "gray-matter"
 
-import { closeDb, indexDbPath, openDb } from "../../src/db/init.js"
+import { closeDb, getMeta, indexDbPath, openDb, setMeta } from "../../src/db/init.js"
 import { chunkBody } from "../../src/indexer/chunk.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
 import {
@@ -207,10 +207,12 @@ async function writeSnapshotFromDesk({
   documentTreeHash,
   manifestOverrides,
   rebuildOpts = { skipEmbed: true },
+  mutateDb,
 } = {}) {
   await rebuildIndex(sourceDeskRoot, rebuildOpts)
   const db = openDb(sourceDeskRoot)
   try {
+    if (mutateDb) mutateDb(db)
     db.pragma("wal_checkpoint(TRUNCATE)")
   } finally {
     closeDb(db)
@@ -745,6 +747,78 @@ test("ensureIndex returns snapshot_restored when a restored snapshot is already 
   assert.equal(ensured.reason, "snapshot_restored")
   assert.equal(ensured.snapshot.restored, true)
   assert.equal(ensured.semantic.missing_vectors, 0)
+})
+
+test("ensureIndex reconciles a restored DB with stale discovery grammar exactly once", async () => {
+  const deskRoot = await tmpRoot("desk-snapshot-grammar-desk-")
+  const pluginRoot = await tmpRoot("desk-snapshot-grammar-plugin-")
+  const snapshotSourceRoot = await tmpRoot("desk-snapshot-grammar-source-")
+  const docPath = "trackA/task-1/task.md"
+  const body = "---\nstatus: processing\n---\nrestored grammar body"
+  await writeFile(snapshotSourceRoot, docPath, body)
+  await writeSnapshotFromDesk({
+    pluginRoot,
+    snapshotId: "stale-discovery-grammar",
+    sourceDeskRoot: snapshotSourceRoot,
+    manifestOverrides: { discovery_grammar_version: 2 },
+    mutateDb: (db) => setMeta(db, "discovery_grammar_version", "1"),
+  })
+  await writeFile(deskRoot, docPath, body)
+  const old = new Date("2020-01-01T00:00:00.000Z")
+  await fs.utimes(path.join(deskRoot, docPath), old, old)
+
+  const first = await ensureIndex(deskRoot, {
+    snapshots: snapshotContext(pluginRoot),
+    skipEmbed: true,
+  })
+
+  assert.equal(first.built, true)
+  assert.equal(first.reason, "stale_snapshot_reconciled")
+  assert.equal(first.snapshot.restored, true)
+  assert.equal(first.snapshot.reconciled, true)
+
+  const db = openDb(deskRoot)
+  try {
+    assert.equal(getMeta(db, "discovery_grammar_version"), "2")
+  } finally {
+    closeDb(db)
+  }
+
+  const second = await ensureIndex(deskRoot, {
+    snapshots: snapshotContext(pluginRoot),
+    skipEmbed: true,
+  })
+  assert.equal(second.built, false)
+  assert.equal(second.reason, "fresh")
+})
+
+test("ensureIndex does not take the clean fast path for an older snapshot grammar", async () => {
+  const deskRoot = await tmpRoot("desk-snapshot-manifest-grammar-desk-")
+  const pluginRoot = await tmpRoot("desk-snapshot-manifest-grammar-plugin-")
+  const snapshotSourceRoot = await tmpRoot("desk-snapshot-manifest-grammar-source-")
+  const docPath = "trackA/task-1/task.md"
+  const body = "---\nstatus: processing\n---\nmanifest grammar body"
+  await writeFile(snapshotSourceRoot, docPath, body)
+  await writeSnapshotFromDesk({
+    pluginRoot,
+    snapshotId: "older-manifest-grammar",
+    sourceDeskRoot: snapshotSourceRoot,
+    manifestOverrides: { discovery_grammar_version: 1 },
+    mutateDb: (db) => setMeta(db, "discovery_grammar_version", "2"),
+  })
+  await writeFile(deskRoot, docPath, body)
+  const old = new Date("2020-01-01T00:00:00.000Z")
+  await fs.utimes(path.join(deskRoot, docPath), old, old)
+
+  const ensured = await ensureIndex(deskRoot, {
+    snapshots: snapshotContext(pluginRoot),
+    skipEmbed: true,
+  })
+
+  assert.equal(ensured.built, true)
+  assert.equal(ensured.reason, "stale_snapshot_reconciled")
+  assert.equal(ensured.snapshot.freshness.discovery_grammar, "stale")
+  assert.equal(ensured.snapshot.reconciled, true)
 })
 
 test("ensureIndex reconciles stale snapshot manifests even when mtimes look fresh", async () => {
