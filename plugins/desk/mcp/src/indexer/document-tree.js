@@ -72,7 +72,7 @@ export function documentStatInventoryHash(docs) {
     })
   }
   normalized.sort((left, right) =>
-    left.path < right.path ? -1 : left.path > right.path ? 1 : 0
+    compareDocumentPaths(left.path, right.path)
   )
   const hash = createHash("sha256")
   for (const doc of normalized) {
