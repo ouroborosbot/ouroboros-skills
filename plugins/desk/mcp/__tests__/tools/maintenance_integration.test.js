@@ -8,7 +8,12 @@ import { createSemanticRepairCoordinator } from "../../src/indexer/semantic-repa
 import { ensureIndex } from "../../src/server-helpers.js"
 import { TOOL_NAMES } from "../../src/tool-names.js"
 import { desk_reindex } from "../../src/tools/reindex.js"
-import { desk_search } from "../../src/tools/search.js"
+import {
+  desk_recall,
+  desk_search,
+  desk_similar,
+  desk_timeline,
+} from "../../src/tools/search.js"
 import {
   buildFixtureIndex,
   makeEmbedFetch,
@@ -409,7 +414,18 @@ test("desk_search returns fresh lexical and retained semantic hits before gated 
     )
     assert.equal(observedSearch.state, "pending")
     assert.equal(repairEntered.settled, false)
-    assert.deepEqual(queryEmbeddingCalls, [])
+    assert.deepEqual(queryEmbeddingCalls, [
+      {
+        url: embed.endpoint,
+        method: "POST",
+        contentType: "application/json",
+        body: {
+          model: embed.model,
+          prompt: queryToken,
+        },
+        hasAbortSignal: true,
+      },
+    ])
     assert.equal(findFtsRow(root, queryToken), undefined)
     assert.equal(ensureCalls.length, 1)
     assert.equal(ensureCalls[0].deskRoot, path.resolve(root))
@@ -523,6 +539,112 @@ test("desk_search returns fresh lexical and retained semantic hits before gated 
         "background repair did not settle during test cleanup",
       )
     }
+    await cleanupRoot(root)
+  }
+})
+
+test("all four writable read tools use the default shared fresh-read lifecycle", async () => {
+  const {
+    __setMaintenanceCoordinatorForTests,
+    createMaintenanceCoordinator,
+  } = await loadMaintenance()
+  const root = await mkTempDeskRoot()
+  const ensureCalls = []
+  const embed = { fetch: makeEmbedFetch() }
+  let activeEnsures = 0
+  let maxActiveEnsures = 0
+  let legacySearchFreshnessCalls = 0
+  let restoreDefault
+
+  try {
+    await writeFile(
+      root,
+      "trackA/seed/task.md",
+      "---\nstatus: processing\nschema_version: 1\nupdated: 2026-08-20\n---\nalpha seed body\n",
+    )
+    await writeFile(
+      root,
+      "trackB/neighbor/task.md",
+      "---\nstatus: processing\nschema_version: 1\nupdated: 2026-08-21\n---\nalpha neighbor body\n",
+    )
+    await buildFixtureIndex(root)
+
+    const maintenance = createMaintenanceCoordinator({
+      ensureIndex: async (deskRoot, options) => {
+        activeEnsures += 1
+        maxActiveEnsures = Math.max(maxActiveEnsures, activeEnsures)
+        try {
+          ensureCalls.push({ deskRoot, options })
+          await flushAsyncWork(
+            "captured ensureIndex call did not reach a deterministic turn",
+          )
+          return completeIndexResult({ chunks: 2, vectors: 2 })
+        } finally {
+          activeEnsures -= 1
+        }
+      },
+      repairBatch: async () => {
+        assert.fail("complete fixture coverage must not schedule repair")
+      },
+    })
+    const legacyEnsureSearchFreshness =
+      maintenance.ensureSearchFreshness.bind(maintenance)
+    maintenance.ensureSearchFreshness = (args) => {
+      legacySearchFreshnessCalls += 1
+      return legacyEnsureSearchFreshness(args)
+    }
+    restoreDefault = __setMaintenanceCoordinatorForTests(maintenance)
+
+    const [search, recall, similar, timeline] = await awaitBounded(
+      Promise.all([
+        desk_search({
+          deskRoot: root,
+          input: { query: "alpha" },
+          opts: { embed },
+        }),
+        desk_recall({
+          deskRoot: root,
+          input: { topic: "alpha" },
+          opts: { embed },
+        }),
+        desk_similar({
+          deskRoot: root,
+          input: { path: "trackA/seed/task.md" },
+          opts: { embed },
+        }),
+        desk_timeline({
+          deskRoot: root,
+          input: { query: "alpha" },
+          opts: { embed },
+        }),
+      ]),
+      "default-wired read tools did not settle through shared maintenance",
+    )
+
+    assert.equal(search.search_mode, "hybrid")
+    assert.ok(recall.results.length >= 1)
+    assert.ok(similar.results.length >= 1)
+    assert.equal(timeline.search_mode, "hybrid")
+    assert.equal(
+      legacySearchFreshnessCalls,
+      0,
+      "desk_search still used the legacy freshness-only lifecycle",
+    )
+    assert.equal(
+      ensureCalls.length,
+      4,
+      "one or more writable read tools bypassed the shared coordinator",
+    )
+    assert.equal(maxActiveEnsures, 1)
+    for (const call of ensureCalls) {
+      assert.equal(call.deskRoot, path.resolve(root))
+      assert.deepEqual(call.options, {
+        embed,
+        skipEmbed: true,
+      })
+    }
+  } finally {
+    if (restoreDefault) restoreDefault()
     await cleanupRoot(root)
   }
 })

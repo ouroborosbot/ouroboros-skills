@@ -275,6 +275,369 @@ test("search freshness finishes before scheduling one reused same-root repair jo
   }
 })
 
+test("pending reindex intent suppresses repair registration from an older fresh read", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const root = await makeRoot("desk-maintenance-reindex-intent-")
+  const freshnessEntered = deferred()
+  const freshnessRelease = deferred()
+  const events = []
+  let activeRepair = null
+  let maintenance
+  let freshRead
+  let freshResult
+  let reindex
+
+  try {
+    maintenance = createMaintenanceCoordinator({
+      ensureIndex: async (_deskRoot, options) => {
+        if (options.skipEmbed) {
+          events.push("freshness:start")
+          freshnessEntered.resolve()
+          await awaitBounded(
+            freshnessRelease.promise,
+            "freshness was not released",
+          )
+          events.push("freshness:end")
+          return {
+            built: false,
+            reason: "fresh",
+            semantic: {
+              chunks_total: 2,
+              vectors_indexed: 1,
+              missing_vectors: 1,
+            },
+          }
+        }
+        events.push("reindex:ensure")
+        return {
+          built: true,
+          reason: "semantic_missing",
+          semantic: {
+            chunks_total: 2,
+            vectors_indexed: 2,
+            missing_vectors: 0,
+          },
+        }
+      },
+      createRepairCoordinator: () => ({
+        start() {
+          events.push("repair:start")
+          activeRepair = deferred()
+          return activeRepair.promise
+        },
+        async cancel() {
+          events.push("repair:cancel")
+          activeRepair?.resolve({
+            state: "idle",
+            last_error: null,
+            cancelled: true,
+          })
+          activeRepair = null
+          return {
+            state: "idle",
+            last_error: null,
+            cancelled: true,
+          }
+        },
+        status() {
+          return {
+            state: activeRepair ? "running" : "idle",
+            last_error: null,
+          }
+        },
+      }),
+    })
+
+    freshRead = maintenance.ensureSearchFreshness({
+      deskRoot: root,
+      ensureOptions: { embed: { fetch: async () => null } },
+    })
+    await awaitBounded(
+      freshnessEntered.promise,
+      "freshness did not enter before reindex intent",
+    )
+
+    reindex = maintenance.runExplicitReindex({
+      deskRoot: root,
+      force: false,
+      ensureOptions: { skipEmbed: true },
+    })
+    await flushAsyncWork(
+      "reindex intent did not reach its initial cancellation",
+    )
+    assert.deepEqual(events, ["freshness:start", "repair:cancel"])
+
+    freshnessRelease.resolve()
+    freshResult = await awaitBounded(
+      freshRead,
+      "fresh read did not settle after reindex intent",
+    )
+    const reindexResult = await awaitBounded(
+      reindex,
+      "reindex did not settle after older freshness",
+    )
+
+    assert.equal(reindexResult.semantic.missing_vectors, 0)
+    assert.equal(
+      events.includes("repair:start"),
+      false,
+      "an older fresh read registered repair after reindex had already cancelled it",
+    )
+    assert.equal(
+      events.filter((event) => event === "repair:cancel").length,
+      2,
+      "reindex must cancel again while holding the root before full repair",
+    )
+    await awaitBounded(
+      freshResult.repair,
+      "suppressed repair result did not settle",
+    )
+  } finally {
+    freshnessRelease.resolve()
+    activeRepair?.resolve({
+      state: "idle",
+      last_error: null,
+      cancelled: true,
+    })
+    if (maintenance) {
+      await awaitBounded(
+        maintenance.cancelBackgroundRepair(root),
+        "reindex-intent maintenance did not settle during cleanup",
+      ).catch(() => {})
+    }
+    await awaitBounded(
+      Promise.allSettled(
+        [freshRead, freshResult?.repair, reindex].filter(Boolean),
+      ),
+      "reindex-intent promises did not settle during cleanup",
+    ).catch(() => {})
+    await removeRoots(root)
+  }
+})
+
+test("fresh read closes its database handle before registering background repair", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const root = await makeRoot("desk-maintenance-fresh-read-close-")
+  const events = []
+  let openHandles = 0
+
+  const maintenance = createMaintenanceCoordinator({
+    ensureIndex: async () => {
+      events.push("ensure")
+      return {
+        built: false,
+        reason: "fresh",
+        semantic: {
+          chunks_total: 2,
+          vectors_indexed: 1,
+          missing_vectors: 1,
+        },
+      }
+    },
+    openIndex: () => {
+      openHandles += 1
+      events.push("open")
+      return { open: true }
+    },
+    closeIndex: (db) => {
+      db.open = false
+      openHandles -= 1
+      events.push("close")
+    },
+    createRepairCoordinator: () => ({
+      start() {
+        assert.equal(
+          openHandles,
+          0,
+          "repair was registered while the read handle remained open",
+        )
+        events.push("repair:start")
+        return Promise.resolve({ state: "complete", last_error: null })
+      },
+      async cancel() {
+        return { state: "idle", last_error: null, cancelled: true }
+      },
+      status() {
+        return { state: "idle", last_error: null }
+      },
+    }),
+  })
+
+  try {
+    assert.equal(
+      typeof maintenance.runFreshRead,
+      "function",
+      "maintenance must expose one fresh-read lifecycle for ensure/open/query/close/repair ordering",
+    )
+    const result = await maintenance.runFreshRead({
+      deskRoot: root,
+      ensureOptions: { embed: { fetch: async () => null } },
+      read(db, index) {
+        assert.equal(db.open, true)
+        assert.equal(index.semantic.missing_vectors, 1)
+        events.push("read")
+        return "read-result"
+      },
+    })
+
+    assert.equal(result, "read-result")
+    assert.deepEqual(events, [
+      "ensure",
+      "open",
+      "read",
+      "close",
+      "repair:start",
+    ])
+    assert.equal(openHandles, 0)
+  } finally {
+    await awaitBounded(
+      maintenance.cancelBackgroundRepair(root),
+      "fresh-read close maintenance did not settle during cleanup",
+    ).catch(() => {})
+    await removeRoots(root)
+  }
+})
+
+test("force reindex waits for an open fresh-read handle and suppresses its stale repair", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const root = await makeRoot("desk-maintenance-open-handle-reset-")
+  const readEntered = deferred()
+  const readRelease = deferred()
+  const events = []
+  let openHandles = 0
+  let repairStarts = 0
+  let maintenance
+  let freshRead
+  let reindex
+
+  try {
+    maintenance = createMaintenanceCoordinator({
+      ensureIndex: async (_deskRoot, options) => {
+        events.push(options.skipEmbed ? "ensure:fresh" : "ensure:reindex")
+        return options.skipEmbed
+          ? {
+              built: false,
+              reason: "fresh",
+              semantic: {
+                chunks_total: 2,
+                vectors_indexed: 1,
+                missing_vectors: 1,
+              },
+            }
+          : {
+              built: true,
+              reason: "missing",
+              semantic: {
+                chunks_total: 2,
+                vectors_indexed: 2,
+                missing_vectors: 0,
+              },
+            }
+      },
+      openIndex: () => {
+        openHandles += 1
+        events.push("open")
+        return { open: true }
+      },
+      closeIndex: (db) => {
+        db.open = false
+        openHandles -= 1
+        events.push("close")
+      },
+      resetIndex: async () => {
+        assert.equal(
+          openHandles,
+          0,
+          "force reset overlapped an open SQLite read handle",
+        )
+        events.push("reset")
+      },
+      createRepairCoordinator: () => ({
+        start() {
+          repairStarts += 1
+          events.push("repair:start")
+          return Promise.resolve({ state: "complete", last_error: null })
+        },
+        async cancel() {
+          events.push("repair:cancel")
+          return { state: "idle", last_error: null, cancelled: true }
+        },
+        status() {
+          return { state: "idle", last_error: null }
+        },
+      }),
+    })
+    assert.equal(
+      typeof maintenance.runFreshRead,
+      "function",
+      "maintenance must coordinate database reads with force reset",
+    )
+
+    freshRead = maintenance.runFreshRead({
+      deskRoot: root,
+      ensureOptions: { embed: { fetch: async () => null } },
+      async read(db) {
+        assert.equal(db.open, true)
+        events.push("read:start")
+        readEntered.resolve()
+        await awaitBounded(
+          readRelease.promise,
+          "open-handle read was not released",
+        )
+        events.push("read:end")
+        return "read-result"
+      },
+    })
+    await awaitBounded(
+      readEntered.promise,
+      "fresh read did not open its database handle",
+    )
+
+    reindex = maintenance.runExplicitReindex({
+      deskRoot: root,
+      force: true,
+      ensureOptions: {},
+    })
+    await flushAsyncWork(
+      "force reindex did not register intent while read handle was open",
+    )
+    assert.equal(events.includes("reset"), false)
+    assert.equal(openHandles, 1)
+
+    readRelease.resolve()
+    assert.equal(
+      await awaitBounded(freshRead, "fresh read did not settle"),
+      "read-result",
+    )
+    const reindexResult = await awaitBounded(
+      reindex,
+      "force reindex did not settle after the read handle closed",
+    )
+
+    assert.equal(reindexResult.semantic.missing_vectors, 0)
+    assert.equal(repairStarts, 0)
+    assert.equal(openHandles, 0)
+    assert.ok(events.indexOf("close") < events.indexOf("reset"))
+    assert.equal(
+      events.filter((event) => event === "repair:cancel").length,
+      2,
+    )
+  } finally {
+    readRelease.resolve()
+    if (maintenance) {
+      await awaitBounded(
+        maintenance.cancelBackgroundRepair(root),
+        "open-handle maintenance did not settle during cleanup",
+      ).catch(() => {})
+    }
+    await awaitBounded(
+      Promise.allSettled([freshRead, reindex].filter(Boolean)),
+      "open-handle promises did not settle during cleanup",
+    ).catch(() => {})
+    await removeRoots(root)
+  }
+})
+
 test("active background repair holds the same-root lock while other roots stay independent", async () => {
   const { createMaintenanceCoordinator } = await loadMaintenance()
   const [rootA, rootB] = await Promise.all([
