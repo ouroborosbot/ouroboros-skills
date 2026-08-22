@@ -2,17 +2,96 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdtempSync, rmSync } from "node:fs"
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
 import { main } from "../../index.js"
+import { createMaintenanceCoordinator } from "../../src/indexer/maintenance.js"
 
 function makeRoot(prefix) {
   return mkdtempSync(path.join(tmpdir(), prefix))
 }
 
-function runtimeServerWithEnsureIndex({ ensureIndex }) {
+function deferred() {
+  let resolve
+  let reject
+  let settled = false
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = (value) => {
+      if (settled) return
+      settled = true
+      resolvePromise(value)
+    }
+    reject = (error) => {
+      if (settled) return
+      settled = true
+      rejectPromise(error)
+    }
+  })
+  return {
+    promise,
+    reject,
+    resolve,
+    get settled() {
+      return settled
+    },
+  }
+}
+
+function observeSettlement(promise) {
+  const observed = { state: "pending", value: undefined }
+  Promise.resolve(promise).then(
+    (value) => {
+      observed.state = "fulfilled"
+      observed.value = value
+    },
+    (error) => {
+      observed.state = "rejected"
+      observed.value = error
+    },
+  )
+  return observed
+}
+
+async function flushAsyncWork() {
+  await new Promise((resolve) => setImmediate(resolve))
+}
+
+function writeStartupBudget(mcpRoot, ensureIndexMs) {
+  const configDir = path.join(mcpRoot, "config")
+  mkdirSync(configDir, { recursive: true })
+  writeFileSync(
+    path.join(configDir, "performance-budgets.json"),
+    JSON.stringify({
+      schema_version: 1,
+      search: {
+        semantic_repair_batch_chunks: 100,
+        semantic_repair_batch_ms: 5000,
+      },
+      startup: {
+        ensure_index_ms: ensureIndexMs,
+        snapshot_restore_ms: 250,
+        vector_pack_import_ms: 250,
+      },
+      rebuild: {
+        vector_pack_rebuild_ms: 1000,
+        snapshot_build_ms: 1000,
+      },
+      artifacts: {
+        snapshot_verify_ms: 1000,
+        validate_ms: 1000,
+      },
+    }),
+  )
+}
+
+function runtimeServerWithEnsureIndex({ ensureIndex, maintenanceCoordinator }) {
   const events = []
   const startCalls = []
   return {
@@ -22,6 +101,7 @@ function runtimeServerWithEnsureIndex({ ensureIndex }) {
       target: `${process.platform}-${process.arch}-node-${process.versions.modules}`,
       loaded_from_source_mirror: true,
     },
+    maintenanceCoordinator,
     events,
     startCalls,
     async ensureIndex(...args) {
@@ -285,6 +365,253 @@ test("startup stops waiting and aborts when bounded ensureIndex exceeds budget",
     assert.equal(startup.fallback_mode, "startup_deferred")
     assert.equal(startup.degraded, true)
   } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("timed-out startup retains same-root maintenance until aborted cleanup closes its DB handle", async () => {
+  const root = makeRoot("desk-startup-budget-maintenance-")
+  writeStartupBudget(root, 0)
+  const startupEntered = deferred()
+  const startupCleanupRelease = deferred()
+  const startupClosed = deferred()
+  const forceResetEntered = deferred()
+  const forceResetRelease = deferred()
+  const forceEnsureEntered = deferred()
+  const forceEnsureRelease = deferred()
+  const nonForceEntered = deferred()
+  const nonForceRelease = deferred()
+  const readEnsureEntered = deferred()
+  const readEnsureRelease = deferred()
+  const events = []
+  const unhandled = []
+  let startupHandleOpen = false
+  let resetOverlappedStartup = false
+  const onUnhandled = (reason) => unhandled.push(reason)
+  process.on("unhandledRejection", onUnhandled)
+
+  const ensureIndex = async (_deskRoot, opts = {}) => {
+    if (opts.startup) {
+      startupHandleOpen = true
+      events.push("startup-open")
+      startupEntered.resolve()
+      opts.signal.addEventListener("abort", () => {
+        events.push("startup-abort")
+      }, { once: true })
+      await startupCleanupRelease.promise
+      startupHandleOpen = false
+      events.push("startup-close")
+      startupClosed.resolve()
+      throw new Error("late startup rejection after cleanup")
+    }
+    if (opts.marker === "force") {
+      events.push("force-ensure")
+      forceEnsureEntered.resolve()
+      await forceEnsureRelease.promise
+    } else if (opts.marker === "non-force") {
+      events.push("non-force-ensure")
+      nonForceEntered.resolve()
+      await nonForceRelease.promise
+    } else if (opts.marker === "read") {
+      events.push("read-ensure")
+      readEnsureEntered.resolve()
+      await readEnsureRelease.promise
+    }
+    return { built: false, reason: "fresh" }
+  }
+  const maintenance = createMaintenanceCoordinator({
+    ensureIndex,
+    resetIndex: async () => {
+      resetOverlappedStartup = startupHandleOpen
+      events.push("force-reset")
+      forceResetEntered.resolve()
+      await forceResetRelease.promise
+    },
+    openIndex: () => {
+      events.push("read-open")
+      return { open: true }
+    },
+    closeIndex: () => {
+      events.push("read-close")
+    },
+  })
+  const runtimeServer = runtimeServerWithEnsureIndex({
+    ensureIndex,
+    maintenanceCoordinator: maintenance,
+  })
+  let forceReindex
+  let nonForceReindex
+  let freshRead
+
+  try {
+    const startup = main({
+      argv: ["--root", root],
+      env: {},
+      cwd: root,
+      homeDir: root,
+      mcpRoot: root,
+      runtimeImporter: async () => runtimeServer,
+    })
+    await startupEntered.promise
+    await startup
+
+    assert.deepEqual(runtimeServer.events, ["ensureIndex", "startServer"])
+    assert.equal(events.includes("startup-abort"), true)
+    assert.equal(startupHandleOpen, true)
+    const startupStatus = runtimeServer.startCalls[0].statusContext.startup
+    assert.deepEqual(startupStatus.ensure_index, {
+      built: false,
+      reason: "startup_budget_exceeded",
+      deferred: true,
+    })
+    assert.equal(startupStatus.duration_ms >= 0, true)
+    assert.equal(startupStatus.budget_ms, 0)
+    assert.equal(startupStatus.fallback_mode, "startup_deferred")
+    assert.equal(startupStatus.degraded, true)
+
+    forceReindex = maintenance.runExplicitReindex({
+      deskRoot: root,
+      force: true,
+      ensureOptions: { marker: "force" },
+    })
+    nonForceReindex = maintenance.runExplicitReindex({
+      deskRoot: root,
+      ensureOptions: { marker: "non-force" },
+    })
+    freshRead = maintenance.runFreshRead({
+      deskRoot: root,
+      ensureOptions: { marker: "read" },
+      read: () => {
+        events.push("read")
+        return "read-result"
+      },
+    })
+    const forceState = observeSettlement(forceReindex)
+    const nonForceState = observeSettlement(nonForceReindex)
+    const readState = observeSettlement(freshRead)
+    await flushAsyncWork()
+
+    assert.equal(
+      forceResetEntered.settled,
+      false,
+      "force reindex must wait for timed-out startup cleanup",
+    )
+    assert.equal(nonForceEntered.settled, false)
+    assert.equal(readEnsureEntered.settled, false)
+    assert.equal(forceState.state, "pending")
+    assert.equal(nonForceState.state, "pending")
+    assert.equal(readState.state, "pending")
+
+    startupCleanupRelease.resolve()
+    await startupClosed.promise
+    await forceResetEntered.promise
+    assert.equal(resetOverlappedStartup, false)
+    assert.equal(forceEnsureEntered.settled, false)
+    assert.equal(nonForceEntered.settled, false)
+    assert.equal(readEnsureEntered.settled, false)
+
+    forceResetRelease.resolve()
+    await forceEnsureEntered.promise
+    assert.equal(nonForceEntered.settled, false)
+    assert.equal(readEnsureEntered.settled, false)
+    forceEnsureRelease.resolve()
+    assert.deepEqual(await forceReindex, { built: false, reason: "fresh" })
+
+    await nonForceEntered.promise
+    assert.equal(readEnsureEntered.settled, false)
+    nonForceRelease.resolve()
+    assert.deepEqual(await nonForceReindex, { built: false, reason: "fresh" })
+
+    await readEnsureEntered.promise
+    readEnsureRelease.resolve()
+    assert.equal(await freshRead, "read-result")
+    await flushAsyncWork()
+
+    assert.deepEqual(events, [
+      "startup-open",
+      "startup-abort",
+      "startup-close",
+      "force-reset",
+      "force-ensure",
+      "non-force-ensure",
+      "read-ensure",
+      "read-open",
+      "read",
+      "read-close",
+    ])
+    assert.deepEqual(unhandled, [])
+  } finally {
+    process.off("unhandledRejection", onUnhandled)
+    startupCleanupRelease.resolve()
+    forceResetRelease.resolve()
+    forceEnsureRelease.resolve()
+    nonForceRelease.resolve()
+    readEnsureRelease.resolve()
+    await Promise.allSettled([forceReindex, nonForceReindex, freshRead].filter(Boolean))
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("startup maintenance releases the root queue after success and handled error", async () => {
+  const root = makeRoot("desk-startup-budget-maintenance-release-")
+  const unhandled = []
+  const onUnhandled = (reason) => unhandled.push(reason)
+  process.on("unhandledRejection", onUnhandled)
+
+  async function runScenario({ startupError }) {
+    const events = []
+    const ensureIndex = async (_deskRoot, opts = {}) => {
+      if (opts.startup) {
+        events.push(startupError ? "startup-error" : "startup-success")
+        if (startupError) throw startupError
+        return { built: false, reason: "fresh" }
+      }
+      events.push("after-startup")
+      return { built: false, reason: "fresh" }
+    }
+    const maintenance = createMaintenanceCoordinator({ ensureIndex })
+    const runtimeServer = runtimeServerWithEnsureIndex({
+      ensureIndex,
+      maintenanceCoordinator: maintenance,
+    })
+
+    await main({
+      argv: ["--root", root],
+      env: {},
+      cwd: root,
+      homeDir: root,
+      runtimeImporter: async () => runtimeServer,
+    })
+    const afterStartup = await maintenance.runExplicitReindex({
+      deskRoot: root,
+      ensureOptions: { marker: "after-startup" },
+    })
+    return { afterStartup, events, runtimeServer }
+  }
+
+  try {
+    const success = await runScenario({ startupError: null })
+    assert.deepEqual(success.events, ["startup-success", "after-startup"])
+    assert.equal(
+      success.runtimeServer.startCalls[0].statusContext.startup.ensure_index.reason,
+      "fresh",
+    )
+    assert.deepEqual(success.afterStartup, { built: false, reason: "fresh" })
+
+    const error = await runScenario({
+      startupError: new Error("startup maintenance failed"),
+    })
+    assert.deepEqual(error.events, ["startup-error", "after-startup"])
+    assert.equal(
+      error.runtimeServer.startCalls[0].statusContext.startup.ensure_index.reason,
+      "startup_error",
+    )
+    assert.deepEqual(error.afterStartup, { built: false, reason: "fresh" })
+
+    await flushAsyncWork()
+    assert.deepEqual(unhandled, [])
+  } finally {
+    process.off("unhandledRejection", onUnhandled)
     rmSync(root, { recursive: true, force: true })
   }
 })
