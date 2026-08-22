@@ -26,7 +26,10 @@
 // — consistent with other search-tool error shapes.
 
 import * as path from "node:path"
-import { openDb, closeDb } from "../db/init.js"
+import {
+  createMaintenanceCoordinator,
+  maintenanceCoordinator,
+} from "../indexer/maintenance.js"
 import { ensureIndex } from "../server-helpers.js"
 import { canonicalDocumentPath } from "../indexer/document-tree.js"
 
@@ -204,9 +207,15 @@ export const __threadInternalsForTests = {
  * @param {string} args.input.start_path
  * @param {number} [args.input.depth] — default 4
  * @param {"forward"|"backward"|"both"} [args.input.direction] — default "both"
+ * @param {object} [args.opts] — maintenance/embed injection for tests
  * @returns {Promise<{ start, chain } | { error, note }>}
  */
-export async function desk_thread({ deskRoot, input, ensure = ensureIndex }) {
+export async function desk_thread({
+  deskRoot,
+  input,
+  ensure = ensureIndex,
+  opts,
+}) {
   const rawPath = String(input?.start_path ?? "").trim()
   if (!rawPath) {
     return {
@@ -222,47 +231,52 @@ export async function desk_thread({ deskRoot, input, ensure = ensureIndex }) {
       ? directionRaw
       : "both"
 
-  await ensure(deskRoot)
-  const db = openDb(deskRoot)
-  try {
-    const startDoc = db
-      .prepare(
-        "SELECT id, path, kind, task_slug, updated_at FROM docs WHERE path = ?",
-      )
-      .get(startPath)
-    if (!startDoc) {
+  const maintenance =
+    opts?.maintenance ??
+    (ensure === ensureIndex
+      ? maintenanceCoordinator
+      : createMaintenanceCoordinator({ ensureIndex: ensure }))
+  return maintenance.runFreshRead({
+    deskRoot: path.resolve(deskRoot),
+    ensureOptions: { embed: opts?.embed ?? {} },
+    read(db) {
+      const startDoc = db
+        .prepare(
+          "SELECT id, path, kind, task_slug, updated_at FROM docs WHERE path = ?",
+        )
+        .get(startPath)
+      if (!startDoc) {
+        return {
+          error: "not_indexed",
+          note: `${startPath} isn't in the desk-index. Re-run the indexer or check the path.`,
+        }
+      }
+
+      const visited = bfs(db, startDoc.id, depth, direction)
+
+      // Hydrate metadata for every visited doc in one query.
+      const docIds = [...visited.keys()]
+      const placeholders = docIds.map(() => "?").join(",")
+      const metaRows = db
+        .prepare(
+          `SELECT id, path, kind, task_slug, updated_at
+           FROM docs WHERE id IN (${placeholders})`,
+        )
+        .all(...docIds)
+      const metaById = new Map(metaRows.map((r) => [r.id, r]))
+
+      // Build chain rows. The start doc has its own shape (no ref_kind /
+      // why_connected) but is included as the first element per design.
+      const rows = buildThreadRows(visited, metaById, startDoc.id)
+
+      // Sort: start doc first (hop_distance 0), then by hop_distance asc, then
+      // by updated_at desc within the same hop. Stable on ties.
+      rows.sort(compareThreadRows)
+
       return {
-        error: "not_indexed",
-        note: `${startPath} isn't in the desk-index. Re-run the indexer or check the path.`,
+        start: { path: startDoc.path, kind: startDoc.kind },
+        chain: rows,
       }
     }
-
-    const visited = bfs(db, startDoc.id, depth, direction)
-
-    // Hydrate metadata for every visited doc in one query.
-    const docIds = [...visited.keys()]
-    const placeholders = docIds.map(() => "?").join(",")
-    const metaRows = db
-      .prepare(
-        `SELECT id, path, kind, task_slug, updated_at
-         FROM docs WHERE id IN (${placeholders})`,
-      )
-      .all(...docIds)
-    const metaById = new Map(metaRows.map((r) => [r.id, r]))
-
-    // Build chain rows. The start doc has its own shape (no ref_kind /
-    // why_connected) but is included as the first element per design.
-    const rows = buildThreadRows(visited, metaById, startDoc.id)
-
-    // Sort: start doc first (hop_distance 0), then by hop_distance asc, then
-    // by updated_at desc within the same hop. Stable on ties.
-    rows.sort(compareThreadRows)
-
-    return {
-      start: { path: startDoc.path, kind: startDoc.kind },
-      chain: rows,
-    }
-  } finally {
-    closeDb(db)
-  }
+  })
 }
