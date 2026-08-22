@@ -13,7 +13,10 @@ import {
   importRuntimeServer,
   inspectRuntimeDependencyPack,
 } from "../../src/runtime/bootstrap.js"
-import { createMaintenanceCoordinator } from "../../src/indexer/maintenance.js"
+import {
+  createMaintenanceCoordinator,
+  isMaintenanceCoordinator,
+} from "../../src/indexer/maintenance.js"
 
 function makeRoot(prefix) {
   return mkdtempSync(path.join(tmpdir(), prefix))
@@ -48,6 +51,7 @@ test("startup assembles inspected runtime status and falls back to diagnostics w
   const root = makeRoot("desk-startup-inspected-runtime-")
   const startCalls = []
   const runtimeServer = {
+    isMaintenanceCoordinator,
     maintenanceCoordinator: createMaintenanceCoordinator({
       ensureIndex: async () => ({ built: false, reason: "fresh" }),
     }),
@@ -91,6 +95,7 @@ test("startup assembles inspected runtime status and falls back to diagnostics w
       cwd: root,
       homeDir: root,
       runtimeImporter: async () => ({
+        isMaintenanceCoordinator,
         maintenanceCoordinator: {},
         async startServer() {
           assert.fail("incomplete maintenance must not start the runtime server")

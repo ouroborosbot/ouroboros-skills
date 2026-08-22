@@ -32,6 +32,80 @@ async function makeRoot(prefix = "desk-semantic-repair-") {
   return fs.mkdtemp(path.join(tmpdir(), prefix))
 }
 
+async function makeSymlinkAlias(root, prefix) {
+  const container = await makeRoot(prefix)
+  const alias = path.join(container, "root-alias")
+  try {
+    await fs.symlink(
+      root,
+      alias,
+      process.platform === "win32" ? "junction" : "dir",
+    )
+  } catch (error) {
+    await fs.rm(container, { recursive: true, force: true })
+    throw error
+  }
+  return { alias, container }
+}
+
+async function findSupportedCaseAlias(root) {
+  const resolved = path.resolve(root)
+  const physical = await fs.realpath(resolved)
+  for (let index = resolved.length - 1; index >= 0; index -= 1) {
+    const character = resolved[index]
+    if (!/[A-Za-z]/u.test(character)) continue
+    const replacement =
+      character === character.toLowerCase()
+        ? character.toUpperCase()
+        : character.toLowerCase()
+    const candidate =
+      `${resolved.slice(0, index)}${replacement}${resolved.slice(index + 1)}`
+    try {
+      if (await fs.realpath(candidate) === physical) return candidate
+    } catch {}
+  }
+  return null
+}
+
+async function assertRepairAliasesShareState({ alias, root }) {
+  const { createSemanticRepairCoordinator } = await loadSemanticRepair()
+  const scheduler = createManualScheduler()
+  const coordinator = createSemanticRepairCoordinator({
+    schedule: scheduler.schedule,
+    clearScheduled: scheduler.clearScheduled,
+  })
+  const first = coordinator.start({ deskRoot: root })
+  const second = coordinator.start({ deskRoot: alias })
+
+  assert.strictEqual(
+    second,
+    first,
+    "physical-root aliases must reuse one repair promise",
+  )
+  assert.deepEqual(coordinator.status(alias), {
+    state: "running",
+    last_error: null,
+  })
+  assert.deepEqual(
+    await coordinator.cancel(alias),
+    {
+      state: "idle",
+      last_error: null,
+      cancelled: true,
+    },
+  )
+  assert.deepEqual(await first, {
+    state: "idle",
+    last_error: null,
+  })
+  assert.deepEqual(coordinator.status(root), {
+    state: "idle",
+    last_error: null,
+  })
+  assert.equal(scheduler.scheduled.length, 1)
+  assert.equal(scheduler.scheduled[0].handle.cancelled, true)
+}
+
 function runRepairProcessPhase(phase, root, observationPath) {
   const result = spawnSync(
     process.execPath,
@@ -319,6 +393,51 @@ test("semantic repair validates roots and positive batch limits", async () => {
     repairMissingVectorBatch(),
     /deskRoot is required/,
   )
+})
+
+test("semantic repair reuses state and cancellation across symlink aliases", async (t) => {
+  const root = await makeRoot("desk-semantic-repair-alias-root-")
+  let aliasFixture
+  try {
+    try {
+      aliasFixture = await makeSymlinkAlias(
+        root,
+        "desk-semantic-repair-alias-link-",
+      )
+    } catch (error) {
+      if (["EPERM", "EACCES", "ENOTSUP"].includes(error?.code)) {
+        t.skip(`symlink aliases unavailable: ${error.code}`)
+        return
+      }
+      throw error
+    }
+    await assertRepairAliasesShareState({
+      alias: aliasFixture.alias,
+      root,
+    })
+  } finally {
+    if (aliasFixture) {
+      await fs.rm(aliasFixture.container, {
+        recursive: true,
+        force: true,
+      })
+    }
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
+test("semantic repair reuses state and cancellation across supported case aliases", async (t) => {
+  const root = await makeRoot("desk-semantic-repair-case-root-")
+  try {
+    const alias = await findSupportedCaseAlias(root)
+    if (alias === null) {
+      t.skip("case aliases are not supported by this filesystem")
+      return
+    }
+    await assertRepairAliasesShareState({ alias, root })
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
 })
 
 test("semantic repair default scheduling exposes isolated status snapshots and terminal cancellation", async () => {

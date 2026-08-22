@@ -106,11 +106,52 @@ test("runtime maintenance binding brands one complete coordinator and rejects un
   const injected = createMaintenanceCoordinator({
     ensureIndex: async () => ({ built: false, reason: "fresh" }),
   })
+  const other = createMaintenanceCoordinator({
+    ensureIndex: async () => ({ built: false, reason: "fresh" }),
+  })
+  const methodCalls = []
+  const structural = {
+    async cancelBackgroundRepair() {
+      methodCalls.push("structural:cancel")
+    },
+    async ensureSearchFreshness() {
+      methodCalls.push("structural:freshness")
+    },
+    async runExplicitReindex() {
+      methodCalls.push("structural:reindex")
+    },
+    async runFreshRead() {
+      methodCalls.push("structural:read")
+    },
+    async runStartupEnsureIndex() {
+      methodCalls.push("structural:startup")
+    },
+  }
+  const inherited = Object.create(injected)
+  const copied = { ...injected }
+  const mixed = {
+    ...injected,
+    runExplicitReindex: other.runExplicitReindex,
+  }
 
   assert.equal(isMaintenanceCoordinator(injected), true)
+  assert.equal(isMaintenanceCoordinator(other), true)
+  assert.equal(Object.isFrozen(injected), true)
+  assert.equal(Object.isFrozen(other), true)
   assert.equal(isMaintenanceCoordinator(null), false)
   assert.equal(isMaintenanceCoordinator("coordinator"), false)
   assert.equal(isMaintenanceCoordinator({ runFreshRead() {} }), false)
+  for (const untrusted of [structural, inherited, copied, mixed]) {
+    assert.equal(isMaintenanceCoordinator(untrusted), false)
+    assert.throws(
+      () => createMaintenanceRuntimeBinding(untrusted),
+      /maintenance coordinator is unavailable/i,
+    )
+    assert.throws(
+      () => __setMaintenanceCoordinatorForTests(untrusted),
+      /maintenance coordinator is unavailable/i,
+    )
+  }
 
   const bound = createMaintenanceRuntimeBinding(injected)
   assert.equal(bound.maintenanceCoordinator, injected)
@@ -141,11 +182,20 @@ test("runtime maintenance binding brands one complete coordinator and rejects un
     }),
     /per-tool maintenance override/i,
   )
+  const reflectedDescriptors = Object.getOwnPropertyDescriptors(bound)
+  const reflectedForgery = Object.freeze(
+    Object.defineProperties({}, reflectedDescriptors),
+  )
+  const inheritedBinding = Object.freeze(Object.create(bound))
+  const copiedBinding = Object.freeze({ ...bound })
   for (const runtimeContext of [
     {},
     { maintenanceCoordinator: null },
     { maintenanceCoordinator: injected },
     { ...bound },
+    copiedBinding,
+    reflectedForgery,
+    inheritedBinding,
     undefined,
   ]) {
     assert.throws(
@@ -160,21 +210,13 @@ test("runtime maintenance binding brands one complete coordinator and rejects un
     () => __setMaintenanceCoordinatorForTests({ runFreshRead() {} }),
     /maintenance coordinator is unavailable/i,
   )
-
-  const mutableSingleton = createMaintenanceCoordinator({
-    ensureIndex: async () => ({ built: false, reason: "fresh" }),
-  })
-  const restoreSingleton =
-    __setMaintenanceCoordinatorForTests(mutableSingleton)
+  const restoreSingleton = __setMaintenanceCoordinatorForTests(other)
   try {
-    mutableSingleton.runFreshRead = null
-    assert.throws(
-      () => resolveRuntimeMaintenance(),
-      /maintenance coordinator is unavailable/i,
-    )
+    assert.equal(resolveRuntimeMaintenance(), other)
   } finally {
     restoreSingleton()
   }
+  assert.deepEqual(methodCalls, [])
 })
 
 function createManualScheduler() {
@@ -211,14 +253,356 @@ async function makeRoot(prefix) {
   return fs.mkdtemp(path.join(tmpdir(), prefix))
 }
 
+async function makeSymlinkAlias(root, prefix) {
+  const container = await makeRoot(prefix)
+  const alias = path.join(container, "root-alias")
+  try {
+    await fs.symlink(
+      root,
+      alias,
+      process.platform === "win32" ? "junction" : "dir",
+    )
+  } catch (error) {
+    await removeRoots(container)
+    throw error
+  }
+  return { alias, container }
+}
+
+async function findSupportedCaseAlias(root) {
+  const resolved = path.resolve(root)
+  const physical = await fs.realpath(resolved)
+  for (let index = resolved.length - 1; index >= 0; index -= 1) {
+    const character = resolved[index]
+    if (!/[A-Za-z]/u.test(character)) continue
+    const replacement =
+      character === character.toLowerCase()
+        ? character.toUpperCase()
+        : character.toLowerCase()
+    const candidate =
+      `${resolved.slice(0, index)}${replacement}${resolved.slice(index + 1)}`
+    try {
+      if (await fs.realpath(candidate) === physical) return candidate
+    } catch {}
+  }
+  return null
+}
+
 async function removeRoots(...roots) {
   await awaitBounded(
     Promise.all(
-      roots.map((root) => fs.rm(root, { recursive: true, force: true })),
+      roots
+        .filter(Boolean)
+        .map((root) => fs.rm(root, { recursive: true, force: true })),
     ),
     "maintenance fixture cleanup timed out",
   )
 }
+
+async function assertAliasSerializesReadAndReindex({
+  alias,
+  force,
+  root,
+}) {
+  const readEntered = deferred()
+  const readRelease = deferred()
+  const reindexEntered = deferred()
+  const events = []
+  let repairStarts = 0
+  let resetCalls = 0
+  const maintenance = (await loadMaintenance()).createMaintenanceCoordinator({
+    ensureIndex: async (deskRoot, options) => {
+      if (options.skipEmbed) {
+        events.push(`read:ensure:${deskRoot}`)
+        return {
+          built: false,
+          reason: "fresh",
+          semantic: {
+            chunks_total: 2,
+            vectors_indexed: 1,
+            missing_vectors: 1,
+          },
+        }
+      }
+      events.push(`reindex:ensure:${deskRoot}`)
+      reindexEntered.resolve()
+      return {
+        built: true,
+        reason: "semantic_missing",
+        semantic: {
+          chunks_total: 2,
+          vectors_indexed: 2,
+          missing_vectors: 0,
+        },
+      }
+    },
+    openIndex: () => ({ open: true }),
+    closeIndex: (db) => {
+      db.open = false
+      events.push("read:close")
+    },
+    resetIndex: async ({ deskRoot }) => {
+      resetCalls += 1
+      events.push(`reindex:reset:${deskRoot}`)
+    },
+    createRepairCoordinator: () => ({
+      start() {
+        repairStarts += 1
+        events.push("repair:start")
+        return Promise.resolve({ state: "complete", last_error: null })
+      },
+      async cancel() {
+        events.push("repair:cancel")
+        return { state: "idle", last_error: null, cancelled: false }
+      },
+      status() {
+        return { state: "idle", last_error: null }
+      },
+    }),
+  })
+  let read
+  let reindex
+  try {
+    read = maintenance.runFreshRead({
+      deskRoot: root,
+      ensureOptions: { embed: { fetch: async () => null } },
+      async read(db) {
+        assert.equal(db.open, true)
+        events.push("read:open")
+        readEntered.resolve()
+        await readRelease.promise
+        return "read"
+      },
+    })
+    await awaitBounded(readEntered.promise, "aliased read did not enter")
+    reindex = maintenance.runExplicitReindex({
+      deskRoot: alias,
+      force,
+    })
+    await flushAsyncWork("aliased reindex did not reach the queue")
+
+    assert.equal(
+      reindexEntered.settled,
+      false,
+      `${force ? "force" : "non-force"} reindex entered through a physical-root alias while a read handle was open`,
+    )
+    assert.equal(resetCalls, 0)
+
+    readRelease.resolve()
+    assert.equal(await awaitBounded(read, "aliased read did not settle"), "read")
+    await awaitBounded(
+      reindex,
+      `${force ? "force" : "non-force"} aliased reindex did not settle`,
+    )
+
+    assert.equal(reindexEntered.settled, true)
+    assert.equal(resetCalls, force ? 1 : 0)
+    assert.equal(
+      repairStarts,
+      0,
+      "the older read registered stale repair after aliased reindex intent",
+    )
+    assert.ok(
+      events.indexOf("read:close") <
+        events.findIndex((event) => event.startsWith("reindex:")),
+    )
+    assert.ok(events.includes(`read:ensure:${path.resolve(root)}`))
+    assert.ok(events.includes(`reindex:ensure:${path.resolve(alias)}`))
+  } finally {
+    readRelease.resolve()
+    await Promise.allSettled([read, reindex].filter(Boolean))
+    await maintenance.cancelBackgroundRepair(root).catch(() => {})
+  }
+}
+
+test("physical symlink aliases share read locks and reindex generations", async (t) => {
+  const root = await makeRoot("desk-maintenance-physical-root-")
+  let aliasFixture
+  try {
+    try {
+      aliasFixture = await makeSymlinkAlias(
+        root,
+        "desk-maintenance-physical-alias-",
+      )
+    } catch (error) {
+      if (["EPERM", "EACCES", "ENOTSUP"].includes(error?.code)) {
+        t.skip(`symlink aliases unavailable: ${error.code}`)
+        return
+      }
+      throw error
+    }
+    for (const force of [false, true]) {
+      await assertAliasSerializesReadAndReindex({
+        alias: aliasFixture.alias,
+        force,
+        root,
+      })
+    }
+  } finally {
+    await removeRoots(aliasFixture?.container, root)
+  }
+})
+
+test("case aliases share read locks where the filesystem is case-insensitive", async (t) => {
+  const root = await makeRoot("desk-maintenance-case-root-")
+  try {
+    const alias = await findSupportedCaseAlias(root)
+    if (alias === null) {
+      t.skip("case aliases are not supported by this filesystem")
+      return
+    }
+    await assertAliasSerializesReadAndReindex({
+      alias,
+      force: true,
+      root,
+    })
+  } finally {
+    await removeRoots(root)
+  }
+})
+
+test("aliased repair waits for the physical-root read while a distinct root remains concurrent", async (t) => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const [rootA, rootB] = await Promise.all([
+    makeRoot("desk-maintenance-alias-repair-a-"),
+    makeRoot("desk-maintenance-alias-repair-b-"),
+  ])
+  let aliasA
+  let aliasB
+  const scheduler = createManualScheduler()
+  const readEntered = deferred()
+  const readRelease = deferred()
+  const repairEntered = deferred()
+  const repairRelease = deferred()
+  const otherRootEntered = deferred()
+  let maintenance
+  let initialFreshness
+  let heldRead
+  let repairBatch
+  let otherRootReindex
+
+  try {
+    try {
+      [aliasA, aliasB] = await Promise.all([
+        makeSymlinkAlias(rootA, "desk-maintenance-alias-link-a-"),
+        makeSymlinkAlias(rootB, "desk-maintenance-alias-link-b-"),
+      ])
+    } catch (error) {
+      if (["EPERM", "EACCES", "ENOTSUP"].includes(error?.code)) {
+        t.skip(`symlink aliases unavailable: ${error.code}`)
+        return
+      }
+      throw error
+    }
+    maintenance = createMaintenanceCoordinator({
+      ensureIndex: async (deskRoot, options) => {
+        if (options.marker === "other-root") {
+          assert.equal(deskRoot, path.resolve(aliasB.alias))
+          otherRootEntered.resolve()
+          return { built: true, reason: "fresh" }
+        }
+        return {
+          built: false,
+          reason: "fresh",
+          semantic: {
+            chunks_total: 2,
+            vectors_indexed: options.marker === "initial" ? 1 : 2,
+            missing_vectors: options.marker === "initial" ? 1 : 0,
+          },
+        }
+      },
+      openIndex: () => ({ open: true }),
+      closeIndex: (db) => {
+        db.open = false
+      },
+      repairBatch: async ({ deskRoot }) => {
+        assert.equal(deskRoot, path.resolve(aliasA.alias))
+        repairEntered.resolve()
+        await repairRelease.promise
+        return {
+          processed_chunks: 1,
+          vectors_indexed: 1,
+          remaining_chunks: 0,
+          stopped_by: "complete",
+        }
+      },
+      createRepairCoordinator: (options) =>
+        createSemanticRepairCoordinator({
+          ...options,
+          schedule: scheduler.schedule,
+          clearScheduled: scheduler.clear,
+        }),
+    })
+
+    initialFreshness = await maintenance.ensureSearchFreshness({
+      deskRoot: aliasA.alias,
+      ensureOptions: {
+        embed: { fetch: async () => null },
+        marker: "initial",
+      },
+    })
+    assert.equal(scheduler.size, 1)
+    heldRead = maintenance.runFreshRead({
+      deskRoot: rootA,
+      ensureOptions: { marker: "held-read" },
+      async read(db) {
+        assert.equal(db.open, true)
+        readEntered.resolve()
+        await readRelease.promise
+        return "held-read"
+      },
+    })
+    await awaitBounded(readEntered.promise, "physical-root read did not enter")
+
+    repairBatch = scheduler.runNext()
+    otherRootReindex = maintenance.runExplicitReindex({
+      deskRoot: aliasB.alias,
+      ensureOptions: { marker: "other-root" },
+    })
+    await awaitBounded(
+      otherRootEntered.promise,
+      "distinct physical root did not remain concurrent",
+    )
+    await awaitBounded(
+      otherRootReindex,
+      "distinct physical-root reindex did not settle",
+    )
+    await flushAsyncWork("aliased repair did not reach its root queue")
+    assert.equal(
+      repairEntered.settled,
+      false,
+      "repair entered through a symlink alias while the physical-root read was open",
+    )
+
+    readRelease.resolve()
+    assert.equal(await awaitBounded(heldRead, "held read did not settle"), "held-read")
+    await awaitBounded(
+      repairEntered.promise,
+      "aliased repair did not enter after read close",
+    )
+    repairRelease.resolve()
+    await awaitBounded(repairBatch, "aliased repair batch did not settle")
+    await awaitBounded(
+      initialFreshness.repair,
+      "aliased repair promise did not settle",
+    )
+  } finally {
+    readRelease.resolve()
+    repairRelease.resolve()
+    await Promise.allSettled(
+      [heldRead, repairBatch, otherRootReindex, initialFreshness?.repair].filter(
+        Boolean,
+      ),
+    )
+    if (maintenance) {
+      await Promise.allSettled([
+        maintenance.cancelBackgroundRepair(rootA),
+        maintenance.cancelBackgroundRepair(rootB),
+      ])
+    }
+    await removeRoots(aliasA?.container, aliasB?.container, rootA, rootB)
+  }
+})
 
 test("search freshness finishes before scheduling one reused same-root repair job", async () => {
   const { createMaintenanceCoordinator } = await loadMaintenance()

@@ -7,6 +7,7 @@ import * as path from "node:path"
 import { callTool, createMcpServer, createMcpTransport, startServer, TOOL_IMPLS } from "../../src/server.js"
 import {
   createMaintenanceCoordinator,
+  isMaintenanceCoordinator,
   maintenanceCoordinator as defaultMaintenanceCoordinator,
 } from "../../src/indexer/maintenance.js"
 import { mkTempDeskRoot } from "./_helpers.js"
@@ -246,11 +247,12 @@ test("server.startServer binds one runtime coordinator through dispatch without 
   const root = await mkTempDeskRoot()
   const handlers = []
   const maintenanceCalls = []
-  const runtimeMaintenanceCoordinator = {
-    async cancelBackgroundRepair() {},
-    async ensureSearchFreshness() {},
-    async runExplicitReindex(args) {
-      maintenanceCalls.push(args)
+  const maintenance = createMaintenanceCoordinator({
+    ensureIndex: async (_deskRoot, options) => {
+      maintenanceCalls.push({
+        deskRoot: _deskRoot,
+        ensureOptions: options,
+      })
       return {
         built: false,
         reason: "fresh",
@@ -262,9 +264,7 @@ test("server.startServer binds one runtime coordinator through dispatch without 
         },
       }
     },
-    async runFreshRead() {},
-    async runStartupEnsureIndex() {},
-  }
+  })
   const server = {
     setRequestHandler(schema, handler) {
       handlers.push({ schema, handler })
@@ -274,7 +274,7 @@ test("server.startServer binds one runtime coordinator through dispatch without 
 
   await startServer({
     deskRoot: root,
-    maintenanceCoordinator: runtimeMaintenanceCoordinator,
+    maintenanceCoordinator: maintenance,
     server,
     transport: { kind: "runtime-context-test" },
   })
@@ -293,10 +293,58 @@ test("server.startServer binds one runtime coordinator through dispatch without 
   assert.deepEqual(maintenanceCalls, [
     {
       deskRoot: path.resolve(root),
-      force: false,
       ensureOptions: {},
     },
   ])
+})
+
+test("server.startServer rejects unregistered and method-spliced coordinators before registration", async () => {
+  const root = await mkTempDeskRoot()
+  const coordinatorA = createMaintenanceCoordinator({
+    ensureIndex: async () => assert.fail("untrusted coordinator reached I/O"),
+  })
+  const coordinatorB = createMaintenanceCoordinator({
+    ensureIndex: async () => assert.fail("spliced coordinator reached I/O"),
+  })
+  const structural = Object.fromEntries(
+    Object.keys(coordinatorA).map((method) => [
+      method,
+      async () => assert.fail(`unregistered ${method} reached I/O`),
+    ]),
+  )
+  const untrusted = [
+    structural,
+    Object.create(coordinatorA),
+    { ...coordinatorA },
+    {
+      ...coordinatorA,
+      runExplicitReindex: coordinatorB.runExplicitReindex,
+    },
+  ]
+  let connectCalls = 0
+  let handlerCalls = 0
+
+  for (const maintenanceCoordinator of untrusted) {
+    assert.equal(isMaintenanceCoordinator(maintenanceCoordinator), false)
+    await assert.rejects(
+      startServer({
+        deskRoot: root,
+        maintenanceCoordinator,
+        server: {
+          setRequestHandler() {
+            handlerCalls += 1
+          },
+          async connect() {
+            connectCalls += 1
+          },
+        },
+        transport: { kind: "untrusted-coordinator" },
+      }),
+      /maintenance coordinator is unavailable/i,
+    )
+  }
+  assert.equal(handlerCalls, 0)
+  assert.equal(connectCalls, 0)
 })
 
 test("server.startServer threads one frozen runtime binding to every maintenance-backed handler", async () => {

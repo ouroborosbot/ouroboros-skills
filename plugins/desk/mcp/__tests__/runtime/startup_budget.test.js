@@ -15,6 +15,7 @@ import { main } from "../../index.js"
 import {
   __setMaintenanceCoordinatorForTests,
   createMaintenanceCoordinator,
+  isMaintenanceCoordinator,
 } from "../../src/indexer/maintenance.js"
 import { startServer as registerRuntimeServer } from "../../src/server.js"
 
@@ -106,6 +107,7 @@ function runtimeServerWithEnsureIndex({ ensureIndex, maintenanceCoordinator }) {
       loaded_from_source_mirror: true,
     },
     events,
+    isMaintenanceCoordinator,
     startCalls,
     async ensureIndex(...args) {
       events.push("ensureIndex")
@@ -563,6 +565,7 @@ test("runtime-wide coordinator identity serializes timed-out startup with served
       loaded_from_source_mirror: true,
     },
     ensureIndex,
+    isMaintenanceCoordinator,
     maintenanceCoordinator: boundMaintenance,
     async startServer(args) {
       return registerRuntimeServer({
@@ -908,6 +911,7 @@ test("startup skips bounded ensureIndex when the runtime server has no ensureInd
       cwd: root,
       homeDir: root,
       runtimeImporter: async () => ({
+        isMaintenanceCoordinator,
         maintenanceCoordinator,
         async startServer(args) {
           startCalls.push(args)
@@ -922,6 +926,60 @@ test("startup skips bounded ensureIndex when the runtime server has no ensureInd
       duration_ms: 0,
       budget_ms: 250,
     })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("startup rejects a structurally complete split coordinator before startup I/O or server registration", async () => {
+  const root = makeRoot("desk-startup-nominal-maintenance-")
+  const calls = []
+  const coordinatorA = createMaintenanceCoordinator({
+    ensureIndex: async () => {
+      calls.push("coordinator-a:startup")
+      return { built: false, reason: "fresh" }
+    },
+  })
+  const coordinatorB = createMaintenanceCoordinator({
+    ensureIndex: async () => {
+      calls.push("coordinator-b:reindex")
+      return { built: false, reason: "fresh" }
+    },
+  })
+  const splitCoordinator = {
+    ...coordinatorA,
+    runExplicitReindex: coordinatorB.runExplicitReindex,
+  }
+  const diagnostics = []
+  let serverStarts = 0
+
+  try {
+    await main({
+      argv: ["--root", root],
+      env: {},
+      cwd: root,
+      homeDir: root,
+      runtimeImporter: async () => ({
+        ensureIndex: async () => {
+          calls.push("runtime:ensure")
+          return { built: false, reason: "fresh" }
+        },
+        isMaintenanceCoordinator,
+        maintenanceCoordinator: splitCoordinator,
+        async startServer() {
+          serverStarts += 1
+        },
+      }),
+      diagnosticServerStarter: ({ diagnostic }) => {
+        diagnostics.push(diagnostic)
+        return diagnostic
+      },
+    })
+
+    assert.deepEqual(calls, [])
+    assert.equal(serverStarts, 0)
+    assert.equal(diagnostics.length, 1)
+    assert.equal(diagnostics[0].reason, "maintenance_unavailable")
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
