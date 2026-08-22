@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 
 import { createSemanticRepairCoordinator } from "../../src/indexer/semantic-repair.js"
+import { resolveRootIdentity } from "../../src/indexer/root-identity.js"
 import { createModeledCaseCollisionRootIdentity } from "../fixtures/root_identity_fixture.js"
 
 const maintenanceModuleUrl = new URL(
@@ -303,6 +304,223 @@ test("modeled case-only referent aliases share one queue while the distinct case
     rootARelease.resolve()
     await Promise.allSettled([rootA, aliasA, rootB].filter(Boolean))
   }
+})
+
+test("same-path root replacement stays serialized when file IDs change", async () => {
+  const { createRootMaintenanceQueue } = await loadMaintenance()
+  const root = path.resolve("modeled-replaced-root")
+  let inode = 100n
+  const resolveIdentity = (deskRoot) =>
+    resolveRootIdentity(deskRoot, {
+      nativeRealpath: () => root,
+      nativeStat: () => ({ dev: 1n, ino: inode++ }),
+    })
+  const queue = createRootMaintenanceQueue({
+    resolveIdentity,
+    validateIdentity: () => {},
+  })
+  const firstEntered = deferred()
+  const firstRelease = deferred()
+  const replacementEntered = deferred()
+  let first
+  let replacement
+
+  try {
+    first = queue.run(root, async () => {
+      firstEntered.resolve()
+      await firstRelease.promise
+    })
+    await awaitBounded(firstEntered.promise, "initial root did not enter")
+    replacement = queue.run(root, async () => {
+      replacementEntered.resolve()
+    })
+    await flushAsyncWork("replacement root queue did not settle")
+    assert.equal(
+      replacementEntered.settled,
+      false,
+      "replacing a root at the same canonical path split its maintenance queue",
+    )
+    firstRelease.resolve()
+    await awaitBounded(
+      Promise.all([first, replacement]),
+      "same-path replacement operations did not settle",
+    )
+  } finally {
+    firstRelease.resolve()
+    await Promise.allSettled([first, replacement].filter(Boolean))
+  }
+})
+
+test("queued work rejects a symlink retarget before invoking its writer", async () => {
+  const { createRootMaintenanceQueue } = await loadMaintenance()
+  const fixture = createModeledCaseCollisionRootIdentity()
+  const queue = createRootMaintenanceQueue({
+    resolveIdentity: fixture.resolveIdentity,
+    validateIdentity: fixture.validateIdentity,
+  })
+  const firstEntered = deferred()
+  const firstRelease = deferred()
+  let staleWriterCalls = 0
+  let first
+  let stale
+
+  try {
+    first = queue.run(fixture.rootA, async () => {
+      firstEntered.resolve()
+      await firstRelease.promise
+    })
+    await awaitBounded(firstEntered.promise, "initial root did not enter")
+    stale = queue.run(fixture.aliasA, async () => {
+      staleWriterCalls += 1
+    })
+    fixture.retargetAlias(fixture.rootB)
+    firstRelease.resolve()
+    await awaitBounded(first, "initial root did not settle")
+    await assert.rejects(
+      stale,
+      (error) => {
+        assert.equal(error.code, "desk_root_identity_changed")
+        return true
+      },
+    )
+    assert.equal(staleWriterCalls, 0)
+  } finally {
+    firstRelease.resolve()
+    await Promise.allSettled([first, stale].filter(Boolean))
+  }
+})
+
+test("alternating root resolution failure fails closed before writer, open, or reset", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const root = path.resolve("modeled-alternating-root")
+  let failResolution = true
+  let ensureCalls = 0
+  let openCalls = 0
+  let resetCalls = 0
+  const maintenance = createMaintenanceCoordinator({
+    resolveIdentity: (deskRoot) =>
+      resolveRootIdentity(deskRoot, {
+        nativeRealpath: () => {
+          if (failResolution) {
+            throw Object.assign(new Error("transient realpath failure"), {
+              code: "EIO",
+            })
+          }
+          return root
+        },
+        nativeStat: () => {
+          throw new Error("stat must not be sampled")
+        },
+      }),
+    ensureIndex: async () => {
+      ensureCalls += 1
+      return { built: false, reason: "fresh" }
+    },
+    openIndex: () => {
+      openCalls += 1
+      return {}
+    },
+    closeIndex: () => {},
+    resetIndex: async () => {
+      resetCalls += 1
+    },
+    createRepairCoordinator: () => ({
+      start: async () => ({ state: "complete", last_error: null }),
+      cancel: async () => ({
+        state: "idle",
+        last_error: null,
+        cancelled: false,
+      }),
+      status: () => ({ state: "idle", last_error: null }),
+    }),
+  })
+
+  assert.throws(
+    () => maintenance.runFreshRead({
+      deskRoot: root,
+      read: async () => "unreachable",
+    }),
+    (error) => {
+      assert.equal(error.code, "desk_root_identity_unavailable")
+      return true
+    },
+  )
+  assert.deepEqual(
+    { ensureCalls, openCalls, resetCalls },
+    { ensureCalls: 0, openCalls: 0, resetCalls: 0 },
+  )
+
+  failResolution = false
+  assert.equal(
+    await maintenance.runFreshRead({
+      deskRoot: root,
+      read: async () => "read",
+    }),
+    "read",
+  )
+  assert.deepEqual(
+    { ensureCalls, openCalls, resetCalls },
+    { ensureCalls: 1, openCalls: 1, resetCalls: 0 },
+  )
+
+  failResolution = true
+  assert.throws(
+    () => maintenance.runExplicitReindex({
+      deskRoot: root,
+      force: true,
+    }),
+    (error) => {
+      assert.equal(error.code, "desk_root_identity_unavailable")
+      return true
+    },
+  )
+  assert.deepEqual(
+    { ensureCalls, openCalls, resetCalls },
+    { ensureCalls: 1, openCalls: 1, resetCalls: 0 },
+  )
+})
+
+test("maintenance resolves once and threads one root lease through queued work", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const root = path.resolve("modeled-stable-lease")
+  const lease = Object.freeze({ path: root, key: root })
+  let resolveCalls = 0
+  const seen = []
+  const maintenance = createMaintenanceCoordinator({
+    resolveIdentity: () => {
+      resolveCalls += 1
+      return lease
+    },
+    ensureIndex: async (_deskRoot, options) => {
+      seen.push(options.rootIdentity)
+      return {
+        built: false,
+        reason: "fresh",
+        semantic: { missing_vectors: 0 },
+      }
+    },
+    createRepairCoordinator: () => ({
+      start: async () => ({ state: "complete", last_error: null }),
+      async cancel(rootIdentity) {
+        seen.push(rootIdentity)
+        return {
+          state: "idle",
+          last_error: null,
+          cancelled: false,
+        }
+      },
+      status: () => ({ state: "idle", last_error: null }),
+    }),
+  })
+
+  await maintenance.ensureSearchFreshness({ deskRoot: root })
+  assert.equal(resolveCalls, 1)
+  assert.deepEqual(seen, [lease])
+
+  seen.length = 0
+  await maintenance.runExplicitReindex({ deskRoot: root })
+  assert.equal(resolveCalls, 2)
+  assert.deepEqual(seen, [lease, lease, lease])
 })
 
 test("modeled referent identity shares freshness generations for A and its alias without suppressing B", async () => {

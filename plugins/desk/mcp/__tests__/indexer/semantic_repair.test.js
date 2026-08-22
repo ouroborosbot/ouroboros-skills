@@ -520,6 +520,59 @@ test("semantic repair shares modeled alias state while independently repairing a
   }
 })
 
+test("semantic repair retains one root lease through every scheduled batch", async () => {
+  const { createSemanticRepairCoordinator } = await loadSemanticRepair()
+  const scheduler = createManualScheduler()
+  const root = path.resolve("modeled-semantic-lease")
+  const lease = Object.freeze({ path: root, key: root })
+  let resolveCalls = 0
+  const repairLeases = []
+  const coordinator = createSemanticRepairCoordinator({
+    resolveIdentity: () => {
+      resolveCalls += 1
+      return lease
+    },
+    repairBatch: async ({ rootIdentity }) => {
+      repairLeases.push(rootIdentity)
+      return {
+        processed_chunks: 1,
+        remaining_chunks: repairLeases.length === 1 ? 1 : 0,
+      }
+    },
+    schedule: scheduler.schedule,
+    clearScheduled: scheduler.clearScheduled,
+  })
+
+  const repair = coordinator.start({ deskRoot: root })
+  assert.equal(resolveCalls, 1)
+  assert.equal(await scheduler.drain(), 2)
+  assert.deepEqual(await repair, {
+    state: "complete",
+    last_error: null,
+  })
+  assert.equal(resolveCalls, 1)
+  assert.deepEqual(repairLeases, [lease, lease])
+})
+
+test("semantic repair cancellation resolves an idle root only once", async () => {
+  const { createSemanticRepairCoordinator } = await loadSemanticRepair()
+  const root = path.resolve("modeled-semantic-idle")
+  let resolveCalls = 0
+  const coordinator = createSemanticRepairCoordinator({
+    resolveIdentity: () => {
+      resolveCalls += 1
+      return { path: root, key: root }
+    },
+  })
+
+  assert.deepEqual(await coordinator.cancel(root), {
+    state: "idle",
+    last_error: null,
+    cancelled: false,
+  })
+  assert.equal(resolveCalls, 1)
+})
+
 test("semantic repair default scheduling exposes isolated status snapshots and terminal cancellation", async () => {
   const { createSemanticRepairCoordinator } = await loadSemanticRepair()
   const root = await makeRoot("desk-semantic-repair-default-")

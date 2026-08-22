@@ -15,7 +15,7 @@ function failingFilesystemCall(code, message) {
   }
 }
 
-test("referent IDs merge a case-only symlink alias without merging a distinct case-variant root", () => {
+test("canonical realpaths merge an alias without merging a distinct case-variant root or reused inode", () => {
   const fixture = createModeledCaseCollisionRootIdentity()
   const rootA = fixture.resolveIdentity(fixture.rootA)
   const aliasA = fixture.resolveIdentity(fixture.aliasA)
@@ -28,8 +28,10 @@ test("referent IDs merge a case-only symlink alias without merging a distinct ca
   assert.notEqual(
     rootA.key,
     rootB.key,
-    "a distinct case-variant inode must not collide with the aliased referent",
+    "distinct case-variant realpaths must remain independent even when a file ID is reused",
   )
+  assert.equal(rootA.key, path.normalize(fixture.rootA))
+  assert.equal(rootB.key, path.normalize(fixture.rootB))
   const freshnessByRoot = new Map([
     [rootA.key, { statInventoryHash: "root-a" }],
   ])
@@ -38,98 +40,42 @@ test("referent IDs merge a case-only symlink alias without merging a distinct ca
     freshnessByRoot.get(rootA.key),
   )
   assert.equal(freshnessByRoot.has(rootB.key), false)
-  assert.match(rootA.key, /9007199254740993/u)
-  assert.match(rootA.key, /18446744073709551617/u)
-  assert.match(rootB.key, /18446744073709551618/u)
-  assert.deepEqual(fixture.statCalls, [
-    {
-      candidate: fixture.rootA,
-      options: { bigint: true },
-    },
-    {
-      candidate: fixture.rootA,
-      options: { bigint: true },
-    },
-    {
-      candidate: fixture.rootB,
-      options: { bigint: true },
-    },
-  ])
+  assert.deepEqual(fixture.statCalls, [])
 })
 
-test("zero or unreliable file IDs fall back to exact normalized referent paths", () => {
+test("successful realpath ignores stat failure for direct and symlink aliases", () => {
   const fixture = createModeledCaseCollisionRootIdentity()
-  const unreliableStats = [
-    { dev: 1n, ino: 0n },
-    { dev: 0n, ino: 1n },
-    { dev: 1, ino: Number.MAX_SAFE_INTEGER + 1 },
-    { dev: "1", ino: "2" },
-  ]
+  const statFailure = failingFilesystemCall("EIO", "stat failed")
+  const identity = (deskRoot) =>
+    resolveRootIdentity(deskRoot, {
+      nativeRealpath: fixture.nativeRealpath,
+      nativeStat: statFailure,
+    })
+  const rootA = identity(fixture.rootA)
+  const aliasA = identity(fixture.aliasA)
 
-  for (const stat of unreliableStats) {
-    const identity = (deskRoot) =>
-      resolveRootIdentity(deskRoot, {
-        nativeRealpath: fixture.nativeRealpath,
-        nativeStat: () => stat,
-      })
-    const rootA = identity(fixture.rootA)
-    const aliasA = identity(fixture.aliasA)
-    const rootB = identity(fixture.rootB)
-    assert.equal(rootA.key, aliasA.key)
-    assert.notEqual(rootA.key, rootB.key)
-    assert.equal(rootA.key, `physical-path:${path.normalize(fixture.rootA)}`)
-    assert.equal(rootB.key, `physical-path:${path.normalize(fixture.rootB)}`)
-  }
+  assert.equal(rootA.key, path.normalize(fixture.rootA))
+  assert.equal(aliasA.key, rootA.key)
 })
 
-test("realpath, stat, and nonexistent-root errors preserve distinct normalized lexical keys", () => {
+test("realpath failure fails closed without creating an unresolved identity", () => {
   const fixture = createModeledCaseCollisionRootIdentity()
   const missingA = path.join(fixture.rootA, "..", "MissingA")
-  const missingB = path.join(fixture.rootA, "..", "missinga")
   const realpathFailure = failingFilesystemCall("ENOENT", "not found")
 
-  assert.deepEqual(
-    resolveRootIdentity(missingA, {
+  assert.throws(
+    () => resolveRootIdentity(missingA, {
       nativeRealpath: realpathFailure,
     }),
-    {
-      path: path.resolve(missingA),
-      key: `unresolved:${path.resolve(missingA)}`,
+    (error) => {
+      assert.equal(error.code, "desk_root_identity_unavailable")
+      assert.equal(error.message, "desk root identity is unavailable")
+      return true
     },
-  )
-  assert.notEqual(
-    resolveRootIdentity(missingA, {
-      nativeRealpath: realpathFailure,
-    }).key,
-    resolveRootIdentity(missingB, {
-      nativeRealpath: failingFilesystemCall("EACCES", "denied"),
-    }).key,
-  )
-
-  const statFailure = failingFilesystemCall("EIO", "stat failed")
-  const statErrorA = resolveRootIdentity(fixture.rootA, {
-    nativeRealpath: fixture.nativeRealpath,
-    nativeStat: statFailure,
-  })
-  const statErrorAlias = resolveRootIdentity(fixture.aliasA, {
-    nativeRealpath: fixture.nativeRealpath,
-    nativeStat: statFailure,
-  })
-  const statErrorB = resolveRootIdentity(fixture.rootB, {
-    nativeRealpath: fixture.nativeRealpath,
-    nativeStat: statFailure,
-  })
-  assert.deepEqual(
-    new Set([statErrorA.key, statErrorAlias.key, statErrorB.key]),
-    new Set([
-      `unresolved:${fixture.rootA}`,
-      `unresolved:${fixture.aliasA}`,
-      `unresolved:${fixture.rootB}`,
-    ]),
   )
 })
 
-test("identity fallback honors platform path normalization without case folding", () => {
+test("canonical identity honors native path normalization without case folding", () => {
   const windowsResolve = (candidate) =>
     path.win32.resolve("C:\\workspace", candidate)
   const windowsRoot = windowsResolve("Desk\\Root\\..\\Data")
@@ -137,12 +83,12 @@ test("identity fallback honors platform path normalization without case folding"
     resolvePath: windowsResolve,
     normalizePath: path.win32.normalize,
     nativeRealpath: () => "C:\\Desk\\Data\\.\\",
-    nativeStat: () => ({ dev: 1n, ino: 0n }),
+    nativeStat: failingFilesystemCall("EIO", "stat must not be sampled"),
   })
 
   assert.deepEqual(identity, {
     path: windowsRoot,
-    key: "physical-path:C:\\Desk\\Data\\",
+    key: "C:\\Desk\\Data\\",
   })
   assert.equal(
     resolveRootPath(path.join("Desk", "Root", "..", "Data")),

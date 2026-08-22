@@ -12,25 +12,15 @@ export function createModeledCaseCollisionRootIdentity() {
     [aliasA, rootA],
     [rootB, rootB],
   ])
-  const stats = new Map([
-    [
-      rootA,
-      {
-        dev: 9007199254740993n,
-        ino: 18446744073709551617n,
-      },
-    ],
-    [
-      rootB,
-      {
-        dev: 9007199254740993n,
-        ino: 18446744073709551618n,
-      },
-    ],
-  ])
+  const reusedStat = {
+    dev: 9007199254740993n,
+    ino: 18446744073709551617n,
+  }
+  const realpathCalls = []
   const statCalls = []
 
   function nativeRealpath(candidate) {
+    realpathCalls.push(candidate)
     const referent = referents.get(candidate)
     if (referent !== undefined) return referent
     throw Object.assign(new Error(`missing modeled root: ${candidate}`), {
@@ -40,11 +30,7 @@ export function createModeledCaseCollisionRootIdentity() {
 
   function nativeStat(candidate, options) {
     statCalls.push({ candidate, options })
-    const stat = stats.get(candidate)
-    if (stat !== undefined) return stat
-    throw Object.assign(new Error(`missing modeled stat: ${candidate}`), {
-      code: "ENOENT",
-    })
+    return reusedStat
   }
 
   const resolveIdentity = (deskRoot) =>
@@ -53,13 +39,28 @@ export function createModeledCaseCollisionRootIdentity() {
       nativeStat,
     })
 
+  function retargetAlias(target) {
+    referents.set(aliasA, target)
+  }
+
+  function validateIdentity(identity) {
+    const currentKey = path.normalize(nativeRealpath(identity.path))
+    if (currentKey === identity.key) return identity
+    const error = new Error("desk root identity changed during maintenance")
+    error.code = "desk_root_identity_changed"
+    throw error
+  }
+
   return {
     aliasA,
     nativeRealpath,
     nativeStat,
+    realpathCalls,
     resolveIdentity,
+    retargetAlias,
     rootA,
     rootB,
     statCalls,
+    validateIdentity,
   }
 }
