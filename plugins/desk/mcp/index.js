@@ -403,13 +403,24 @@ async function runStartupEnsureIndex({ budgetMs, deskRoot, runtimeServer }) {
     skipEmbed: true,
   }
   const startupMaintenance = runtimeServer.maintenanceCoordinator
+  if (typeof startupMaintenance?.runStartupEnsureIndex !== "function") {
+    return {
+      ensure_index: {
+        built: false,
+        reason: "shared_maintenance_unavailable",
+        skipped: true,
+      },
+      duration_ms: 0,
+      budget_ms: budgetMs,
+      fallback_mode: "maintenance_unavailable",
+      degraded: true,
+    }
+  }
   const ensureIndexPromise = Promise.resolve().then(() =>
-    typeof startupMaintenance?.runStartupEnsureIndex === "function"
-      ? startupMaintenance.runStartupEnsureIndex({
-          deskRoot,
-          ensureOptions,
-        })
-      : runtimeServer.ensureIndex(deskRoot, ensureOptions),
+    startupMaintenance.runStartupEnsureIndex({
+      deskRoot,
+      ensureOptions,
+    }),
   )
   try {
     const ensureIndexResult = await Promise.race([

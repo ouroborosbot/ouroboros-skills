@@ -35,6 +35,7 @@ import {
 } from "../../src/artifacts/performance-budgets.js"
 import { closeDb, openDb, setMeta } from "../../src/db/init.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
+import { createMaintenanceCoordinator } from "../../src/indexer/maintenance.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
@@ -472,7 +473,7 @@ function assertPositiveIntegerBudget(value, label) {
 function runtimeServerWithEnsureIndex(ensureIndexResult = { built: false, reason: "fresh" }) {
   const ensureCalls = []
   const startCalls = []
-  return {
+  const runtimeServer = {
     ensureCalls,
     startCalls,
     async ensureIndex(deskRoot, opts = {}) {
@@ -483,6 +484,10 @@ function runtimeServerWithEnsureIndex(ensureIndexResult = { built: false, reason
       startCalls.push(args)
     },
   }
+  runtimeServer.maintenanceCoordinator = createMaintenanceCoordinator({
+    ensureIndex: runtimeServer.ensureIndex,
+  })
+  return runtimeServer
 }
 
 async function withSeededArtifactFixture(fn) {

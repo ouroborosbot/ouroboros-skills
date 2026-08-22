@@ -94,14 +94,13 @@ function writeStartupBudget(mcpRoot, ensureIndexMs) {
 function runtimeServerWithEnsureIndex({ ensureIndex, maintenanceCoordinator }) {
   const events = []
   const startCalls = []
-  return {
+  const runtimeServer = {
     _deskRuntime: {
       runtime_cache_dir: "/runtime-cache",
       source_mirror_path: "/runtime-cache/source-mirror/hash",
       target: `${process.platform}-${process.arch}-node-${process.versions.modules}`,
       loaded_from_source_mirror: true,
     },
-    maintenanceCoordinator,
     events,
     startCalls,
     async ensureIndex(...args) {
@@ -113,6 +112,14 @@ function runtimeServerWithEnsureIndex({ ensureIndex, maintenanceCoordinator }) {
       startCalls.push(args)
     },
   }
+  if (maintenanceCoordinator !== null) {
+    runtimeServer.maintenanceCoordinator =
+      maintenanceCoordinator ??
+      createMaintenanceCoordinator({
+        ensureIndex: runtimeServer.ensureIndex,
+      })
+  }
+  return runtimeServer
 }
 
 test("startup runs bounded ensureIndex before registering the server and forwards artifact status", async () => {
@@ -384,6 +391,7 @@ test("startup skips an injected direct writer when shared maintenance is unavail
       directHandleOpen = false
       return { built: false, reason: "fresh" }
     },
+    maintenanceCoordinator: null,
   })
   const startServer = runtimeServer.startServer.bind(runtimeServer)
   runtimeServer.startServer = async (args) => {
