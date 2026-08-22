@@ -5,7 +5,10 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { callTool, createMcpServer, createMcpTransport, startServer, TOOL_IMPLS } from "../../src/server.js"
-import { createMaintenanceCoordinator } from "../../src/indexer/maintenance.js"
+import {
+  createMaintenanceCoordinator,
+  maintenanceCoordinator as defaultMaintenanceCoordinator,
+} from "../../src/indexer/maintenance.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 
 function parseResult(res) {
@@ -197,7 +200,14 @@ test("server.startServer registers list/call handlers and forwards status contex
     runtime: { runtime_cache_dir: "/tmp/runtime", source_mirror_path: "/tmp/runtime/source-mirror/hash" },
   }
 
-  await startServer({ deskRoot: root, person: "ari", statusContext, server, transport })
+  await startServer({
+    deskRoot: root,
+    maintenanceCoordinator: defaultMaintenanceCoordinator,
+    person: "ari",
+    statusContext,
+    server,
+    transport,
+  })
 
   assert.equal(handlers.length, 2)
   const listed = await handlers[0].handler()
@@ -236,26 +246,24 @@ test("server.startServer binds one runtime coordinator through dispatch without 
   const root = await mkTempDeskRoot()
   const handlers = []
   const maintenanceCalls = []
-  const runtimeContext = {
-    maintenanceCoordinator: {
-      async cancelBackgroundRepair() {},
-      async ensureSearchFreshness() {},
-      async runExplicitReindex(args) {
-        maintenanceCalls.push(args)
-        return {
-          built: false,
-          reason: "fresh",
-          semantic: {
-            chunks_total: 0,
-            vectors_indexed: 0,
-            missing_vectors: 0,
-            embedding_available: true,
-          },
-        }
-      },
-      async runFreshRead() {},
-      async runStartupEnsureIndex() {},
+  const runtimeMaintenanceCoordinator = {
+    async cancelBackgroundRepair() {},
+    async ensureSearchFreshness() {},
+    async runExplicitReindex(args) {
+      maintenanceCalls.push(args)
+      return {
+        built: false,
+        reason: "fresh",
+        semantic: {
+          chunks_total: 0,
+          vectors_indexed: 0,
+          missing_vectors: 0,
+          embedding_available: true,
+        },
+      }
     },
+    async runFreshRead() {},
+    async runStartupEnsureIndex() {},
   }
   const server = {
     setRequestHandler(schema, handler) {
@@ -266,7 +274,7 @@ test("server.startServer binds one runtime coordinator through dispatch without 
 
   await startServer({
     deskRoot: root,
-    runtimeContext,
+    maintenanceCoordinator: runtimeMaintenanceCoordinator,
     server,
     transport: { kind: "runtime-context-test" },
   })
@@ -289,6 +297,72 @@ test("server.startServer binds one runtime coordinator through dispatch without 
       ensureOptions: {},
     },
   ])
+})
+
+test("server.startServer threads one frozen runtime binding to every maintenance-backed handler", async () => {
+  const root = await mkTempDeskRoot()
+  const handlers = []
+  const runtimeContexts = []
+  const maintenanceToolNames = [
+    "desk_search",
+    "desk_recall",
+    "desk_similar",
+    "desk_timeline",
+    "desk_thread",
+    "desk_reindex",
+  ]
+  const originalImplementations = new Map(
+    maintenanceToolNames.map((name) => [name, TOOL_IMPLS[name]]),
+  )
+  const runtimeMaintenanceCoordinator = createMaintenanceCoordinator({
+    ensureIndex: async () => ({ built: false, reason: "fresh" }),
+  })
+  const server = {
+    setRequestHandler(schema, handler) {
+      handlers.push({ schema, handler })
+    },
+    async connect() {},
+  }
+
+  try {
+    for (const name of maintenanceToolNames) {
+      TOOL_IMPLS[name] = async ({ runtimeContext }) => {
+        runtimeContexts.push(runtimeContext)
+        return { status: "ok", tool: name }
+      }
+    }
+    await startServer({
+      deskRoot: root,
+      maintenanceCoordinator: runtimeMaintenanceCoordinator,
+      server,
+      transport: { kind: "runtime-binding-test" },
+    })
+    for (const name of maintenanceToolNames) {
+      const result = await handlers[1].handler({
+        params: { name, arguments: {} },
+      })
+      assert.equal(result.isError, undefined)
+    }
+
+    assert.equal(runtimeContexts.length, maintenanceToolNames.length)
+    assert.ok(
+      runtimeContexts.every(
+        (runtimeContext) => runtimeContext === runtimeContexts[0],
+      ),
+    )
+    assert.equal(Object.isFrozen(runtimeContexts[0]), true)
+    assert.equal(
+      runtimeContexts[0].maintenanceCoordinator,
+      runtimeMaintenanceCoordinator,
+    )
+    assert.deepEqual(Object.keys(runtimeContexts[0]), [
+      "maintenanceCoordinator",
+    ])
+  } finally {
+    for (const [name, implementation] of originalImplementations) {
+      TOOL_IMPLS[name] = implementation
+    }
+  }
 })
 
 test("server.startServer refuses malformed runtime coordination while startup maintenance is active", async () => {
@@ -354,7 +428,11 @@ test("server.startServer can construct its default transport", async () => {
       assert.equal(typeof receivedTransport, "object")
     },
   }
-  await startServer({ deskRoot: root, server })
+  await startServer({
+    deskRoot: root,
+    maintenanceCoordinator: defaultMaintenanceCoordinator,
+    server,
+  })
 })
 
 test("server.startServer can construct server and transport through injected factories", async () => {
@@ -368,6 +446,7 @@ test("server.startServer can construct server and transport through injected fac
   }
   await startServer({
     deskRoot: root,
+    maintenanceCoordinator: defaultMaintenanceCoordinator,
     createServer: () => server,
     createTransport: () => transport,
   })

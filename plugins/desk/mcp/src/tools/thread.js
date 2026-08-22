@@ -203,19 +203,15 @@ export const __threadInternalsForTests = {
  * @param {string} args.input.start_path
  * @param {number} [args.input.depth] — default 4
  * @param {"forward"|"backward"|"both"} [args.input.direction] — default "both"
- * @param {object} [args.opts] — maintenance/embed injection for tests
+ * @param {object} [args.opts] — embed injection for tests
  * @returns {Promise<{ start, chain } | { error, note }>}
  */
-export async function desk_thread({
-  deskRoot,
-  input,
-  opts,
-  runtimeContext,
-}) {
+export async function desk_thread(args) {
+  const { deskRoot, input, opts, runtimeContext } = args
   const maintenance = resolveRuntimeMaintenance({
     runtimeContext,
+    runtimeContextProvided: Object.hasOwn(args, "runtimeContext"),
     opts,
-    requiredMethod: "runFreshRead",
   })
   const rawPath = String(input?.start_path ?? "").trim()
   if (!rawPath) {

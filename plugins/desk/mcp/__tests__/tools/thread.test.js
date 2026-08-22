@@ -20,7 +20,10 @@ import {
 } from "../../src/tools/thread.js"
 import { openDb, closeDb } from "../../src/db/init.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
-import { createMaintenanceCoordinator } from "../../src/indexer/maintenance.js"
+import {
+  createMaintenanceCoordinator,
+  createMaintenanceRuntimeBinding,
+} from "../../src/indexer/maintenance.js"
 
 async function mkTempDeskRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), "desk-thread-test-"))
@@ -300,7 +303,7 @@ test("desk_thread — depth limit truncates a long chain", async () => {
   const res = await desk_thread({
     deskRoot: root,
     input: { start_path: "chain/A.md", depth: 2, direction: "forward" },
-    runtimeContext: { maintenanceCoordinator: maintenance },
+    runtimeContext: createMaintenanceRuntimeBinding(maintenance),
   })
   const paths = res.chain.map((r) => r.path)
   assert.deepEqual(paths.sort(), ["chain/A.md", "chain/B.md", "chain/C.md"])
@@ -350,7 +353,7 @@ test("desk_thread — cycle in refs_graph doesn't infinite-loop", async () => {
   const res = await desk_thread({
     deskRoot: root,
     input: { start_path: "cycle/A.md", depth: 10, direction: "forward" },
-    runtimeContext: { maintenanceCoordinator: maintenance },
+    runtimeContext: createMaintenanceRuntimeBinding(maintenance),
   })
   // Two distinct nodes, BFS terminates, A at hop 0, B at hop 1.
   assert.equal(res.chain.length, 2)
@@ -452,7 +455,7 @@ test("desk_thread — ordering: start first, then hop_distance asc, then updated
   const res = await desk_thread({
     deskRoot: root,
     input: { start_path: "start.md", depth: 5, direction: "both" },
-    runtimeContext: { maintenanceCoordinator: maintenance },
+    runtimeContext: createMaintenanceRuntimeBinding(maintenance),
   })
 
   // Element 0 must be start.

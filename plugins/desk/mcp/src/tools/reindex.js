@@ -26,18 +26,19 @@ import { resolveRuntimeMaintenance } from "../indexer/maintenance.js"
  * @param {object} [args.opts] — forwarded to ensureIndex (embed/skipEmbed
  *   injection for tests). Not part of the public MCP input contract.
  */
-export async function desk_reindex({
-  deskRoot,
-  input,
-  opts = {},
-  runtimeContext,
-}) {
+export async function desk_reindex(args) {
+  const {
+    deskRoot,
+    input,
+    opts = {},
+    runtimeContext,
+  } = args
   const force = !!(input && input.force)
   const start = Date.now()
   const maintenance = resolveRuntimeMaintenance({
     runtimeContext,
+    runtimeContextProvided: Object.hasOwn(args, "runtimeContext"),
     opts,
-    requiredMethod: "runExplicitReindex",
   })
   const ensureOptions = { ...opts }
   const ensured = await maintenance.runExplicitReindex({

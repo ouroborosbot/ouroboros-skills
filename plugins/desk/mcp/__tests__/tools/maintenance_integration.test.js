@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
 import { closeDb, openDb } from "../../src/db/init.js"
+import { createMaintenanceRuntimeBinding } from "../../src/indexer/maintenance.js"
 import { createSemanticRepairCoordinator } from "../../src/indexer/semantic-repair.js"
 import { ensureIndex } from "../../src/server-helpers.js"
 import { TOOL_NAMES } from "../../src/tool-names.js"
@@ -205,8 +206,26 @@ function completeIndexResult({
   }
 }
 
+function completeMaintenance(overrides = {}) {
+  return {
+    async cancelBackgroundRepair() {},
+    async ensureSearchFreshness() {},
+    async runExplicitReindex() {},
+    async runFreshRead() {},
+    async runStartupEnsureIndex() {},
+    ...overrides,
+  }
+}
+
+const runtimeContexts = new WeakMap()
+
 function runtimeContextFor(maintenance) {
-  return { maintenanceCoordinator: maintenance }
+  let runtimeContext = runtimeContexts.get(maintenance)
+  if (!runtimeContext) {
+    runtimeContext = createMaintenanceRuntimeBinding(maintenance)
+    runtimeContexts.set(maintenance, runtimeContext)
+  }
+  return runtimeContext
 }
 
 function gateFirstFreshRead(
@@ -575,7 +594,7 @@ test("desk_search returns fresh lexical and retained semantic hits before gated 
   }
 })
 
-test("all five writable read tools use the default shared fresh-read lifecycle", async () => {
+test("all five writable read tools share one complete lifecycle through omitted and bound runtime contexts", async () => {
   const {
     __setMaintenanceCoordinatorForTests,
     createMaintenanceCoordinator,
@@ -627,42 +646,57 @@ test("all five writable read tools use the default shared fresh-read lifecycle",
     }
     restoreDefault = __setMaintenanceCoordinatorForTests(maintenance)
 
-    const [search, recall, similar, timeline, thread] = await awaitBounded(
-      Promise.all([
+    async function runReadTools(runtimeContext) {
+      const runtimeOptions = runtimeContext ? { runtimeContext } : {}
+      return Promise.all([
         desk_search({
           deskRoot: root,
           input: { query: "alpha" },
           opts: { embed },
+          ...runtimeOptions,
         }),
         desk_recall({
           deskRoot: root,
           input: { topic: "alpha" },
           opts: { embed },
+          ...runtimeOptions,
         }),
         desk_similar({
           deskRoot: root,
           input: { path: "trackA/seed/task.md" },
           opts: { embed },
+          ...runtimeOptions,
         }),
         desk_timeline({
           deskRoot: root,
           input: { query: "alpha" },
           opts: { embed },
+          ...runtimeOptions,
         }),
         desk_thread({
           deskRoot: root,
           input: { start_path: "trackA/seed/task.md" },
           opts: { embed },
+          ...runtimeOptions,
         }),
+      ])
+    }
+
+    const readResults = await awaitBounded(
+      Promise.all([
+        runReadTools(),
+        runReadTools(runtimeContextFor(maintenance)),
       ]),
-      "default-wired read tools did not settle through shared maintenance",
+      "omitted and bound read tools did not settle through shared maintenance",
     )
 
-    assert.equal(search.search_mode, "hybrid")
-    assert.ok(recall.results.length >= 1)
-    assert.ok(similar.results.length >= 1)
-    assert.equal(timeline.search_mode, "hybrid")
-    assert.equal(thread.start.path, "trackA/seed/task.md")
+    for (const [search, recall, similar, timeline, thread] of readResults) {
+      assert.equal(search.search_mode, "hybrid")
+      assert.ok(recall.results.length >= 1)
+      assert.ok(similar.results.length >= 1)
+      assert.equal(timeline.search_mode, "hybrid")
+      assert.equal(thread.start.path, "trackA/seed/task.md")
+    }
     assert.equal(
       legacySearchFreshnessCalls,
       0,
@@ -670,7 +704,7 @@ test("all five writable read tools use the default shared fresh-read lifecycle",
     )
     assert.equal(
       ensureCalls.length,
-      5,
+      10,
       "one or more writable read tools bypassed the shared coordinator",
     )
     assert.equal(maxActiveEnsures, 1)
@@ -818,7 +852,7 @@ test("desk_thread honors an explicitly shared maintenance injection", async () =
   const root = await mkTempDeskRoot()
   const calls = []
   let legacyEnsureCalls = 0
-  const maintenance = {
+  const maintenance = completeMaintenance({
     async runFreshRead(args) {
       calls.push({
         deskRoot: args.deskRoot,
@@ -831,7 +865,7 @@ test("desk_thread honors an explicitly shared maintenance injection", async () =
         closeDb(db)
       }
     },
-  }
+  })
 
   try {
     await writeFile(
@@ -1394,7 +1428,7 @@ test("default-wired desk_reindex coordinates exact non-force and force requests 
     vectorPacks: false,
   }
   const calls = []
-  const maintenance = {
+  const maintenance = completeMaintenance({
     async runExplicitReindex(args) {
       calls.push(args)
       if (args.force) {
@@ -1416,7 +1450,7 @@ test("default-wired desk_reindex coordinates exact non-force and force requests 
       }
       return completeIndexResult({ chunks: 3, vectors: 3 })
     },
-  }
+  })
   let restoreDefault
 
   try {
@@ -2079,7 +2113,7 @@ test("standalone search and force reindex reject split partial coordinators befo
 
 test("maintenance integration preserves the exact 15 tools and current search/reindex result schemas", async () => {
   const root = await mkTempDeskRoot()
-  const maintenance = {
+  const maintenance = completeMaintenance({
     async runFreshRead({ deskRoot, read }) {
       const db = openDb(deskRoot)
       try {
@@ -2091,7 +2125,7 @@ test("maintenance integration preserves the exact 15 tools and current search/re
     async runExplicitReindex() {
       return completeIndexResult()
     },
-  }
+  })
 
   try {
     await writeFile(

@@ -189,6 +189,7 @@ const REQUIRED_COORDINATOR_METHODS = Object.freeze([
   "runFreshRead",
   "runStartupEnsureIndex",
 ])
+const RUNTIME_BINDING_BRAND = Symbol("desk-maintenance-runtime-binding")
 
 export function isMaintenanceCoordinator(coordinator) {
   return coordinator !== null &&
@@ -198,39 +199,52 @@ export function isMaintenanceCoordinator(coordinator) {
     )
 }
 
-export function createMaintenanceRuntimeContext(runtimeContext = {}) {
-  const coordinator =
-    runtimeContext.maintenanceCoordinator ??
-    maintenanceCoordinator
+export function createMaintenanceRuntimeBinding(coordinator) {
   if (!isMaintenanceCoordinator(coordinator)) {
     throw new Error("maintenance coordinator is unavailable")
   }
-  if (runtimeContext.maintenanceCoordinator === coordinator) {
-    return Object.freeze(runtimeContext)
-  }
-  return Object.freeze({ maintenanceCoordinator: coordinator })
+  const runtimeBinding = { maintenanceCoordinator: coordinator }
+  Object.defineProperty(runtimeBinding, RUNTIME_BINDING_BRAND, {
+    value: coordinator,
+  })
+  return Object.freeze(runtimeBinding)
 }
 
-export function resolveRuntimeMaintenance({
-  runtimeContext,
-  opts,
-  requiredMethod,
-} = {}) {
+function isMaintenanceRuntimeBinding(runtimeBinding) {
+  return runtimeBinding !== null &&
+    typeof runtimeBinding === "object" &&
+    Object.isFrozen(runtimeBinding) &&
+    runtimeBinding[RUNTIME_BINDING_BRAND] ===
+      runtimeBinding.maintenanceCoordinator &&
+    isMaintenanceCoordinator(runtimeBinding.maintenanceCoordinator)
+}
+
+export function resolveRuntimeMaintenance(options = {}) {
+  const { opts, runtimeContext } = options
   if (Object.hasOwn(opts ?? {}, "maintenance")) {
     throw new Error(
-      "per-tool maintenance override is unsupported; inject one runtime coordinator",
+      "per-tool maintenance override is unsupported; bind one runtime coordinator at server construction",
     )
   }
-  const coordinator =
-    runtimeContext?.maintenanceCoordinator ??
-    maintenanceCoordinator
-  if (typeof coordinator?.[requiredMethod] !== "function") {
+  const runtimeContextProvided =
+    options.runtimeContextProvided ??
+    Object.hasOwn(options, "runtimeContext")
+  if (runtimeContextProvided) {
+    if (!isMaintenanceRuntimeBinding(runtimeContext)) {
+      throw new Error("maintenance runtime binding is unavailable or untrusted")
+    }
+    return runtimeContext.maintenanceCoordinator
+  }
+  if (!isMaintenanceCoordinator(maintenanceCoordinator)) {
     throw new Error("maintenance coordinator is unavailable")
   }
-  return coordinator
+  return maintenanceCoordinator
 }
 
 export function __setMaintenanceCoordinatorForTests(coordinator) {
+  if (!isMaintenanceCoordinator(coordinator)) {
+    throw new Error("maintenance coordinator is unavailable")
+  }
   const previous = maintenanceCoordinator
   maintenanceCoordinator = coordinator
   return () => {

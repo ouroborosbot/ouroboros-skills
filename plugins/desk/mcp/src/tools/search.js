@@ -425,11 +425,12 @@ function firstChunkText(row) {
  *   { results: [...], semantic_unavailable: boolean, latency_ms: number,
  *     query: string }
  */
-export async function desk_search({ deskRoot, input, opts, runtimeContext }) {
+export async function desk_search(args) {
+  const { deskRoot, input, opts, runtimeContext } = args
   const maintenance = resolveRuntimeMaintenance({
     runtimeContext,
+    runtimeContextProvided: Object.hasOwn(args, "runtimeContext"),
     opts,
-    requiredMethod: "runFreshRead",
   })
   const t0 = Date.now()
   const query = String(input?.query ?? "").trim()
@@ -566,11 +567,12 @@ export async function desk_search({ deskRoot, input, opts, runtimeContext }) {
  * Returns: { results, cluster_count?, semantic_unavailable } OR an error
  *   payload when Ollama is down.
  */
-export async function desk_recall({ deskRoot, input, opts, runtimeContext }) {
+export async function desk_recall(args) {
+  const { deskRoot, input, opts, runtimeContext } = args
   const maintenance = resolveRuntimeMaintenance({
     runtimeContext,
+    runtimeContextProvided: Object.hasOwn(args, "runtimeContext"),
     opts,
-    requiredMethod: "runFreshRead",
   })
   const t0 = Date.now()
   const topic = String(input?.topic ?? "").trim()
@@ -655,11 +657,12 @@ export async function desk_recall({ deskRoot, input, opts, runtimeContext }) {
  * Returns: { results, latency_ms } OR error when path is unknown OR when
  *   the seed has no embeddings (Ollama was down at index time).
  */
-export async function desk_similar({ deskRoot, input, opts, runtimeContext }) {
+export async function desk_similar(args) {
+  const { deskRoot, input, opts, runtimeContext } = args
   const maintenance = resolveRuntimeMaintenance({
     runtimeContext,
+    runtimeContextProvided: Object.hasOwn(args, "runtimeContext"),
     opts,
-    requiredMethod: "runFreshRead",
   })
   const t0 = Date.now()
   const seedPath = String(input?.path ?? "").trim()
@@ -769,11 +772,12 @@ export async function desk_similar({ deskRoot, input, opts, runtimeContext }) {
  * Input: { from: ISO, to: ISO, query?: string, limit?: number }
  * Returns: { results, semantic_unavailable, latency_ms }
  */
-export async function desk_timeline({ deskRoot, input, opts, runtimeContext }) {
+export async function desk_timeline(args) {
+  const { deskRoot, input, opts, runtimeContext } = args
   const maintenance = resolveRuntimeMaintenance({
     runtimeContext,
+    runtimeContextProvided: Object.hasOwn(args, "runtimeContext"),
     opts,
-    requiredMethod: "runFreshRead",
   })
   const t0 = Date.now()
   const from = String(input?.from ?? "").trim() || null

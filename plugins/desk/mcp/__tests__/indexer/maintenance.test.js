@@ -94,10 +94,11 @@ function observeSettlement(promise) {
   return observed
 }
 
-test("runtime maintenance context preserves one complete coordinator and rejects incomplete or per-tool injection", async () => {
+test("runtime maintenance binding brands one complete coordinator and rejects untrusted injection", async () => {
   const {
+    __setMaintenanceCoordinatorForTests,
     createMaintenanceCoordinator,
-    createMaintenanceRuntimeContext,
+    createMaintenanceRuntimeBinding,
     isMaintenanceCoordinator,
     maintenanceCoordinator,
     resolveRuntimeMaintenance,
@@ -105,53 +106,75 @@ test("runtime maintenance context preserves one complete coordinator and rejects
   const injected = createMaintenanceCoordinator({
     ensureIndex: async () => ({ built: false, reason: "fresh" }),
   })
-  const suppliedContext = { maintenanceCoordinator: injected }
 
   assert.equal(isMaintenanceCoordinator(injected), true)
   assert.equal(isMaintenanceCoordinator(null), false)
   assert.equal(isMaintenanceCoordinator("coordinator"), false)
   assert.equal(isMaintenanceCoordinator({ runFreshRead() {} }), false)
 
-  const bound = createMaintenanceRuntimeContext(suppliedContext)
-  assert.equal(bound, suppliedContext)
+  const bound = createMaintenanceRuntimeBinding(injected)
   assert.equal(bound.maintenanceCoordinator, injected)
   assert.equal(Object.isFrozen(bound), true)
-
-  const defaultBound = createMaintenanceRuntimeContext()
-  assert.equal(defaultBound.maintenanceCoordinator, maintenanceCoordinator)
-  assert.equal(Object.isFrozen(defaultBound), true)
+  assert.deepEqual(Object.keys(bound), ["maintenanceCoordinator"])
 
   assert.throws(
-    () => createMaintenanceRuntimeContext({
-      maintenanceCoordinator: { runFreshRead() {} },
-    }),
+    () => createMaintenanceRuntimeBinding({ runFreshRead() {} }),
+    /maintenance coordinator is unavailable/i,
+  )
+  assert.throws(
+    () => createMaintenanceRuntimeBinding(undefined),
     /maintenance coordinator is unavailable/i,
   )
   assert.equal(
     resolveRuntimeMaintenance({
       runtimeContext: bound,
-      requiredMethod: "runFreshRead",
     }),
     injected,
   )
   assert.equal(
-    resolveRuntimeMaintenance({ requiredMethod: "runFreshRead" }),
+    resolveRuntimeMaintenance(),
     maintenanceCoordinator,
   )
   assert.throws(
     () => resolveRuntimeMaintenance({
       opts: { maintenance: injected },
-      requiredMethod: "runFreshRead",
     }),
     /per-tool maintenance override/i,
   )
+  for (const runtimeContext of [
+    {},
+    { maintenanceCoordinator: null },
+    { maintenanceCoordinator: injected },
+    { ...bound },
+    undefined,
+  ]) {
+    assert.throws(
+      () => resolveRuntimeMaintenance({
+        runtimeContext,
+        runtimeContextProvided: true,
+      }),
+      /runtime binding is unavailable or untrusted/i,
+    )
+  }
   assert.throws(
-    () => resolveRuntimeMaintenance({
-      runtimeContext: { maintenanceCoordinator: {} },
-      requiredMethod: "runFreshRead",
-    }),
+    () => __setMaintenanceCoordinatorForTests({ runFreshRead() {} }),
     /maintenance coordinator is unavailable/i,
   )
+
+  const mutableSingleton = createMaintenanceCoordinator({
+    ensureIndex: async () => ({ built: false, reason: "fresh" }),
+  })
+  const restoreSingleton =
+    __setMaintenanceCoordinatorForTests(mutableSingleton)
+  try {
+    mutableSingleton.runFreshRead = null
+    assert.throws(
+      () => resolveRuntimeMaintenance(),
+      /maintenance coordinator is unavailable/i,
+    )
+  } finally {
+    restoreSingleton()
+  }
 })
 
 function createManualScheduler() {

@@ -7,6 +7,7 @@ import * as path from "node:path"
 
 import { __searchInternalsForTests, desk_search } from "../../src/tools/search.js"
 import { openDb, closeDb } from "../../src/db/init.js"
+import { createMaintenanceRuntimeBinding } from "../../src/indexer/maintenance.js"
 import { ensureIndex } from "../../src/server-helpers.js"
 import {
   buildFixtureIndex,
@@ -59,6 +60,17 @@ async function awaitBounded(promise, message, timeoutMs = TEST_TIMEOUT_MS) {
     ])
   } finally {
     clearTimeout(timeout)
+  }
+}
+
+function completeMaintenance(overrides = {}) {
+  return {
+    async cancelBackgroundRepair() {},
+    async ensureSearchFreshness() {},
+    async runExplicitReindex() {},
+    async runFreshRead() {},
+    async runStartupEnsureIndex() {},
+    ...overrides,
   }
 }
 
@@ -363,7 +375,7 @@ test("desk_search — returns a partial result from a lexical-only index before 
   }
   let maintenanceCalls = 0
   let repairPromise = null
-  const maintenance = {
+  const maintenance = completeMaintenance({
     async runFreshRead({ deskRoot, ensureOptions, read }) {
       maintenanceCalls += 1
       const index = await awaitBounded(
@@ -399,7 +411,8 @@ test("desk_search — returns a partial result from a lexical-only index before 
       }
       return result
     },
-  }
+  })
+  const runtimeContext = createMaintenanceRuntimeBinding(maintenance)
 
   try {
     await writeFile(
@@ -418,7 +431,7 @@ test("desk_search — returns a partial result from a lexical-only index before 
         deskRoot: root,
         input: { query: "alpha" },
         opts: { embed },
-        runtimeContext: { maintenanceCoordinator: maintenance },
+        runtimeContext,
       }),
       "first search did not return before background vector repair",
     )
@@ -476,7 +489,7 @@ test("desk_search — returns a partial result from a lexical-only index before 
         deskRoot: root,
         input: { query: "alpha" },
         opts: { embed },
-        runtimeContext: { maintenanceCoordinator: maintenance },
+        runtimeContext,
       }),
       "later search did not use the repaired index",
     )

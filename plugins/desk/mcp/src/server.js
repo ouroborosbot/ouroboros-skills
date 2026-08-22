@@ -36,8 +36,9 @@ import { desk_reindex } from "./tools/reindex.js"
 import { desk_status } from "./tools/status.js"
 import { doctorRuntime } from "./tools/doctor.js"
 import {
-  createMaintenanceRuntimeContext,
+  createMaintenanceRuntimeBinding,
   maintenanceCoordinator,
+  resolveRuntimeMaintenance,
 } from "./indexer/maintenance.js"
 import {
   configureRuntimeArtifacts,
@@ -47,7 +48,7 @@ import {
 export { TOOL_NAMES, TOOL_DESCRIPTIONS }
 export {
   configureRuntimeArtifacts,
-  createMaintenanceRuntimeContext,
+  createMaintenanceRuntimeBinding,
   ensureIndex,
   maintenanceCoordinator,
 }
@@ -76,14 +77,15 @@ export const TOOL_IMPLS = {
  * Dispatch a single MCP call. Pulled out from startServer so tests can
  * exercise the dispatch table directly (no stdio transport needed).
  */
-export async function callTool({
-  deskRoot,
-  name,
-  input,
-  person = null,
-  runtimeContext,
-  statusContext = {},
-}) {
+export async function callTool(args) {
+  const {
+    deskRoot,
+    name,
+    input,
+    person = null,
+    runtimeContext,
+    statusContext = {},
+  } = args
   if (!TOOL_NAMES.includes(name)) {
     return {
       content: [{ type: "text", text: `unknown tool: ${name}` }],
@@ -109,13 +111,21 @@ export async function callTool({
     }
   }
   try {
-    const result = await impl({
+    const runtimeContextProvided = Object.hasOwn(args, "runtimeContext")
+    resolveRuntimeMaintenance({
+      runtimeContext,
+      runtimeContextProvided,
+    })
+    const toolArgs = {
       deskRoot,
       input: input ?? {},
       person,
-      runtimeContext: createMaintenanceRuntimeContext(runtimeContext),
       statusContext,
-    })
+    }
+    if (runtimeContextProvided) {
+      toolArgs.runtimeContext = runtimeContext
+    }
+    const result = await impl(toolArgs)
     return {
       content: [{ type: "text", text: JSON.stringify(result) }],
     }
@@ -152,17 +162,28 @@ export function createMcpTransport() {
   return new StdioServerTransport()
 }
 
-export async function startServer({
-  deskRoot,
-  person = null,
-  statusContext = {},
-  runtimeContext,
-  server,
-  transport,
-  createServer = createMcpServer,
-  createTransport = createMcpTransport,
-}) {
-  const boundRuntimeContext = createMaintenanceRuntimeContext(runtimeContext)
+export async function startServer(options) {
+  if (
+    Object.hasOwn(options, "runtimeContext") ||
+    Object.hasOwn(options, "runtimeBinding")
+  ) {
+    throw new Error(
+      "runtime maintenance context injection is unsupported; pass the coordinator at server construction",
+    )
+  }
+  const {
+    deskRoot,
+    maintenanceCoordinator: runtimeMaintenanceCoordinator,
+    person = null,
+    statusContext = {},
+    server,
+    transport,
+    createServer = createMcpServer,
+    createTransport = createMcpTransport,
+  } = options
+  const boundRuntimeContext = createMaintenanceRuntimeBinding(
+    runtimeMaintenanceCoordinator,
+  )
   const activeServer = server ?? createServer()
   const activeTransport = transport ?? createTransport()
   activeServer.setRequestHandler(ListToolsRequestSchema, async () => ({

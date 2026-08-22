@@ -256,18 +256,17 @@ export async function main({
       }),
     })
   }
-  const runtimeContext = Object.freeze({ maintenanceCoordinator })
   const performanceBudgets = await loadPerformanceBudgets({ mcpRoot })
   const startupStatus = await runStartupEnsureIndex({
     budgetMs: budgetValue(performanceBudgets, "startup", "ensure_index_ms"),
     deskRoot,
-    runtimeContext,
+    maintenanceCoordinator,
     runtimeServer,
   })
   await runtimeServer.startServer({
     deskRoot,
+    maintenanceCoordinator,
     person: args.person,
-    runtimeContext,
     statusContext: {
       root: rootResolution,
       activation: activationStatus,
@@ -437,7 +436,7 @@ function hasRuntimeMaintenanceCoordinator(coordinator) {
 async function runStartupEnsureIndex({
   budgetMs,
   deskRoot,
-  runtimeContext,
+  maintenanceCoordinator,
   runtimeServer,
 }) {
   if (typeof runtimeServer.ensureIndex !== "function") {
@@ -458,9 +457,8 @@ async function runStartupEnsureIndex({
     signal: controller.signal,
     skipEmbed: true,
   }
-  const startupMaintenance = runtimeContext.maintenanceCoordinator
   const ensureIndexPromise = Promise.resolve().then(() =>
-    startupMaintenance.runStartupEnsureIndex({
+    maintenanceCoordinator.runStartupEnsureIndex({
       deskRoot,
       ensureOptions,
     }),
