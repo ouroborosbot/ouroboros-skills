@@ -19,6 +19,7 @@ const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.met
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
 const pathsModule = await import(pathToFileURL(path.join(mcpRoot, "src", "util", "paths.js")))
 const entrypoint = await import(pathToFileURL(path.join(mcpRoot, "index.js")))
+const maintenanceModule = await import(pathToFileURL(path.join(mcpRoot, "src", "indexer", "maintenance.js")))
 const runtimeDeps = await import(pathToFileURL(path.join(mcpRoot, "src", "runtime", "runtime-deps.js")))
 const packageJson = JSON.parse(readFileSync(path.join(mcpRoot, "package.json"), "utf8"))
 const packageLock = JSON.parse(readFileSync(path.join(mcpRoot, "package-lock.json"), "utf8"))
@@ -631,6 +632,9 @@ test("entrypoint main resolves startup root before launching injected runtime se
       runtimeImporter: async ({ mcpRoot, runtimeCacheDir }) => {
         calls.push(["runtimeImporter", mcpRoot, runtimeCacheDir])
         return {
+          maintenanceCoordinator: maintenanceModule.createMaintenanceCoordinator({
+            ensureIndex: async () => ({ built: false, reason: "fresh" }),
+          }),
           startServer: async ({ deskRoot, person }) => {
             calls.push(["startServer", deskRoot, person])
           },

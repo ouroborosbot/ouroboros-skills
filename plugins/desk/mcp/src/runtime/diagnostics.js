@@ -99,6 +99,15 @@ const reasonDetails = {
       },
     ],
   },
+  maintenance_unavailable: {
+    summary: "Desk could not bind the shared maintenance coordinator required for safe index access.",
+    remediation: [
+      {
+        action: "refresh_plugin",
+        message: "Refresh the Desk plugin to restore a complete runtime, then restart the MCP server.",
+      },
+    ],
+  },
 }
 
 export function createRuntimeDiagnostic({

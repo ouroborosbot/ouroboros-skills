@@ -303,7 +303,7 @@ test("desk_reindex — omitted input defaults to non-force maintenance", async (
 
   const res = await desk_reindex({
     deskRoot: root,
-    opts: { maintenance },
+    runtimeContext: { maintenanceCoordinator: maintenance },
   })
 
   assert.deepEqual(calls, [

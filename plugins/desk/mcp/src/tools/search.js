@@ -19,7 +19,7 @@
 
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
-import { maintenanceCoordinator } from "../indexer/maintenance.js"
+import { resolveRuntimeMaintenance } from "../indexer/maintenance.js"
 import { embedQuery } from "../util/embed-query.js"
 import {
   clipCosine,
@@ -425,7 +425,12 @@ function firstChunkText(row) {
  *   { results: [...], semantic_unavailable: boolean, latency_ms: number,
  *     query: string }
  */
-export async function desk_search({ deskRoot, input, opts }) {
+export async function desk_search({ deskRoot, input, opts, runtimeContext }) {
+  const maintenance = resolveRuntimeMaintenance({
+    runtimeContext,
+    opts,
+    requiredMethod: "runFreshRead",
+  })
   const t0 = Date.now()
   const query = String(input?.query ?? "").trim()
   if (!query) {
@@ -450,7 +455,6 @@ export async function desk_search({ deskRoot, input, opts }) {
     query,
     opts?.embed ?? {},
   )
-  const maintenance = opts?.maintenance ?? maintenanceCoordinator
   return maintenance.runFreshRead({
     deskRoot: path.resolve(deskRoot),
     ensureOptions: { embed: opts?.embed ?? {} },
@@ -562,7 +566,12 @@ export async function desk_search({ deskRoot, input, opts }) {
  * Returns: { results, cluster_count?, semantic_unavailable } OR an error
  *   payload when Ollama is down.
  */
-export async function desk_recall({ deskRoot, input, opts }) {
+export async function desk_recall({ deskRoot, input, opts, runtimeContext }) {
+  const maintenance = resolveRuntimeMaintenance({
+    runtimeContext,
+    opts,
+    requiredMethod: "runFreshRead",
+  })
   const t0 = Date.now()
   const topic = String(input?.topic ?? "").trim()
   if (!topic) {
@@ -576,7 +585,6 @@ export async function desk_recall({ deskRoot, input, opts }) {
     available,
     diagnostic: semanticDiagnostic,
   } = await embedQuery(topic, opts?.embed ?? {})
-  const maintenance = opts?.maintenance ?? maintenanceCoordinator
   return maintenance.runFreshRead({
     deskRoot: path.resolve(deskRoot),
     ensureOptions: { embed: opts?.embed ?? {} },
@@ -647,7 +655,12 @@ export async function desk_recall({ deskRoot, input, opts }) {
  * Returns: { results, latency_ms } OR error when path is unknown OR when
  *   the seed has no embeddings (Ollama was down at index time).
  */
-export async function desk_similar({ deskRoot, input, opts }) {
+export async function desk_similar({ deskRoot, input, opts, runtimeContext }) {
+  const maintenance = resolveRuntimeMaintenance({
+    runtimeContext,
+    opts,
+    requiredMethod: "runFreshRead",
+  })
   const t0 = Date.now()
   const seedPath = String(input?.path ?? "").trim()
   if (!seedPath) {
@@ -656,7 +669,6 @@ export async function desk_similar({ deskRoot, input, opts }) {
   const limit = clampLimit(input?.limit)
   const scope = input?.scope
 
-  const maintenance = opts?.maintenance ?? maintenanceCoordinator
   return maintenance.runFreshRead({
     deskRoot: path.resolve(deskRoot),
     ensureOptions: { embed: opts?.embed ?? {} },
@@ -757,7 +769,12 @@ export async function desk_similar({ deskRoot, input, opts }) {
  * Input: { from: ISO, to: ISO, query?: string, limit?: number }
  * Returns: { results, semantic_unavailable, latency_ms }
  */
-export async function desk_timeline({ deskRoot, input, opts }) {
+export async function desk_timeline({ deskRoot, input, opts, runtimeContext }) {
+  const maintenance = resolveRuntimeMaintenance({
+    runtimeContext,
+    opts,
+    requiredMethod: "runFreshRead",
+  })
   const t0 = Date.now()
   const from = String(input?.from ?? "").trim() || null
   const to = String(input?.to ?? "").trim() || null
@@ -776,7 +793,6 @@ export async function desk_timeline({ deskRoot, input, opts }) {
     semanticDiagnostic = r.diagnostic
   }
 
-  const maintenance = opts?.maintenance ?? maintenanceCoordinator
   return maintenance.runFreshRead({
     deskRoot: path.resolve(deskRoot),
     ensureOptions: { embed: opts?.embed ?? {} },

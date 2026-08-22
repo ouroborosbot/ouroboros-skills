@@ -35,14 +35,22 @@ import { desk_thread } from "./tools/thread.js"
 import { desk_reindex } from "./tools/reindex.js"
 import { desk_status } from "./tools/status.js"
 import { doctorRuntime } from "./tools/doctor.js"
-import { maintenanceCoordinator } from "./indexer/maintenance.js"
+import {
+  createMaintenanceRuntimeContext,
+  maintenanceCoordinator,
+} from "./indexer/maintenance.js"
 import {
   configureRuntimeArtifacts,
   ensureIndex,
 } from "./server-helpers.js"
 
 export { TOOL_NAMES, TOOL_DESCRIPTIONS }
-export { configureRuntimeArtifacts, ensureIndex, maintenanceCoordinator }
+export {
+  configureRuntimeArtifacts,
+  createMaintenanceRuntimeContext,
+  ensureIndex,
+  maintenanceCoordinator,
+}
 
 // Map tool name → implementation. Every tool now has a real body.
 // Exported so tests can register a probe impl to assert dispatch threading.
@@ -68,7 +76,14 @@ export const TOOL_IMPLS = {
  * Dispatch a single MCP call. Pulled out from startServer so tests can
  * exercise the dispatch table directly (no stdio transport needed).
  */
-export async function callTool({ deskRoot, name, input, person = null, statusContext = {} }) {
+export async function callTool({
+  deskRoot,
+  name,
+  input,
+  person = null,
+  runtimeContext,
+  statusContext = {},
+}) {
   if (!TOOL_NAMES.includes(name)) {
     return {
       content: [{ type: "text", text: `unknown tool: ${name}` }],
@@ -94,7 +109,13 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
     }
   }
   try {
-    const result = await impl({ deskRoot, input: input ?? {}, person, statusContext })
+    const result = await impl({
+      deskRoot,
+      input: input ?? {},
+      person,
+      runtimeContext: createMaintenanceRuntimeContext(runtimeContext),
+      statusContext,
+    })
     return {
       content: [{ type: "text", text: JSON.stringify(result) }],
     }
@@ -135,11 +156,13 @@ export async function startServer({
   deskRoot,
   person = null,
   statusContext = {},
+  runtimeContext,
   server,
   transport,
   createServer = createMcpServer,
   createTransport = createMcpTransport,
 }) {
+  const boundRuntimeContext = createMaintenanceRuntimeContext(runtimeContext)
   const activeServer = server ?? createServer()
   const activeTransport = transport ?? createTransport()
   activeServer.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -153,7 +176,14 @@ export async function startServer({
   activeServer.setRequestHandler(CallToolRequestSchema, async (request) => {
     const name = request.params?.name
     const input = request.params?.arguments ?? {}
-    return callTool({ deskRoot, name, input, person, statusContext })
+    return callTool({
+      deskRoot,
+      name,
+      input,
+      person,
+      runtimeContext: boundRuntimeContext,
+      statusContext,
+    })
   })
 
   await activeServer.connect(activeTransport)

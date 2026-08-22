@@ -237,6 +237,8 @@ test("server.startServer binds one runtime coordinator through dispatch without 
   const maintenanceCalls = []
   const runtimeContext = {
     maintenanceCoordinator: {
+      async cancelBackgroundRepair() {},
+      async ensureSearchFreshness() {},
       async runExplicitReindex(args) {
         maintenanceCalls.push(args)
         return {
@@ -250,6 +252,8 @@ test("server.startServer binds one runtime coordinator through dispatch without 
           },
         }
       },
+      async runFreshRead() {},
+      async runStartupEnsureIndex() {},
     },
   }
   const server = {

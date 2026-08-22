@@ -417,7 +417,8 @@ test("desk_search — returns a partial result from a lexical-only index before 
       desk_search({
         deskRoot: root,
         input: { query: "alpha" },
-        opts: { embed, maintenance },
+        opts: { embed },
+        runtimeContext: { maintenanceCoordinator: maintenance },
       }),
       "first search did not return before background vector repair",
     )
@@ -474,7 +475,8 @@ test("desk_search — returns a partial result from a lexical-only index before 
       desk_search({
         deskRoot: root,
         input: { query: "alpha" },
-        opts: { embed, maintenance },
+        opts: { embed },
+        runtimeContext: { maintenanceCoordinator: maintenance },
       }),
       "later search did not use the repaired index",
     )

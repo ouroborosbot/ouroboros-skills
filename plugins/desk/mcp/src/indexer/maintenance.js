@@ -182,6 +182,54 @@ function canonicalRoot(deskRoot) {
 
 export let maintenanceCoordinator = createMaintenanceCoordinator()
 
+const REQUIRED_COORDINATOR_METHODS = Object.freeze([
+  "cancelBackgroundRepair",
+  "ensureSearchFreshness",
+  "runExplicitReindex",
+  "runFreshRead",
+  "runStartupEnsureIndex",
+])
+
+export function isMaintenanceCoordinator(coordinator) {
+  return coordinator !== null &&
+    typeof coordinator === "object" &&
+    REQUIRED_COORDINATOR_METHODS.every(
+      (method) => typeof coordinator[method] === "function",
+    )
+}
+
+export function createMaintenanceRuntimeContext(runtimeContext = {}) {
+  const coordinator =
+    runtimeContext.maintenanceCoordinator ??
+    maintenanceCoordinator
+  if (!isMaintenanceCoordinator(coordinator)) {
+    throw new Error("maintenance coordinator is unavailable")
+  }
+  if (runtimeContext.maintenanceCoordinator === coordinator) {
+    return Object.freeze(runtimeContext)
+  }
+  return Object.freeze({ maintenanceCoordinator: coordinator })
+}
+
+export function resolveRuntimeMaintenance({
+  runtimeContext,
+  opts,
+  requiredMethod,
+} = {}) {
+  if (Object.hasOwn(opts ?? {}, "maintenance")) {
+    throw new Error(
+      "per-tool maintenance override is unsupported; inject one runtime coordinator",
+    )
+  }
+  const coordinator =
+    runtimeContext?.maintenanceCoordinator ??
+    maintenanceCoordinator
+  if (typeof coordinator?.[requiredMethod] !== "function") {
+    throw new Error("maintenance coordinator is unavailable")
+  }
+  return coordinator
+}
+
 export function __setMaintenanceCoordinatorForTests(coordinator) {
   const previous = maintenanceCoordinator
   maintenanceCoordinator = coordinator

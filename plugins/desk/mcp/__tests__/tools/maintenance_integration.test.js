@@ -205,6 +205,10 @@ function completeIndexResult({
   }
 }
 
+function runtimeContextFor(maintenance) {
+  return { maintenanceCoordinator: maintenance }
+}
+
 function gateFirstFreshRead(
   maintenance,
   { entered, release, events, releaseMessage },
@@ -431,7 +435,8 @@ test("desk_search returns fresh lexical and retained semantic hits before gated 
     search = desk_search({
       deskRoot: root,
       input: { query: queryToken },
-      opts: { embed, maintenance },
+      opts: { embed },
+      runtimeContext: runtimeContextFor(maintenance),
     })
     const observedSearch = observeSettlement(search)
 
@@ -845,8 +850,8 @@ test("desk_thread honors an explicitly shared maintenance injection", async () =
       },
       opts: {
         embed: { model: "explicit-shared-maintenance" },
-        maintenance,
       },
+      runtimeContext: runtimeContextFor(maintenance),
     })
 
     assert.equal(result.start.path, "trackA/thread-explicit/task.md")
@@ -927,7 +932,7 @@ test("desk_thread keeps its SQLite handle inside force-reindex maintenance and l
     thread = desk_thread({
       deskRoot: root,
       input: { start_path: "trackA/thread-force/task.md" },
-      opts: { maintenance },
+      runtimeContext: runtimeContextFor(maintenance),
     })
     await awaitBounded(
       readEntered.promise,
@@ -937,7 +942,7 @@ test("desk_thread keeps its SQLite handle inside force-reindex maintenance and l
     reindex = desk_reindex({
       deskRoot: root,
       input: { force: true },
-      opts: { maintenance },
+      runtimeContext: runtimeContextFor(maintenance),
     })
     const observedReindex = observeSettlement(reindex)
     await flushAsyncWork(
@@ -962,7 +967,7 @@ test("desk_thread keeps its SQLite handle inside force-reindex maintenance and l
       desk_thread({
         deskRoot: root,
         input: { start_path: "trackA/thread-force/task.md" },
-        opts: { maintenance },
+        runtimeContext: runtimeContextFor(maintenance),
       }),
       "later same-root desk_thread did not resume after force reindex",
     )
@@ -1053,7 +1058,7 @@ test("desk_thread keeps its SQLite handle inside non-force reindex maintenance a
     thread = desk_thread({
       deskRoot: root,
       input: { start_path: "trackA/thread-nonforce/task.md" },
-      opts: { maintenance },
+      runtimeContext: runtimeContextFor(maintenance),
     })
     await awaitBounded(
       readEntered.promise,
@@ -1063,7 +1068,7 @@ test("desk_thread keeps its SQLite handle inside non-force reindex maintenance a
     reindex = desk_reindex({
       deskRoot: root,
       input: { force: false },
-      opts: { maintenance },
+      runtimeContext: runtimeContextFor(maintenance),
     })
     const observedReindex = observeSettlement(reindex)
     await flushAsyncWork(
@@ -1087,7 +1092,7 @@ test("desk_thread keeps its SQLite handle inside non-force reindex maintenance a
       desk_thread({
         deskRoot: root,
         input: { start_path: "trackA/thread-nonforce/task.md" },
-        opts: { maintenance },
+        runtimeContext: runtimeContextFor(maintenance),
       }),
       "later same-root desk_thread did not resume after non-force reindex",
     )
@@ -1196,7 +1201,7 @@ test("desk_thread closes before repair registration and waits behind an active s
       desk_thread({
         deskRoot: root,
         input: { start_path: "trackA/thread-repair/task.md" },
-        opts: { maintenance },
+        runtimeContext: runtimeContextFor(maintenance),
       }),
       "desk_thread did not return after registering background repair",
     )
@@ -1213,7 +1218,7 @@ test("desk_thread closes before repair registration and waits behind an active s
     laterThread = desk_thread({
       deskRoot: root,
       input: { start_path: "trackA/thread-repair/task.md" },
-      opts: { maintenance },
+      runtimeContext: runtimeContextFor(maintenance),
     })
     const observedLaterThread = observeSettlement(laterThread)
     await flushAsyncWork(
@@ -1660,7 +1665,8 @@ test("non-force desk_reindex cancels active repair before one locked full repair
     reindex = desk_reindex({
       deskRoot: root,
       input: { force: false },
-      opts: { ...explicitEnsureOptions, maintenance },
+      opts: explicitEnsureOptions,
+      runtimeContext: runtimeContextFor(maintenance),
     })
     const observedReindex = observeSettlement(reindex)
     await awaitBounded(
@@ -1929,7 +1935,8 @@ test("shared maintenance prevents SQLITE_BUSY overlap from leaking to search or 
     searchPromise = desk_search({
       deskRoot: root,
       input: { query: "alpha" },
-      opts: { embed: searchEmbed, maintenance },
+      opts: { embed: searchEmbed },
+      runtimeContext: runtimeContextFor(maintenance),
     })
     const searchResult = await awaitBounded(
       searchPromise,
@@ -1942,7 +1949,8 @@ test("shared maintenance prevents SQLITE_BUSY overlap from leaking to search or 
     reindexPromise = desk_reindex({
       deskRoot: root,
       input: { force: true },
-      opts: { embed: reindexEmbed, maintenance },
+      opts: { embed: reindexEmbed },
+      runtimeContext: runtimeContextFor(maintenance),
     })
     const reindexResult = await awaitBounded(
       reindexPromise,
@@ -2021,7 +2029,8 @@ test("maintenance integration preserves the exact 15 tools and current search/re
       desk_search({
         deskRoot: root,
         input: { query: "alpha" },
-        opts: { embed: { fetch: makeEmbedFetch() }, maintenance },
+        opts: { embed: { fetch: makeEmbedFetch() } },
+        runtimeContext: runtimeContextFor(maintenance),
       }),
       "schema search did not settle through maintenance",
     )
@@ -2030,11 +2039,11 @@ test("maintenance integration preserves the exact 15 tools and current search/re
         deskRoot: root,
         input: {},
         opts: {
-          maintenance,
           skipEmbed: true,
           snapshots: false,
           vectorPacks: false,
         },
+        runtimeContext: runtimeContextFor(maintenance),
       }),
       "schema reindex did not settle through maintenance",
     )

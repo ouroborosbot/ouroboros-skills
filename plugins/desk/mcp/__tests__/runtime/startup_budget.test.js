@@ -832,6 +832,9 @@ test("startup maintenance releases the root queue after success and handled erro
 test("startup skips bounded ensureIndex when the runtime server has no ensureIndex hook", async () => {
   const root = makeRoot("desk-startup-budget-no-hook-")
   const startCalls = []
+  const maintenanceCoordinator = createMaintenanceCoordinator({
+    ensureIndex: async () => ({ built: false, reason: "fresh" }),
+  })
   try {
     await main({
       argv: ["--root", root],
@@ -839,6 +842,7 @@ test("startup skips bounded ensureIndex when the runtime server has no ensureInd
       cwd: root,
       homeDir: root,
       runtimeImporter: async () => ({
+        maintenanceCoordinator,
         async startServer(args) {
           startCalls.push(args)
         },

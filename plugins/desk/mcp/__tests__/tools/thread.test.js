@@ -300,7 +300,7 @@ test("desk_thread — depth limit truncates a long chain", async () => {
   const res = await desk_thread({
     deskRoot: root,
     input: { start_path: "chain/A.md", depth: 2, direction: "forward" },
-    opts: { maintenance },
+    runtimeContext: { maintenanceCoordinator: maintenance },
   })
   const paths = res.chain.map((r) => r.path)
   assert.deepEqual(paths.sort(), ["chain/A.md", "chain/B.md", "chain/C.md"])
@@ -350,7 +350,7 @@ test("desk_thread — cycle in refs_graph doesn't infinite-loop", async () => {
   const res = await desk_thread({
     deskRoot: root,
     input: { start_path: "cycle/A.md", depth: 10, direction: "forward" },
-    opts: { maintenance },
+    runtimeContext: { maintenanceCoordinator: maintenance },
   })
   // Two distinct nodes, BFS terminates, A at hop 0, B at hop 1.
   assert.equal(res.chain.length, 2)
@@ -452,7 +452,7 @@ test("desk_thread — ordering: start first, then hop_distance asc, then updated
   const res = await desk_thread({
     deskRoot: root,
     input: { start_path: "start.md", depth: 5, direction: "both" },
-    opts: { maintenance },
+    runtimeContext: { maintenanceCoordinator: maintenance },
   })
 
   // Element 0 must be start.

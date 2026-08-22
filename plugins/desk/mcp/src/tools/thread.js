@@ -26,7 +26,7 @@
 // — consistent with other search-tool error shapes.
 
 import * as path from "node:path"
-import { maintenanceCoordinator } from "../indexer/maintenance.js"
+import { resolveRuntimeMaintenance } from "../indexer/maintenance.js"
 import { canonicalDocumentPath } from "../indexer/document-tree.js"
 
 const DEFAULT_DEPTH = 4
@@ -210,7 +210,13 @@ export async function desk_thread({
   deskRoot,
   input,
   opts,
+  runtimeContext,
 }) {
+  const maintenance = resolveRuntimeMaintenance({
+    runtimeContext,
+    opts,
+    requiredMethod: "runFreshRead",
+  })
   const rawPath = String(input?.start_path ?? "").trim()
   if (!rawPath) {
     return {
@@ -226,7 +232,6 @@ export async function desk_thread({
       ? directionRaw
       : "both"
 
-  const maintenance = opts?.maintenance ?? maintenanceCoordinator
   return maintenance.runFreshRead({
     deskRoot: path.resolve(deskRoot),
     ensureOptions: { embed: opts?.embed ?? {} },

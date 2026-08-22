@@ -245,15 +245,29 @@ export async function main({
         runtime_cache_path: importedRuntime.runtime_cache_dir ?? runtimeCacheDir,
         support_matrix_path: inspection.runtime?.support_matrix_path ?? inspection.support_matrix_path,
       }
+  const maintenanceCoordinator = runtimeServer.maintenanceCoordinator
+  if (!hasRuntimeMaintenanceCoordinator(maintenanceCoordinator)) {
+    return startRuntimeDiagnostic({
+      diagnostic: maintenanceUnavailableDiagnostic({
+        env,
+        mcpRoot,
+        runtimeCacheDir,
+        runtimeStatus,
+      }),
+    })
+  }
+  const runtimeContext = Object.freeze({ maintenanceCoordinator })
   const performanceBudgets = await loadPerformanceBudgets({ mcpRoot })
   const startupStatus = await runStartupEnsureIndex({
     budgetMs: budgetValue(performanceBudgets, "startup", "ensure_index_ms"),
     deskRoot,
+    runtimeContext,
     runtimeServer,
   })
   await runtimeServer.startServer({
     deskRoot,
     person: args.person,
+    runtimeContext,
     statusContext: {
       root: rootResolution,
       activation: activationStatus,
@@ -383,7 +397,49 @@ function runtimeDiagnostic({
   })
 }
 
-async function runStartupEnsureIndex({ budgetMs, deskRoot, runtimeServer }) {
+function maintenanceUnavailableDiagnostic({
+  env,
+  mcpRoot,
+  runtimeCacheDir,
+  runtimeStatus,
+}) {
+  const fallbackRuntime = startupFailureInspection({
+    mcpRoot,
+    reason: "maintenance_unavailable",
+  }).runtime
+  return createRuntimeDiagnostic({
+    reason: "maintenance_unavailable",
+    currentTarget: runtimeStatus.current_target ?? fallbackRuntime.current_target,
+    shippedTargets: runtimeStatus.shipped_targets ?? [],
+    pathsChecked: runtimeStatus.paths_checked ?? [mcpRoot],
+    runtimeCachePath:
+      runtimeStatus.runtime_cache_path ??
+      runtimeStatus.runtime_cache_dir ??
+      runtimeCacheDir ??
+      env.DESK_RUNTIME_CACHE_DIR ??
+      null,
+    supportMatrixPath: runtimeStatus.support_matrix_path ?? null,
+  })
+}
+
+function hasRuntimeMaintenanceCoordinator(coordinator) {
+  return coordinator !== null &&
+    typeof coordinator === "object" &&
+    [
+      "cancelBackgroundRepair",
+      "ensureSearchFreshness",
+      "runExplicitReindex",
+      "runFreshRead",
+      "runStartupEnsureIndex",
+    ].every((method) => typeof coordinator[method] === "function")
+}
+
+async function runStartupEnsureIndex({
+  budgetMs,
+  deskRoot,
+  runtimeContext,
+  runtimeServer,
+}) {
   if (typeof runtimeServer.ensureIndex !== "function") {
     return {
       fallback_mode: "not_checked",
@@ -402,20 +458,7 @@ async function runStartupEnsureIndex({ budgetMs, deskRoot, runtimeServer }) {
     signal: controller.signal,
     skipEmbed: true,
   }
-  const startupMaintenance = runtimeServer.maintenanceCoordinator
-  if (typeof startupMaintenance?.runStartupEnsureIndex !== "function") {
-    return {
-      ensure_index: {
-        built: false,
-        reason: "shared_maintenance_unavailable",
-        skipped: true,
-      },
-      duration_ms: 0,
-      budget_ms: budgetMs,
-      fallback_mode: "maintenance_unavailable",
-      degraded: true,
-    }
-  }
+  const startupMaintenance = runtimeContext.maintenanceCoordinator
   const ensureIndexPromise = Promise.resolve().then(() =>
     startupMaintenance.runStartupEnsureIndex({
       deskRoot,

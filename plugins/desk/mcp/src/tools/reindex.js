@@ -17,7 +17,7 @@
 
 import * as path from "node:path"
 
-import { maintenanceCoordinator } from "../indexer/maintenance.js"
+import { resolveRuntimeMaintenance } from "../indexer/maintenance.js"
 
 /**
  * @param {object} args
@@ -26,10 +26,20 @@ import { maintenanceCoordinator } from "../indexer/maintenance.js"
  * @param {object} [args.opts] — forwarded to ensureIndex (embed/skipEmbed
  *   injection for tests). Not part of the public MCP input contract.
  */
-export async function desk_reindex({ deskRoot, input, opts = {} }) {
+export async function desk_reindex({
+  deskRoot,
+  input,
+  opts = {},
+  runtimeContext,
+}) {
   const force = !!(input && input.force)
   const start = Date.now()
-  const { maintenance = maintenanceCoordinator, ...ensureOptions } = opts
+  const maintenance = resolveRuntimeMaintenance({
+    runtimeContext,
+    opts,
+    requiredMethod: "runExplicitReindex",
+  })
+  const ensureOptions = { ...opts }
   const ensured = await maintenance.runExplicitReindex({
     deskRoot: path.resolve(deskRoot),
     force,
