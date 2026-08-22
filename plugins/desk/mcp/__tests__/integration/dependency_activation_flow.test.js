@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url"
 
 import { closeDb, indexDbPath, openDb } from "../../src/db/init.js"
 import { EMBEDDING_DIM } from "../../src/indexer/embed.js"
+import { maintenanceCoordinator } from "../../src/indexer/maintenance.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
 import { configureRuntimeArtifacts, ensureIndex } from "../../src/server-helpers.js"
 import { desk_search } from "../../src/tools/search.js"
@@ -528,6 +529,7 @@ test("cold rebuild remains fresh and searchable in degraded lexical mode", async
       assert.ok(productionResult.score_breakdown.bm25 > 0)
       assert.equal(embeddingCalls, 3)
     } finally {
+      await maintenanceCoordinator.cancelBackgroundRepair(deskRoot)
       configureRuntimeArtifacts({ pluginRoot: null })
     }
   } finally {

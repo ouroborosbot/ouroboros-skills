@@ -396,12 +396,21 @@ async function runStartupEnsureIndex({ budgetMs, deskRoot, runtimeServer }) {
   const controller = new AbortController()
   let timeout
   let timedOut = false
-  const ensureIndexPromise = Promise.resolve().then(() => runtimeServer.ensureIndex(deskRoot, {
+  const ensureOptions = {
     startup: true,
     budgetMs,
     signal: controller.signal,
     skipEmbed: true,
-  }))
+  }
+  const startupMaintenance = runtimeServer.maintenanceCoordinator
+  const ensureIndexPromise = Promise.resolve().then(() =>
+    typeof startupMaintenance?.runStartupEnsureIndex === "function"
+      ? startupMaintenance.runStartupEnsureIndex({
+          deskRoot,
+          ensureOptions,
+        })
+      : runtimeServer.ensureIndex(deskRoot, ensureOptions),
+  )
   try {
     const ensureIndexResult = await Promise.race([
       ensureIndexPromise,

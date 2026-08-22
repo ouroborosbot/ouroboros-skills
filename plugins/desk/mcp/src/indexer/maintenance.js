@@ -99,6 +99,14 @@ export function createMaintenanceCoordinator({
     })
   }
 
+  function runStartupEnsureIndex({
+    deskRoot,
+    ensureOptions = {},
+  } = {}) {
+    const root = canonicalRoot(deskRoot)
+    return rootQueue.run(root, () => ensureIndex(root, ensureOptions))
+  }
+
   function runFreshRead({
     deskRoot,
     ensureOptions = {},
@@ -153,6 +161,7 @@ export function createMaintenanceCoordinator({
     ensureSearchFreshness,
     runExplicitReindex,
     runFreshRead,
+    runStartupEnsureIndex,
   }
 }
 

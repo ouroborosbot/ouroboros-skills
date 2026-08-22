@@ -35,13 +35,14 @@ import { desk_thread } from "./tools/thread.js"
 import { desk_reindex } from "./tools/reindex.js"
 import { desk_status } from "./tools/status.js"
 import { doctorRuntime } from "./tools/doctor.js"
+import { maintenanceCoordinator } from "./indexer/maintenance.js"
 import {
   configureRuntimeArtifacts,
   ensureIndex,
 } from "./server-helpers.js"
 
 export { TOOL_NAMES, TOOL_DESCRIPTIONS }
-export { configureRuntimeArtifacts, ensureIndex }
+export { configureRuntimeArtifacts, ensureIndex, maintenanceCoordinator }
 
 // Map tool name → implementation. Every tool now has a real body.
 // Exported so tests can register a probe impl to assert dispatch threading.

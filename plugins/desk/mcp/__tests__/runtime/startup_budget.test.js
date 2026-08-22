@@ -371,6 +371,7 @@ test("startup stops waiting and aborts when bounded ensureIndex exceeds budget",
 
 test("timed-out startup retains same-root maintenance until aborted cleanup closes its DB handle", async () => {
   const root = makeRoot("desk-startup-budget-maintenance-")
+  const otherRoot = makeRoot("desk-startup-budget-maintenance-other-")
   writeStartupBudget(root, 0)
   const startupEntered = deferred()
   const startupCleanupRelease = deferred()
@@ -390,7 +391,7 @@ test("timed-out startup retains same-root maintenance until aborted cleanup clos
   const onUnhandled = (reason) => unhandled.push(reason)
   process.on("unhandledRejection", onUnhandled)
 
-  const ensureIndex = async (_deskRoot, opts = {}) => {
+  const ensureIndex = async (deskRoot, opts = {}) => {
     if (opts.startup) {
       startupHandleOpen = true
       events.push("startup-open")
@@ -416,6 +417,9 @@ test("timed-out startup retains same-root maintenance until aborted cleanup clos
       events.push("read-ensure")
       readEnsureEntered.resolve()
       await readEnsureRelease.promise
+    } else if (opts.marker === "other-root") {
+      assert.equal(deskRoot, path.resolve(otherRoot))
+      events.push("other-root-ensure")
     }
     return { built: false, reason: "fresh" }
   }
@@ -455,7 +459,8 @@ test("timed-out startup retains same-root maintenance until aborted cleanup clos
     await startupEntered.promise
     await startup
 
-    assert.deepEqual(runtimeServer.events, ["ensureIndex", "startServer"])
+    assert.deepEqual(runtimeServer.events, ["startServer"])
+    assert.deepEqual(events.slice(0, 2), ["startup-open", "startup-abort"])
     assert.equal(events.includes("startup-abort"), true)
     assert.equal(startupHandleOpen, true)
     const startupStatus = runtimeServer.startCalls[0].statusContext.startup
@@ -468,6 +473,15 @@ test("timed-out startup retains same-root maintenance until aborted cleanup clos
     assert.equal(startupStatus.budget_ms, 0)
     assert.equal(startupStatus.fallback_mode, "startup_deferred")
     assert.equal(startupStatus.degraded, true)
+
+    assert.deepEqual(
+      await maintenance.runExplicitReindex({
+        deskRoot: otherRoot,
+        ensureOptions: { marker: "other-root" },
+      }),
+      { built: false, reason: "fresh" },
+    )
+    assert.equal(startupHandleOpen, true)
 
     forceReindex = maintenance.runExplicitReindex({
       deskRoot: root,
@@ -530,6 +544,7 @@ test("timed-out startup retains same-root maintenance until aborted cleanup clos
     assert.deepEqual(events, [
       "startup-open",
       "startup-abort",
+      "other-root-ensure",
       "startup-close",
       "force-reset",
       "force-ensure",
@@ -549,6 +564,7 @@ test("timed-out startup retains same-root maintenance until aborted cleanup clos
     readEnsureRelease.resolve()
     await Promise.allSettled([forceReindex, nonForceReindex, freshRead].filter(Boolean))
     rmSync(root, { recursive: true, force: true })
+    rmSync(otherRoot, { recursive: true, force: true })
   }
 })
 
