@@ -43,12 +43,13 @@ export function createSemanticRepairCoordinator({
   repairBatch = repairMissingVectorBatch,
   schedule = setTimeout,
   clearScheduled = clearTimeout,
+  resolveIdentity = resolveRootIdentity,
 } = {}) {
   const inFlight = new Map()
   const statuses = new Map()
 
   function status(deskRoot) {
-    const { key: rootKey } = resolveRootIdentity(deskRoot)
+    const { key: rootKey } = resolveIdentity(deskRoot)
     const current = statuses.get(rootKey) ?? repairStatus("idle")
     return repairStatusSnapshot(current)
   }
@@ -146,7 +147,7 @@ export function createSemanticRepairCoordinator({
     batchMs = DEFAULT_BATCH_MS,
     ...repairOptions
   } = {}) {
-    const { path: root, key: rootKey } = resolveRootIdentity(deskRoot)
+    const { path: root, key: rootKey } = resolveIdentity(deskRoot)
     const existing = inFlight.get(rootKey)
     if (existing) return existing.promise
 
@@ -174,7 +175,7 @@ export function createSemanticRepairCoordinator({
   }
 
   async function cancel(deskRoot) {
-    const { key: rootKey } = resolveRootIdentity(deskRoot)
+    const { key: rootKey } = resolveIdentity(deskRoot)
     const entry = inFlight.get(rootKey)
     if (!entry) {
       return { ...status(deskRoot), cancelled: false }
