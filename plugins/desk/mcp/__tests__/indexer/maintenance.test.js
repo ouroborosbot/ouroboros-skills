@@ -5,6 +5,11 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 
 import { createSemanticRepairCoordinator } from "../../src/indexer/semantic-repair.js"
+import {
+  physicalRootKey,
+  resolveRootIdentity,
+  resolveRootPath,
+} from "../../src/indexer/root-identity.js"
 
 const maintenanceModuleUrl = new URL(
   "../../src/indexer/maintenance.js",
@@ -217,6 +222,62 @@ test("runtime maintenance binding brands one complete coordinator and rejects un
     restoreSingleton()
   }
   assert.deepEqual(methodCalls, [])
+})
+
+test("physical root identity preserves unresolved and case-sensitive paths without collisions", () => {
+  const lexicalRoot = path.resolve("desk-root-identity")
+  const physicalRoot = path.join(
+    path.parse(lexicalRoot).root,
+    "Physical",
+    "DeskRoot",
+  )
+  const caseSensitiveRealpath = (candidate) => {
+    if (candidate === lexicalRoot) return physicalRoot
+    throw Object.assign(new Error("case alias missing"), { code: "ENOENT" })
+  }
+  const caseInsensitiveRealpath = () => physicalRoot
+  const unavailableRealpath = () => {
+    throw Object.assign(new Error("root unavailable"), { code: "EACCES" })
+  }
+
+  assert.deepEqual(
+    resolveRootIdentity(lexicalRoot, {
+      nativeRealpath: caseSensitiveRealpath,
+    }),
+    {
+      path: lexicalRoot,
+      key: `physical:${physicalRoot}`,
+    },
+  )
+  assert.deepEqual(
+    resolveRootIdentity(lexicalRoot, {
+      nativeRealpath: caseInsensitiveRealpath,
+    }),
+    {
+      path: lexicalRoot,
+      key: `physical:${physicalRoot.toLowerCase()}`,
+    },
+  )
+  assert.deepEqual(
+    resolveRootIdentity(lexicalRoot, {
+      nativeRealpath: unavailableRealpath,
+    }),
+    {
+      path: lexicalRoot,
+      key: `unresolved:${lexicalRoot}`,
+    },
+  )
+  assert.deepEqual(
+    resolveRootIdentity(path.parse(lexicalRoot).root, {
+      nativeRealpath: (candidate) => candidate,
+    }),
+    {
+      path: path.parse(lexicalRoot).root,
+      key: `physical:${path.parse(lexicalRoot).root}`,
+    },
+  )
+  assert.equal(resolveRootPath(lexicalRoot), lexicalRoot)
+  assert.equal(typeof physicalRootKey(lexicalRoot), "string")
 })
 
 function createManualScheduler() {

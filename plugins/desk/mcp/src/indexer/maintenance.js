@@ -223,9 +223,6 @@ export function resolveRuntimeMaintenance(options = {}) {
     }
     return runtimeContext.maintenanceCoordinator
   }
-  if (!isMaintenanceCoordinator(maintenanceCoordinator)) {
-    throw new Error("maintenance coordinator is unavailable")
-  }
   return maintenanceCoordinator
 }
 

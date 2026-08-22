@@ -1,13 +1,18 @@
 import { realpathSync } from "node:fs"
 import * as path from "node:path"
 
-export function resolveRootIdentity(deskRoot) {
+export function resolveRootIdentity(deskRoot, {
+  nativeRealpath = realpathSync.native,
+} = {}) {
   const root = resolveRootPath(deskRoot)
   try {
-    const physicalRoot = realpathSync.native(root)
+    const physicalRoot = nativeRealpath(root)
     return {
       path: root,
-      key: `physical:${normalizePhysicalRoot(physicalRoot)}`,
+      key: `physical:${normalizePhysicalRoot(
+        physicalRoot,
+        nativeRealpath,
+      )}`,
     }
   } catch {
     return {
@@ -28,7 +33,7 @@ export function resolveRootPath(deskRoot) {
   return path.resolve(deskRoot)
 }
 
-function normalizePhysicalRoot(physicalRoot) {
+function normalizePhysicalRoot(physicalRoot, nativeRealpath) {
   const caseAlias = physicalRoot.replace(
     /[A-Za-z](?!.*[A-Za-z])/u,
     (character) =>
@@ -38,7 +43,7 @@ function normalizePhysicalRoot(physicalRoot) {
   )
   if (caseAlias === physicalRoot) return physicalRoot
   try {
-    if (realpathSync.native(caseAlias) === physicalRoot) {
+    if (nativeRealpath(caseAlias) === physicalRoot) {
       return physicalRoot.toLowerCase()
     }
   } catch {}
