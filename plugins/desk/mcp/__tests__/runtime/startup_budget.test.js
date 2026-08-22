@@ -383,6 +383,15 @@ test("startup stops waiting and aborts when bounded ensureIndex exceeds budget",
 test("startup enters truthful diagnostic mode without serving when shared maintenance is unavailable", async () => {
   const root = makeRoot("desk-startup-budget-no-maintenance-")
   writeStartupBudget(root, 0)
+  const activationConfig = path.join(root, "desk.activation.json")
+  writeFileSync(
+    activationConfig,
+    JSON.stringify({
+      schema_version: 1,
+      desk: { root },
+      runtimeCacheDir: "configured-runtime-cache",
+    }),
+  )
   const directEnsureRelease = deferred()
   const diagnosticCalls = []
   let directEnsureCalls = 0
@@ -415,6 +424,63 @@ test("startup enters truthful diagnostic mode without serving when shared mainte
     assert.equal(diagnosticCalls.length, 1)
     assert.equal(diagnosticCalls[0].diagnostic.reason, "maintenance_unavailable")
     assert.match(diagnosticCalls[0].diagnostic.summary, /maintenance coordinator/i)
+
+    await main({
+      argv: [
+        "--root",
+        root,
+        "--activation-config",
+        activationConfig,
+      ],
+      env: {},
+      cwd: root,
+      homeDir: root,
+      mcpRoot: root,
+      runtimeImporter: async () => ({
+        _deskRuntime: {
+          runtime_cache_dir: null,
+          source_mirror_path: null,
+          target: null,
+          loaded_from_source_mirror: false,
+        },
+        maintenanceCoordinator: null,
+        async startServer() {
+          assert.fail("missing maintenance must not start the runtime server")
+        },
+      }),
+      diagnosticServerStarter: async (args) => {
+        diagnosticCalls.push(args)
+        return args.diagnostic
+      },
+    })
+    assert.equal(diagnosticCalls.length, 2)
+    assert.equal(
+      diagnosticCalls[1].diagnostic.runtime.runtime_cache_path,
+      path.join(root, "configured-runtime-cache"),
+    )
+
+    await main({
+      argv: ["--root", root],
+      env: {},
+      cwd: root,
+      homeDir: root,
+      mcpRoot: root,
+      runtimeImporter: async () => ({
+        maintenanceCoordinator: null,
+        async startServer() {
+          assert.fail("missing maintenance must not start the runtime server")
+        },
+      }),
+      diagnosticServerStarter: async (args) => {
+        diagnosticCalls.push(args)
+        return args.diagnostic
+      },
+    })
+    assert.equal(diagnosticCalls.length, 3)
+    assert.equal(
+      diagnosticCalls[2].diagnostic.runtime.runtime_cache_path,
+      null,
+    )
   } finally {
     directEnsureRelease.resolve()
     await flushAsyncWork()

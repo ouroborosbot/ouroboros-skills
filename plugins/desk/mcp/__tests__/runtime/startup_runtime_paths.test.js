@@ -84,6 +84,59 @@ test("startup assembles inspected runtime status and falls back to diagnostics w
     })
     assert.equal(startCalls[0].statusContext.startup.fallback_mode, "not_checked")
 
+    let maintenanceDiagnostic
+    await main({
+      argv: ["--root", root],
+      env: { DESK_RUNTIME_CACHE_DIR: "/maintenance-env-cache" },
+      cwd: root,
+      homeDir: root,
+      runtimeImporter: async () => ({
+        maintenanceCoordinator: {},
+        async startServer() {
+          assert.fail("incomplete maintenance must not start the runtime server")
+        },
+      }),
+      runtimeInspector: () => ({
+        ok: true,
+        runtime: {
+          current_target: {
+            id: "darwin-arm64-node-127",
+            platform: "darwin",
+            arch: "arm64",
+            node_abi: "127",
+          },
+          shipped_targets: [{ id: "darwin-arm64-node-127" }],
+          paths_checked: ["/maintenance-pack"],
+          support_matrix_path: "/maintenance-matrix",
+        },
+      }),
+      diagnosticServerStarter: (options) => {
+        maintenanceDiagnostic = options.diagnostic
+        return "maintenance-diagnostic-started"
+      },
+    })
+    assert.equal(maintenanceDiagnostic.reason, "maintenance_unavailable")
+    assert.equal(
+      maintenanceDiagnostic.runtime.current_target.id,
+      "darwin-arm64-node-127",
+    )
+    assert.deepEqual(
+      maintenanceDiagnostic.runtime.shipped_targets,
+      [{ id: "darwin-arm64-node-127" }],
+    )
+    assert.deepEqual(
+      maintenanceDiagnostic.runtime.paths_checked,
+      ["/maintenance-pack"],
+    )
+    assert.equal(
+      maintenanceDiagnostic.runtime.runtime_cache_path,
+      "/maintenance-env-cache",
+    )
+    assert.equal(
+      maintenanceDiagnostic.runtime.support_matrix_path,
+      "/maintenance-matrix",
+    )
+
     let diagnostic
     await main({
       argv: ["--root", root],
