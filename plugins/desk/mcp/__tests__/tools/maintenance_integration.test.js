@@ -682,6 +682,186 @@ test("all five writable read tools use the default shared fresh-read lifecycle",
   }
 })
 
+test("desk_thread ensure injection cannot bypass default force-reindex maintenance", async () => {
+  const {
+    __setMaintenanceCoordinatorForTests,
+    createMaintenanceCoordinator,
+  } = await loadMaintenance()
+  const root = await mkTempDeskRoot()
+  const writerEntered = deferred()
+  const writerRelease = deferred()
+  const events = []
+  let activeWriters = 0
+  let isolatedEnsureCalls = 0
+  let sharedThreadEnsureCalls = 0
+  let resetOverlappedWriter = false
+  let restoreDefault
+  let thread
+  let reindex
+
+  try {
+    await writeFile(
+      root,
+      "trackA/thread-default/task.md",
+      "---\nstatus: processing\nschema_version: 1\n---\ndefault coordinator body\n",
+    )
+    await buildFixtureIndex(root)
+
+    const maintenance = createMaintenanceCoordinator({
+      ensureIndex: async (_deskRoot, options) => {
+        if (options.skipEmbed) {
+          sharedThreadEnsureCalls += 1
+          activeWriters += 1
+          events.push("shared-thread:ensure:start")
+          writerEntered.resolve()
+          await awaitBounded(
+            writerRelease.promise,
+            "shared thread freshness was not released",
+          )
+          activeWriters -= 1
+          events.push("shared-thread:ensure:end")
+          return completeIndexResult()
+        }
+        assert.equal(
+          activeWriters,
+          0,
+          "force reindex ensure overlapped a same-root thread freshness writer",
+        )
+        events.push("reindex:ensure")
+        return completeIndexResult({ built: true, reason: "missing" })
+      },
+      resetIndex: async () => {
+        resetOverlappedWriter = activeWriters > 0
+        events.push("reindex:reset")
+      },
+      repairBatch: async () => {
+        assert.fail("complete thread fixture must not schedule repair")
+      },
+    })
+    restoreDefault = __setMaintenanceCoordinatorForTests(maintenance)
+
+    thread = desk_thread({
+      deskRoot: root,
+      input: { start_path: "trackA/thread-default/task.md" },
+      ensure: async () => {
+        isolatedEnsureCalls += 1
+        activeWriters += 1
+        events.push("isolated-thread:ensure:start")
+        writerEntered.resolve()
+        await awaitBounded(
+          writerRelease.promise,
+          "isolated thread freshness was not released",
+        )
+        activeWriters -= 1
+        events.push("isolated-thread:ensure:end")
+        return completeIndexResult()
+      },
+    })
+    await awaitBounded(
+      writerEntered.promise,
+      "desk_thread did not enter a deterministic freshness writer",
+    )
+
+    reindex = desk_reindex({
+      deskRoot: root,
+      input: { force: true },
+    })
+    const observedReindex = observeSettlement(reindex)
+    await flushAsyncWork(
+      "thread ensure-injection overlap check did not reach a deterministic turn",
+    )
+
+    assert.equal(
+      resetOverlappedWriter,
+      false,
+      "default force reindex escaped the thread freshness coordinator",
+    )
+    assert.equal(
+      observedReindex.state,
+      "pending",
+      "default force reindex must queue behind same-root thread freshness",
+    )
+
+    writerRelease.resolve()
+    const [threadResult, reindexResult] = await awaitBounded(
+      Promise.all([thread, reindex]),
+      "shared thread and force reindex did not settle after writer release",
+    )
+
+    assert.equal(threadResult.start.path, "trackA/thread-default/task.md")
+    assert.equal(reindexResult.status, "ok")
+    assert.equal(isolatedEnsureCalls, 0)
+    assert.equal(sharedThreadEnsureCalls, 1)
+    assert.deepEqual(events, [
+      "shared-thread:ensure:start",
+      "shared-thread:ensure:end",
+      "reindex:reset",
+      "reindex:ensure",
+    ])
+  } finally {
+    restoreDefault?.()
+    writerRelease.resolve()
+    await awaitBounded(
+      Promise.allSettled([thread, reindex].filter(Boolean)),
+      "thread ensure-injection promises did not settle during cleanup",
+    ).catch(() => {})
+    await cleanupRoot(root)
+  }
+})
+
+test("desk_thread honors an explicitly shared maintenance injection", async () => {
+  const root = await mkTempDeskRoot()
+  const calls = []
+  let legacyEnsureCalls = 0
+  const maintenance = {
+    async runFreshRead(args) {
+      calls.push({
+        deskRoot: args.deskRoot,
+        ensureOptions: args.ensureOptions,
+      })
+      const db = openDb(args.deskRoot)
+      try {
+        return await args.read(db, completeIndexResult())
+      } finally {
+        closeDb(db)
+      }
+    },
+  }
+
+  try {
+    await writeFile(
+      root,
+      "trackA/thread-explicit/task.md",
+      "---\nstatus: processing\nschema_version: 1\n---\nexplicit coordinator body\n",
+    )
+    await buildFixtureIndex(root)
+
+    const result = await desk_thread({
+      deskRoot: root,
+      input: { start_path: "trackA/thread-explicit/task.md" },
+      ensure: async () => {
+        legacyEnsureCalls += 1
+        throw new Error("legacy ensure seam must not run")
+      },
+      opts: {
+        embed: { model: "explicit-shared-maintenance" },
+        maintenance,
+      },
+    })
+
+    assert.equal(result.start.path, "trackA/thread-explicit/task.md")
+    assert.equal(legacyEnsureCalls, 0)
+    assert.deepEqual(calls, [{
+      deskRoot: path.resolve(root),
+      ensureOptions: {
+        embed: { model: "explicit-shared-maintenance" },
+      },
+    }])
+  } finally {
+    await cleanupRoot(root)
+  }
+})
+
 test("desk_thread keeps its SQLite handle inside force-reindex maintenance and later same-root work resumes", async () => {
   const { createMaintenanceCoordinator } = await loadMaintenance()
   const root = await mkTempDeskRoot()

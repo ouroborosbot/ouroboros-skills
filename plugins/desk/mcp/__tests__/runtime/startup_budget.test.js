@@ -369,6 +369,63 @@ test("startup stops waiting and aborts when bounded ensureIndex exceeds budget",
   }
 })
 
+test("startup skips an injected direct writer when shared maintenance is unavailable", async () => {
+  const root = makeRoot("desk-startup-budget-no-maintenance-")
+  writeStartupBudget(root, 0)
+  const directEnsureRelease = deferred()
+  let directEnsureCalls = 0
+  let directHandleOpen = false
+  let servedWhileOpen = false
+  const runtimeServer = runtimeServerWithEnsureIndex({
+    ensureIndex: async () => {
+      directEnsureCalls += 1
+      directHandleOpen = true
+      await directEnsureRelease.promise
+      directHandleOpen = false
+      return { built: false, reason: "fresh" }
+    },
+  })
+  const startServer = runtimeServer.startServer.bind(runtimeServer)
+  runtimeServer.startServer = async (args) => {
+    servedWhileOpen = directHandleOpen
+    return startServer(args)
+  }
+
+  try {
+    await main({
+      argv: ["--root", root],
+      env: {},
+      cwd: root,
+      homeDir: root,
+      mcpRoot: root,
+      runtimeImporter: async () => runtimeServer,
+    })
+
+    assert.equal(
+      directEnsureCalls,
+      0,
+      "startup must not launch a writer outside the shared maintenance coordinator",
+    )
+    assert.equal(servedWhileOpen, false)
+    assert.deepEqual(runtimeServer.events, ["startServer"])
+    assert.deepEqual(runtimeServer.startCalls[0].statusContext.startup, {
+      ensure_index: {
+        built: false,
+        reason: "shared_maintenance_unavailable",
+        skipped: true,
+      },
+      duration_ms: 0,
+      budget_ms: 0,
+      fallback_mode: "maintenance_unavailable",
+      degraded: true,
+    })
+  } finally {
+    directEnsureRelease.resolve()
+    await flushAsyncWork()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test("timed-out startup retains same-root maintenance until aborted cleanup closes its DB handle", async () => {
   const root = makeRoot("desk-startup-budget-maintenance-")
   const otherRoot = makeRoot("desk-startup-budget-maintenance-other-")
