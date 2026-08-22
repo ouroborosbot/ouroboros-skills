@@ -2001,6 +2001,82 @@ test("shared maintenance prevents SQLITE_BUSY overlap from leaking to search or 
   }
 })
 
+test("standalone search and force reindex reject split partial coordinators before either operation starts", async () => {
+  const root = await mkTempDeskRoot()
+  const readEntered = deferred()
+  const readRelease = deferred()
+  let readActive = false
+  let readCalls = 0
+  let resetCalls = 0
+  let overlapDetected = false
+  const partialReadCoordinator = {
+    async runFreshRead() {
+      readCalls += 1
+      readActive = true
+      readEntered.resolve()
+      await readRelease.promise
+      readActive = false
+      return { results: [] }
+    },
+  }
+  const partialReindexCoordinator = {
+    async runExplicitReindex() {
+      resetCalls += 1
+      overlapDetected = readActive
+      return completeIndexResult({ built: true, reason: "missing" })
+    },
+  }
+
+  let searchPromise
+  let reindexPromise
+  try {
+    searchPromise = desk_search({
+      deskRoot: root,
+      input: { query: "alpha" },
+      opts: { embed: { fetch: makeEmbedFetch() } },
+      runtimeContext: {
+        maintenanceCoordinator: partialReadCoordinator,
+      },
+    })
+    await Promise.race([
+      readEntered.promise,
+      Promise.resolve(searchPromise).catch(() => undefined),
+    ])
+
+    reindexPromise = desk_reindex({
+      deskRoot: root,
+      input: { force: true },
+      runtimeContext: {
+        maintenanceCoordinator: partialReindexCoordinator,
+      },
+    })
+    const reindexSettled = Promise.resolve(reindexPromise).catch(
+      () => undefined,
+    )
+    await Promise.race([
+      reindexSettled,
+      flushAsyncWork("split reindex attempt did not yield"),
+    ])
+    readRelease.resolve()
+
+    const [searchResult, reindexResult] = await awaitBounded(
+      Promise.allSettled([searchPromise, reindexPromise]),
+      "split maintenance attempts did not settle",
+    )
+    assert.equal(searchResult.status, "rejected")
+    assert.equal(reindexResult.status, "rejected")
+    assert.equal(readCalls, 0)
+    assert.equal(resetCalls, 0)
+    assert.equal(overlapDetected, false)
+  } finally {
+    readRelease.resolve()
+    await Promise.allSettled(
+      [searchPromise, reindexPromise].filter(Boolean),
+    )
+    await cleanupRoot(root)
+  }
+})
+
 test("maintenance integration preserves the exact 15 tools and current search/reindex result schemas", async () => {
   const root = await mkTempDeskRoot()
   const maintenance = {

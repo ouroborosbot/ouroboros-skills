@@ -5,6 +5,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { callTool, createMcpServer, createMcpTransport, startServer, TOOL_IMPLS } from "../../src/server.js"
+import { createMaintenanceCoordinator } from "../../src/indexer/maintenance.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 
 function parseResult(res) {
@@ -288,6 +289,61 @@ test("server.startServer binds one runtime coordinator through dispatch without 
       ensureOptions: {},
     },
   ])
+})
+
+test("server.startServer refuses malformed runtime coordination while startup maintenance is active", async () => {
+  const root = await mkTempDeskRoot()
+  let releaseStartup
+  let markStartupEntered
+  const startupEntered = new Promise((resolve) => {
+    markStartupEntered = resolve
+  })
+  const startupRelease = new Promise((resolve) => {
+    releaseStartup = resolve
+  })
+  const coordinatorA = createMaintenanceCoordinator({
+    ensureIndex: async () => {
+      markStartupEntered()
+      await startupRelease
+      return { built: false, reason: "fresh" }
+    },
+  })
+  const startup = coordinatorA.runStartupEnsureIndex({ deskRoot: root })
+  await startupEntered
+
+  const attempts = []
+  let connectCalls = 0
+  try {
+    for (const runtimeContext of [
+      {},
+      { maintenanceCoordinator: null },
+      undefined,
+    ]) {
+      const server = {
+        setRequestHandler() {},
+        async connect() {
+          connectCalls += 1
+        },
+      }
+      try {
+        await startServer({
+          deskRoot: root,
+          runtimeContext,
+          server,
+          transport: { kind: "invalid-runtime-context" },
+        })
+        attempts.push("fulfilled")
+      } catch {
+        attempts.push("rejected")
+      }
+    }
+  } finally {
+    releaseStartup()
+    await startup
+  }
+
+  assert.deepEqual(attempts, ["rejected", "rejected", "rejected"])
+  assert.equal(connectCalls, 0)
 })
 
 test("server.startServer can construct its default transport", async () => {
