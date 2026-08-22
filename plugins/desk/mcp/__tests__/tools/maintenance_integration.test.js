@@ -14,6 +14,7 @@ import {
   desk_similar,
   desk_timeline,
 } from "../../src/tools/search.js"
+import { desk_thread } from "../../src/tools/thread.js"
 import {
   buildFixtureIndex,
   makeEmbedFetch,
@@ -200,6 +201,32 @@ function completeIndexResult({
       vectors_indexed: vectors,
       missing_vectors: Math.max(0, chunks - vectors),
       embedding_available: true,
+    },
+  }
+}
+
+function gateFirstFreshRead(
+  maintenance,
+  { entered, release, events, releaseMessage },
+) {
+  let readCalls = 0
+  return {
+    ...maintenance,
+    runFreshRead(args) {
+      return maintenance.runFreshRead({
+        ...args,
+        async read(db, index) {
+          readCalls += 1
+          if (readCalls === 1) {
+            events.push("thread:read:start")
+            entered.resolve()
+            await awaitBounded(release.promise, releaseMessage)
+          }
+          const result = await args.read(db, index)
+          if (readCalls === 1) events.push("thread:read:end")
+          return result
+        },
+      })
     },
   }
 }
@@ -543,7 +570,7 @@ test("desk_search returns fresh lexical and retained semantic hits before gated 
   }
 })
 
-test("all four writable read tools use the default shared fresh-read lifecycle", async () => {
+test("all five writable read tools use the default shared fresh-read lifecycle", async () => {
   const {
     __setMaintenanceCoordinatorForTests,
     createMaintenanceCoordinator,
@@ -595,7 +622,7 @@ test("all four writable read tools use the default shared fresh-read lifecycle",
     }
     restoreDefault = __setMaintenanceCoordinatorForTests(maintenance)
 
-    const [search, recall, similar, timeline] = await awaitBounded(
+    const [search, recall, similar, timeline, thread] = await awaitBounded(
       Promise.all([
         desk_search({
           deskRoot: root,
@@ -617,6 +644,11 @@ test("all four writable read tools use the default shared fresh-read lifecycle",
           input: { query: "alpha" },
           opts: { embed },
         }),
+        desk_thread({
+          deskRoot: root,
+          input: { start_path: "trackA/seed/task.md" },
+          opts: { embed },
+        }),
       ]),
       "default-wired read tools did not settle through shared maintenance",
     )
@@ -625,6 +657,7 @@ test("all four writable read tools use the default shared fresh-read lifecycle",
     assert.ok(recall.results.length >= 1)
     assert.ok(similar.results.length >= 1)
     assert.equal(timeline.search_mode, "hybrid")
+    assert.equal(thread.start.path, "trackA/seed/task.md")
     assert.equal(
       legacySearchFreshnessCalls,
       0,
@@ -632,7 +665,7 @@ test("all four writable read tools use the default shared fresh-read lifecycle",
     )
     assert.equal(
       ensureCalls.length,
-      4,
+      5,
       "one or more writable read tools bypassed the shared coordinator",
     )
     assert.equal(maxActiveEnsures, 1)
@@ -645,6 +678,398 @@ test("all four writable read tools use the default shared fresh-read lifecycle",
     }
   } finally {
     if (restoreDefault) restoreDefault()
+    await cleanupRoot(root)
+  }
+})
+
+test("desk_thread keeps its SQLite handle inside force-reindex maintenance and later same-root work resumes", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const root = await mkTempDeskRoot()
+  const readEntered = deferred()
+  const readRelease = deferred()
+  const events = []
+  let openHandles = 0
+  let maintenance
+  let thread
+  let reindex
+
+  try {
+    await writeFile(
+      root,
+      "trackA/thread-force/task.md",
+      "---\nstatus: processing\nschema_version: 1\n---\nthread force body\n",
+    )
+    await buildFixtureIndex(root)
+
+    const coordinator = createMaintenanceCoordinator({
+      ensureIndex: async (_deskRoot, options) => {
+        if (options.skipEmbed) {
+          events.push("thread:ensure")
+          return completeIndexResult()
+        }
+        assert.equal(
+          openHandles,
+          0,
+          "force reindex wrote while desk_thread owned a live SQLite handle",
+        )
+        events.push("reindex:ensure")
+        return completeIndexResult({ built: true, reason: "missing" })
+      },
+      openIndex: (deskRoot) => {
+        openHandles += 1
+        events.push("thread:open")
+        return openDb(deskRoot)
+      },
+      closeIndex: (db) => {
+        closeDb(db)
+        openHandles -= 1
+        events.push("thread:close")
+      },
+      resetIndex: async () => {
+        assert.equal(
+          openHandles,
+          0,
+          "force reset overlapped desk_thread's live SQLite handle",
+        )
+        events.push("reindex:reset")
+      },
+      repairBatch: async () => {
+        assert.fail("complete thread fixture must not schedule repair")
+      },
+    })
+    maintenance = gateFirstFreshRead(coordinator, {
+      entered: readEntered,
+      release: readRelease,
+      events,
+      releaseMessage: "gated force-reindex thread read was not released",
+    })
+
+    thread = desk_thread({
+      deskRoot: root,
+      input: { start_path: "trackA/thread-force/task.md" },
+      opts: { maintenance },
+    })
+    await awaitBounded(
+      readEntered.promise,
+      "desk_thread did not enter the shared fresh-read handle before force reindex",
+    )
+
+    reindex = desk_reindex({
+      deskRoot: root,
+      input: { force: true },
+      opts: { maintenance },
+    })
+    const observedReindex = observeSettlement(reindex)
+    await flushAsyncWork(
+      "force reindex ordering check did not reach a deterministic turn",
+    )
+
+    assert.equal(observedReindex.state, "pending")
+    assert.equal(events.includes("reindex:reset"), false)
+    assert.equal(events.includes("reindex:ensure"), false)
+    assert.equal(openHandles, 1)
+
+    readRelease.resolve()
+    const threadResult = await awaitBounded(
+      thread,
+      "desk_thread did not settle after releasing its SQLite handle",
+    )
+    const reindexResult = await awaitBounded(
+      reindex,
+      "force reindex did not resume after desk_thread closed its SQLite handle",
+    )
+    const laterThread = await awaitBounded(
+      desk_thread({
+        deskRoot: root,
+        input: { start_path: "trackA/thread-force/task.md" },
+        opts: { maintenance },
+      }),
+      "later same-root desk_thread did not resume after force reindex",
+    )
+
+    assert.equal(threadResult.start.path, "trackA/thread-force/task.md")
+    assert.equal(reindexResult.status, "ok")
+    assert.equal(laterThread.start.path, "trackA/thread-force/task.md")
+    assert.equal(openHandles, 0)
+    assert.ok(events.indexOf("thread:close") < events.indexOf("reindex:reset"))
+    assert.ok(events.indexOf("reindex:reset") < events.indexOf("reindex:ensure"))
+    assert.equal(
+      events.filter((event) => event === "thread:ensure").length,
+      2,
+    )
+  } finally {
+    readRelease.resolve()
+    if (maintenance) {
+      await awaitBounded(
+        maintenance.cancelBackgroundRepair(root),
+        "force-reindex thread maintenance did not settle during cleanup",
+      ).catch(() => {})
+    }
+    await awaitBounded(
+      Promise.allSettled([thread, reindex].filter(Boolean)),
+      "force-reindex thread promises did not settle during cleanup",
+    ).catch(() => {})
+    await cleanupRoot(root)
+  }
+})
+
+test("desk_thread keeps its SQLite handle inside non-force reindex maintenance and later same-root work resumes", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const root = await mkTempDeskRoot()
+  const readEntered = deferred()
+  const readRelease = deferred()
+  const events = []
+  let openHandles = 0
+  let maintenance
+  let thread
+  let reindex
+
+  try {
+    await writeFile(
+      root,
+      "trackA/thread-nonforce/task.md",
+      "---\nstatus: processing\nschema_version: 1\n---\nthread nonforce body\n",
+    )
+    await buildFixtureIndex(root)
+
+    const coordinator = createMaintenanceCoordinator({
+      ensureIndex: async (_deskRoot, options) => {
+        if (options.skipEmbed) {
+          events.push("thread:ensure")
+          return completeIndexResult()
+        }
+        assert.equal(
+          openHandles,
+          0,
+          "non-force reindex wrote while desk_thread owned a live SQLite handle",
+        )
+        events.push("reindex:ensure")
+        return completeIndexResult({ built: true, reason: "semantic_missing" })
+      },
+      openIndex: (deskRoot) => {
+        openHandles += 1
+        events.push("thread:open")
+        return openDb(deskRoot)
+      },
+      closeIndex: (db) => {
+        closeDb(db)
+        openHandles -= 1
+        events.push("thread:close")
+      },
+      resetIndex: async () => {
+        assert.fail("non-force reindex must not reset index files")
+      },
+      repairBatch: async () => {
+        assert.fail("complete thread fixture must not schedule repair")
+      },
+    })
+    maintenance = gateFirstFreshRead(coordinator, {
+      entered: readEntered,
+      release: readRelease,
+      events,
+      releaseMessage: "gated non-force thread read was not released",
+    })
+
+    thread = desk_thread({
+      deskRoot: root,
+      input: { start_path: "trackA/thread-nonforce/task.md" },
+      opts: { maintenance },
+    })
+    await awaitBounded(
+      readEntered.promise,
+      "desk_thread did not enter the shared fresh-read handle before non-force reindex",
+    )
+
+    reindex = desk_reindex({
+      deskRoot: root,
+      input: { force: false },
+      opts: { maintenance },
+    })
+    const observedReindex = observeSettlement(reindex)
+    await flushAsyncWork(
+      "non-force reindex ordering check did not reach a deterministic turn",
+    )
+
+    assert.equal(observedReindex.state, "pending")
+    assert.equal(events.includes("reindex:ensure"), false)
+    assert.equal(openHandles, 1)
+
+    readRelease.resolve()
+    const threadResult = await awaitBounded(
+      thread,
+      "desk_thread did not settle after releasing its SQLite handle",
+    )
+    const reindexResult = await awaitBounded(
+      reindex,
+      "non-force reindex did not resume after desk_thread closed its SQLite handle",
+    )
+    const laterThread = await awaitBounded(
+      desk_thread({
+        deskRoot: root,
+        input: { start_path: "trackA/thread-nonforce/task.md" },
+        opts: { maintenance },
+      }),
+      "later same-root desk_thread did not resume after non-force reindex",
+    )
+
+    assert.equal(threadResult.start.path, "trackA/thread-nonforce/task.md")
+    assert.equal(reindexResult.status, "ok")
+    assert.equal(laterThread.start.path, "trackA/thread-nonforce/task.md")
+    assert.equal(openHandles, 0)
+    assert.ok(events.indexOf("thread:close") < events.indexOf("reindex:ensure"))
+    assert.equal(
+      events.filter((event) => event === "thread:ensure").length,
+      2,
+    )
+  } finally {
+    readRelease.resolve()
+    if (maintenance) {
+      await awaitBounded(
+        maintenance.cancelBackgroundRepair(root),
+        "non-force thread maintenance did not settle during cleanup",
+      ).catch(() => {})
+    }
+    await awaitBounded(
+      Promise.allSettled([thread, reindex].filter(Boolean)),
+      "non-force thread promises did not settle during cleanup",
+    ).catch(() => {})
+    await cleanupRoot(root)
+  }
+})
+
+test("desk_thread closes before repair registration and waits behind an active same-root repair", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const root = await mkTempDeskRoot()
+  const scheduler = createManualScheduler()
+  const repairEntered = deferred()
+  const repairRelease = deferred()
+  const events = []
+  let ensureCalls = 0
+  let openHandles = 0
+  let maintenance
+  let activeRepair
+  let laterThread
+
+  try {
+    await writeFile(
+      root,
+      "trackA/thread-repair/task.md",
+      "---\nstatus: processing\nschema_version: 1\n---\nthread repair body\n",
+    )
+    await buildFixtureIndex(root)
+
+    maintenance = createMaintenanceCoordinator({
+      ensureIndex: async () => {
+        ensureCalls += 1
+        events.push(`thread:ensure:${ensureCalls}`)
+        return ensureCalls === 1
+          ? completeIndexResult({ chunks: 2, vectors: 1 })
+          : completeIndexResult({ chunks: 2, vectors: 2 })
+      },
+      openIndex: (deskRoot) => {
+        openHandles += 1
+        events.push("thread:open")
+        return openDb(deskRoot)
+      },
+      closeIndex: (db) => {
+        closeDb(db)
+        openHandles -= 1
+        events.push("thread:close")
+      },
+      repairBatch: async () => {
+        assert.equal(
+          openHandles,
+          0,
+          "background repair wrote while desk_thread owned a live SQLite handle",
+        )
+        events.push("repair:start")
+        repairEntered.resolve()
+        await awaitBounded(
+          repairRelease.promise,
+          "active thread repair was not released",
+        )
+        events.push("repair:end")
+        return {
+          processed_chunks: 1,
+          vectors_indexed: 1,
+          remaining_chunks: 0,
+          stopped_by: "complete",
+        }
+      },
+      createRepairCoordinator: (options) =>
+        createSemanticRepairCoordinator({
+          ...options,
+          schedule(callback, delay) {
+            assert.equal(
+              openHandles,
+              0,
+              "repair registered before desk_thread closed its SQLite handle",
+            )
+            events.push("repair:register")
+            return scheduler.schedule(callback, delay)
+          },
+          clearScheduled: scheduler.clear,
+        }),
+    })
+
+    const firstThread = await awaitBounded(
+      desk_thread({
+        deskRoot: root,
+        input: { start_path: "trackA/thread-repair/task.md" },
+        opts: { maintenance },
+      }),
+      "desk_thread did not return after registering background repair",
+    )
+    assert.equal(firstThread.start.path, "trackA/thread-repair/task.md")
+    assert.equal(scheduler.size, 1)
+    assert.ok(events.indexOf("thread:close") < events.indexOf("repair:register"))
+
+    activeRepair = scheduler.runNext()
+    await awaitBounded(
+      repairEntered.promise,
+      "desk_thread did not start its registered background repair",
+    )
+
+    laterThread = desk_thread({
+      deskRoot: root,
+      input: { start_path: "trackA/thread-repair/task.md" },
+      opts: { maintenance },
+    })
+    const observedLaterThread = observeSettlement(laterThread)
+    await flushAsyncWork(
+      "active-repair thread ordering check did not reach a deterministic turn",
+    )
+
+    assert.equal(observedLaterThread.state, "pending")
+    assert.equal(ensureCalls, 1)
+    assert.equal(openHandles, 0)
+
+    repairRelease.resolve()
+    await awaitBounded(
+      activeRepair,
+      "active repair did not settle after release",
+    )
+    const laterResult = await awaitBounded(
+      laterThread,
+      "later same-root desk_thread did not resume after active repair",
+    )
+
+    assert.equal(laterResult.start.path, "trackA/thread-repair/task.md")
+    assert.equal(ensureCalls, 2)
+    assert.equal(openHandles, 0)
+    assert.ok(events.indexOf("repair:end") < events.lastIndexOf("thread:open"))
+  } finally {
+    repairRelease.resolve()
+    if (maintenance) {
+      await awaitBounded(
+        maintenance.cancelBackgroundRepair(root),
+        "active-repair thread maintenance did not settle during cleanup",
+      ).catch(() => {})
+    }
+    await awaitBounded(
+      Promise.allSettled([activeRepair, laterThread].filter(Boolean)),
+      "active-repair thread promises did not settle during cleanup",
+    ).catch(() => {})
     await cleanupRoot(root)
   }
 })
