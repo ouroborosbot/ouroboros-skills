@@ -246,7 +246,10 @@ export async function main({
         support_matrix_path: inspection.runtime?.support_matrix_path ?? inspection.support_matrix_path,
       }
   const maintenanceCoordinator = runtimeServer.maintenanceCoordinator
-  if (!hasRuntimeMaintenanceCoordinator(maintenanceCoordinator)) {
+  if (!hasRuntimeMaintenanceCoordinator(
+    runtimeServer,
+    maintenanceCoordinator,
+  )) {
     return startRuntimeDiagnostic({
       diagnostic: maintenanceUnavailableDiagnostic({
         env,
@@ -421,16 +424,9 @@ function maintenanceUnavailableDiagnostic({
   })
 }
 
-function hasRuntimeMaintenanceCoordinator(coordinator) {
-  return coordinator !== null &&
-    typeof coordinator === "object" &&
-    [
-      "cancelBackgroundRepair",
-      "ensureSearchFreshness",
-      "runExplicitReindex",
-      "runFreshRead",
-      "runStartupEnsureIndex",
-    ].every((method) => typeof coordinator[method] === "function")
+function hasRuntimeMaintenanceCoordinator(runtimeServer, coordinator) {
+  return typeof runtimeServer?.isMaintenanceCoordinator === "function" &&
+    runtimeServer.isMaintenanceCoordinator(coordinator)
 }
 
 async function runStartupEnsureIndex({

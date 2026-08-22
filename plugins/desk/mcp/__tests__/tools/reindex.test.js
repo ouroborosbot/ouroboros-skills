@@ -10,7 +10,10 @@ import * as path from "node:path"
 import { desk_reindex } from "../../src/tools/reindex.js"
 import { closeDb, indexDbPath, openDb } from "../../src/db/init.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
-import { createMaintenanceRuntimeBinding } from "../../src/indexer/maintenance.js"
+import {
+  createMaintenanceCoordinator,
+  createMaintenanceRuntimeBinding,
+} from "../../src/indexer/maintenance.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 
@@ -38,17 +41,6 @@ async function writeFile(root, rel, body) {
   const abs = path.join(root, rel)
   await fs.mkdir(path.dirname(abs), { recursive: true })
   await fs.writeFile(abs, body, "utf8")
-}
-
-function completeMaintenance(overrides = {}) {
-  return {
-    async cancelBackgroundRepair() {},
-    async ensureSearchFreshness() {},
-    async runExplicitReindex() {},
-    async runFreshRead() {},
-    async runStartupEnsureIndex() {},
-    ...overrides,
-  }
 }
 
 test("desk_reindex — empty bundle returns ok with built=true and zero docs", async () => {
@@ -303,9 +295,9 @@ test("desk_reindex — force:true on a fresh root with no DB still succeeds", as
 test("desk_reindex — omitted input defaults to non-force maintenance", async () => {
   const root = await mkTempDeskRoot()
   const calls = []
-  const maintenance = completeMaintenance({
-    async runExplicitReindex(args) {
-      calls.push(args)
+  const maintenance = createMaintenanceCoordinator({
+    async ensureIndex(deskRoot, ensureOptions) {
+      calls.push({ deskRoot, ensureOptions })
       return {
         built: false,
         reason: "fresh",
@@ -321,7 +313,6 @@ test("desk_reindex — omitted input defaults to non-force maintenance", async (
   assert.deepEqual(calls, [
     {
       deskRoot: path.resolve(root),
-      force: false,
       ensureOptions: {},
     },
   ])

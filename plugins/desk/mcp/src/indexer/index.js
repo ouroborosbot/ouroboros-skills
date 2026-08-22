@@ -38,6 +38,7 @@ import {
   writeActiveEmbeddingSpec,
 } from "./spec.js"
 import { importVectorPacks } from "./vector-packs.js"
+import { physicalRootKey } from "./root-identity.js"
 
 const SQLITE_PARAMETER_BATCH_SIZE = 500
 const STAT_INVENTORY_META_KEY = "document_stat_inventory_hash"
@@ -889,7 +890,7 @@ async function hasFreshIndexCache(
   db,
   { statInventoryHash, tombstoneLedgerFingerprint },
 ) {
-  const key = path.resolve(deskRoot)
+  const key = physicalRootKey(deskRoot)
   const cached = freshIndexCache.get(key)
   if (
     !cached ||
@@ -915,7 +916,7 @@ async function rememberFreshIndex(
     ignoreWal = false,
   },
 ) {
-  freshIndexCache.set(path.resolve(deskRoot), {
+  freshIndexCache.set(physicalRootKey(deskRoot), {
     statInventoryHash,
     tombstoneLedgerFingerprint,
     storageFingerprint: await indexStorageFingerprint(db.name, { ignoreWal }),
@@ -923,7 +924,7 @@ async function rememberFreshIndex(
 }
 
 function forgetFreshIndex(deskRoot) {
-  freshIndexCache.delete(path.resolve(deskRoot))
+  freshIndexCache.delete(physicalRootKey(deskRoot))
 }
 
 async function indexStorageFingerprint(dbPath, { ignoreWal = false } = {}) {

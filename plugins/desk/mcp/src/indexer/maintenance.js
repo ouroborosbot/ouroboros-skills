@@ -1,5 +1,4 @@
 import { existsSync, rmSync } from "node:fs"
-import * as path from "node:path"
 
 import {
   closeDb as defaultCloseDb,
@@ -11,26 +10,29 @@ import {
   createSemanticRepairCoordinator,
   repairMissingVectorBatch,
 } from "./semantic-repair.js"
+import { resolveRootIdentity } from "./root-identity.js"
 
 const COMPLETE_REPAIR = Object.freeze({
   state: "complete",
   last_error: null,
 })
+const maintenanceCoordinators = new WeakSet()
+const runtimeBindings = new WeakMap()
 
 export function createRootMaintenanceQueue() {
   const tails = new Map()
 
   function run(deskRoot, operation) {
-    const root = canonicalRoot(deskRoot)
-    const previous = tails.get(root) ?? Promise.resolve()
+    const rootKey = resolveRootIdentity(deskRoot).key
+    const previous = tails.get(rootKey) ?? Promise.resolve()
     const result = previous.then(() => operation())
     const tail = result.then(
       () => undefined,
       () => undefined,
     )
-    tails.set(root, tail)
+    tails.set(rootKey, tail)
     tail.then(() => {
-      if (tails.get(root) === tail) tails.delete(root)
+      if (tails.get(rootKey) === tail) tails.delete(rootKey)
     })
     return result
   }
@@ -53,17 +55,18 @@ export function createMaintenanceCoordinator({
       rootQueue.run(options.deskRoot, () => repairBatch(options)),
   })
 
-  function currentReindexGeneration(root) {
-    return reindexGenerations.get(root) ?? 0
+  function currentReindexGeneration(rootKey) {
+    return reindexGenerations.get(rootKey) ?? 0
   }
 
   function registerBackgroundRepair({
     root,
+    rootKey,
     index,
     ensureOptions,
     readGeneration,
   }) {
-    if (readGeneration !== currentReindexGeneration(root)) {
+    if (readGeneration !== currentReindexGeneration(rootKey)) {
       return Promise.resolve({ ...COMPLETE_REPAIR })
     }
     const repairableMissing =
@@ -82,8 +85,8 @@ export function createMaintenanceCoordinator({
     deskRoot,
     ensureOptions = {},
   } = {}) {
-    const root = canonicalRoot(deskRoot)
-    const readGeneration = currentReindexGeneration(root)
+    const { path: root, key: rootKey } = resolveRootIdentity(deskRoot)
+    const readGeneration = currentReindexGeneration(rootKey)
     return rootQueue.run(root, async () => {
       const index = await ensureIndex(root, {
         ...ensureOptions,
@@ -91,6 +94,7 @@ export function createMaintenanceCoordinator({
       })
       const repair = registerBackgroundRepair({
         root,
+        rootKey,
         index,
         ensureOptions,
         readGeneration,
@@ -103,7 +107,7 @@ export function createMaintenanceCoordinator({
     deskRoot,
     ensureOptions = {},
   } = {}) {
-    const root = canonicalRoot(deskRoot)
+    const { path: root } = resolveRootIdentity(deskRoot)
     return rootQueue.run(root, () => ensureIndex(root, ensureOptions))
   }
 
@@ -112,8 +116,8 @@ export function createMaintenanceCoordinator({
     ensureOptions = {},
     read,
   } = {}) {
-    const root = canonicalRoot(deskRoot)
-    const readGeneration = currentReindexGeneration(root)
+    const { path: root, key: rootKey } = resolveRootIdentity(deskRoot)
+    const readGeneration = currentReindexGeneration(rootKey)
     return rootQueue.run(root, async () => {
       const index = await ensureIndex(root, {
         ...ensureOptions,
@@ -128,6 +132,7 @@ export function createMaintenanceCoordinator({
       }
       registerBackgroundRepair({
         root,
+        rootKey,
         index,
         ensureOptions,
         readGeneration,
@@ -141,8 +146,11 @@ export function createMaintenanceCoordinator({
     force = false,
     ensureOptions = {},
   } = {}) {
-    const root = canonicalRoot(deskRoot)
-    reindexGenerations.set(root, currentReindexGeneration(root) + 1)
+    const { path: root, key: rootKey } = resolveRootIdentity(deskRoot)
+    reindexGenerations.set(
+      rootKey,
+      currentReindexGeneration(rootKey) + 1,
+    )
     const initialCancellation = repairCoordinator.cancel(root)
     return rootQueue.run(root, async () => {
       await initialCancellation
@@ -153,16 +161,18 @@ export function createMaintenanceCoordinator({
   }
 
   function cancelBackgroundRepair(deskRoot) {
-    return repairCoordinator.cancel(canonicalRoot(deskRoot))
+    return repairCoordinator.cancel(resolveRootIdentity(deskRoot).path)
   }
 
-  return {
+  const coordinator = Object.freeze({
     cancelBackgroundRepair,
     ensureSearchFreshness,
     runExplicitReindex,
     runFreshRead,
     runStartupEnsureIndex,
-  }
+  })
+  maintenanceCoordinators.add(coordinator)
+  return coordinator
 }
 
 function resetIndexFiles({ deskRoot }) {
@@ -173,50 +183,28 @@ function resetIndexFiles({ deskRoot }) {
   rmSync(`${dbPath}-shm`, { force: true })
 }
 
-function canonicalRoot(deskRoot) {
-  if (typeof deskRoot !== "string" || deskRoot.trim() === "") {
-    throw new Error("deskRoot is required")
-  }
-  return path.resolve(deskRoot)
-}
-
 export let maintenanceCoordinator = createMaintenanceCoordinator()
 
-const REQUIRED_COORDINATOR_METHODS = Object.freeze([
-  "cancelBackgroundRepair",
-  "ensureSearchFreshness",
-  "runExplicitReindex",
-  "runFreshRead",
-  "runStartupEnsureIndex",
-])
-const RUNTIME_BINDING_BRAND = Symbol("desk-maintenance-runtime-binding")
-
 export function isMaintenanceCoordinator(coordinator) {
-  return coordinator !== null &&
-    typeof coordinator === "object" &&
-    REQUIRED_COORDINATOR_METHODS.every(
-      (method) => typeof coordinator[method] === "function",
-    )
+  return maintenanceCoordinators.has(coordinator)
 }
 
 export function createMaintenanceRuntimeBinding(coordinator) {
   if (!isMaintenanceCoordinator(coordinator)) {
     throw new Error("maintenance coordinator is unavailable")
   }
-  const runtimeBinding = { maintenanceCoordinator: coordinator }
-  Object.defineProperty(runtimeBinding, RUNTIME_BINDING_BRAND, {
-    value: coordinator,
+  const runtimeBinding = Object.freeze({
+    maintenanceCoordinator: coordinator,
   })
-  return Object.freeze(runtimeBinding)
+  runtimeBindings.set(runtimeBinding, coordinator)
+  return runtimeBinding
 }
 
 function isMaintenanceRuntimeBinding(runtimeBinding) {
-  return runtimeBinding !== null &&
-    typeof runtimeBinding === "object" &&
-    Object.isFrozen(runtimeBinding) &&
-    runtimeBinding[RUNTIME_BINDING_BRAND] ===
-      runtimeBinding.maintenanceCoordinator &&
-    isMaintenanceCoordinator(runtimeBinding.maintenanceCoordinator)
+  const coordinator = runtimeBindings.get(runtimeBinding)
+  return coordinator !== undefined &&
+    runtimeBinding.maintenanceCoordinator === coordinator &&
+    isMaintenanceCoordinator(coordinator)
 }
 
 export function resolveRuntimeMaintenance(options = {}) {

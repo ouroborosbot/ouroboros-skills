@@ -35,7 +35,10 @@ import {
 } from "../../src/artifacts/performance-budgets.js"
 import { closeDb, openDb, setMeta } from "../../src/db/init.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
-import { createMaintenanceCoordinator } from "../../src/indexer/maintenance.js"
+import {
+  createMaintenanceCoordinator,
+  isMaintenanceCoordinator,
+} from "../../src/indexer/maintenance.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
@@ -475,6 +478,7 @@ function runtimeServerWithEnsureIndex(ensureIndexResult = { built: false, reason
   const startCalls = []
   const runtimeServer = {
     ensureCalls,
+    isMaintenanceCoordinator,
     startCalls,
     async ensureIndex(deskRoot, opts = {}) {
       ensureCalls.push({ deskRoot, opts })

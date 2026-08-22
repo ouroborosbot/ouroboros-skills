@@ -206,17 +206,6 @@ function completeIndexResult({
   }
 }
 
-function completeMaintenance(overrides = {}) {
-  return {
-    async cancelBackgroundRepair() {},
-    async ensureSearchFreshness() {},
-    async runExplicitReindex() {},
-    async runFreshRead() {},
-    async runStartupEnsureIndex() {},
-    ...overrides,
-  }
-}
-
 const runtimeContexts = new WeakMap()
 
 function runtimeContextFor(maintenance) {
@@ -226,32 +215,6 @@ function runtimeContextFor(maintenance) {
     runtimeContexts.set(maintenance, runtimeContext)
   }
   return runtimeContext
-}
-
-function gateFirstFreshRead(
-  maintenance,
-  { entered, release, events, releaseMessage },
-) {
-  let readCalls = 0
-  return {
-    ...maintenance,
-    runFreshRead(args) {
-      return maintenance.runFreshRead({
-        ...args,
-        async read(db, index) {
-          readCalls += 1
-          if (readCalls === 1) {
-            events.push("thread:read:start")
-            entered.resolve()
-            await awaitBounded(release.promise, releaseMessage)
-          }
-          const result = await args.read(db, index)
-          if (readCalls === 1) events.push("thread:read:end")
-          return result
-        },
-      })
-    },
-  }
 }
 
 async function cleanupRoot(root) {
@@ -604,7 +567,6 @@ test("all five writable read tools share one complete lifecycle through omitted 
   const embed = { fetch: makeEmbedFetch() }
   let activeEnsures = 0
   let maxActiveEnsures = 0
-  let legacySearchFreshnessCalls = 0
   let restoreDefault
 
   try {
@@ -638,12 +600,6 @@ test("all five writable read tools share one complete lifecycle through omitted 
         assert.fail("complete fixture coverage must not schedule repair")
       },
     })
-    const legacyEnsureSearchFreshness =
-      maintenance.ensureSearchFreshness.bind(maintenance)
-    maintenance.ensureSearchFreshness = (args) => {
-      legacySearchFreshnessCalls += 1
-      return legacyEnsureSearchFreshness(args)
-    }
     restoreDefault = __setMaintenanceCoordinatorForTests(maintenance)
 
     async function runReadTools(runtimeContext) {
@@ -697,11 +653,6 @@ test("all five writable read tools share one complete lifecycle through omitted 
       assert.equal(timeline.search_mode, "hybrid")
       assert.equal(thread.start.path, "trackA/seed/task.md")
     }
-    assert.equal(
-      legacySearchFreshnessCalls,
-      0,
-      "desk_search still used the legacy freshness-only lifecycle",
-    )
     assert.equal(
       ensureCalls.length,
       10,
@@ -849,22 +800,20 @@ test("desk_thread ensure injection cannot bypass default force-reindex maintenan
 })
 
 test("desk_thread honors an explicitly shared maintenance injection", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
   const root = await mkTempDeskRoot()
   const calls = []
   let legacyEnsureCalls = 0
-  const maintenance = completeMaintenance({
-    async runFreshRead(args) {
+  const maintenance = createMaintenanceCoordinator({
+    ensureIndex: async (deskRoot, ensureOptions) => {
       calls.push({
-        deskRoot: args.deskRoot,
-        ensureOptions: args.ensureOptions,
+        deskRoot,
+        ensureOptions,
       })
-      const db = openDb(args.deskRoot)
-      try {
-        return await args.read(db, completeIndexResult())
-      } finally {
-        closeDb(db)
-      }
+      return completeIndexResult()
     },
+    openIndex: openDb,
+    closeIndex: closeDb,
   })
 
   try {
@@ -894,6 +843,7 @@ test("desk_thread honors an explicitly shared maintenance injection", async () =
       deskRoot: path.resolve(root),
       ensureOptions: {
         embed: { model: "explicit-shared-maintenance" },
+        skipEmbed: true,
       },
     }])
   } finally {
@@ -901,7 +851,7 @@ test("desk_thread honors an explicitly shared maintenance injection", async () =
   }
 })
 
-test("desk_thread keeps its SQLite handle inside force-reindex maintenance and later same-root work resumes", async () => {
+test("desk_thread keeps its fresh-read lifecycle inside force-reindex maintenance and later same-root work resumes", async () => {
   const { createMaintenanceCoordinator } = await loadMaintenance()
   const root = await mkTempDeskRoot()
   const readEntered = deferred()
@@ -924,6 +874,13 @@ test("desk_thread keeps its SQLite handle inside force-reindex maintenance and l
       ensureIndex: async (_deskRoot, options) => {
         if (options.skipEmbed) {
           events.push("thread:ensure")
+          if (!readEntered.settled) {
+            readEntered.resolve()
+            await awaitBounded(
+              readRelease.promise,
+              "gated force-reindex thread freshness was not released",
+            )
+          }
           return completeIndexResult()
         }
         assert.equal(
@@ -956,12 +913,7 @@ test("desk_thread keeps its SQLite handle inside force-reindex maintenance and l
         assert.fail("complete thread fixture must not schedule repair")
       },
     })
-    maintenance = gateFirstFreshRead(coordinator, {
-      entered: readEntered,
-      release: readRelease,
-      events,
-      releaseMessage: "gated force-reindex thread read was not released",
-    })
+    maintenance = coordinator
 
     thread = desk_thread({
       deskRoot: root,
@@ -970,7 +922,7 @@ test("desk_thread keeps its SQLite handle inside force-reindex maintenance and l
     })
     await awaitBounded(
       readEntered.promise,
-      "desk_thread did not enter the shared fresh-read handle before force reindex",
+      "desk_thread did not enter shared freshness before force reindex",
     )
 
     reindex = desk_reindex({
@@ -986,7 +938,7 @@ test("desk_thread keeps its SQLite handle inside force-reindex maintenance and l
     assert.equal(observedReindex.state, "pending")
     assert.equal(events.includes("reindex:reset"), false)
     assert.equal(events.includes("reindex:ensure"), false)
-    assert.equal(openHandles, 1)
+    assert.equal(openHandles, 0)
 
     readRelease.resolve()
     const threadResult = await awaitBounded(
@@ -1032,7 +984,7 @@ test("desk_thread keeps its SQLite handle inside force-reindex maintenance and l
   }
 })
 
-test("desk_thread keeps its SQLite handle inside non-force reindex maintenance and later same-root work resumes", async () => {
+test("desk_thread keeps its fresh-read lifecycle inside non-force reindex maintenance and later same-root work resumes", async () => {
   const { createMaintenanceCoordinator } = await loadMaintenance()
   const root = await mkTempDeskRoot()
   const readEntered = deferred()
@@ -1055,6 +1007,13 @@ test("desk_thread keeps its SQLite handle inside non-force reindex maintenance a
       ensureIndex: async (_deskRoot, options) => {
         if (options.skipEmbed) {
           events.push("thread:ensure")
+          if (!readEntered.settled) {
+            readEntered.resolve()
+            await awaitBounded(
+              readRelease.promise,
+              "gated non-force thread freshness was not released",
+            )
+          }
           return completeIndexResult()
         }
         assert.equal(
@@ -1082,12 +1041,7 @@ test("desk_thread keeps its SQLite handle inside non-force reindex maintenance a
         assert.fail("complete thread fixture must not schedule repair")
       },
     })
-    maintenance = gateFirstFreshRead(coordinator, {
-      entered: readEntered,
-      release: readRelease,
-      events,
-      releaseMessage: "gated non-force thread read was not released",
-    })
+    maintenance = coordinator
 
     thread = desk_thread({
       deskRoot: root,
@@ -1096,7 +1050,7 @@ test("desk_thread keeps its SQLite handle inside non-force reindex maintenance a
     })
     await awaitBounded(
       readEntered.promise,
-      "desk_thread did not enter the shared fresh-read handle before non-force reindex",
+      "desk_thread did not enter shared freshness before non-force reindex",
     )
 
     reindex = desk_reindex({
@@ -1111,7 +1065,7 @@ test("desk_thread keeps its SQLite handle inside non-force reindex maintenance a
 
     assert.equal(observedReindex.state, "pending")
     assert.equal(events.includes("reindex:ensure"), false)
-    assert.equal(openHandles, 1)
+    assert.equal(openHandles, 0)
 
     readRelease.resolve()
     const threadResult = await awaitBounded(
@@ -1410,6 +1364,7 @@ test("default-wired same-root searches share one replaceable coordinator and roo
 test("default-wired desk_reindex coordinates exact non-force and force requests without legacy direct maintenance", async () => {
   const {
     __setMaintenanceCoordinatorForTests,
+    createMaintenanceCoordinator,
   } = await loadMaintenance()
   const root = await mkTempDeskRoot()
   const dbPath = path.join(root, ".state", "desk-index.sqlite")
@@ -1427,11 +1382,12 @@ test("default-wired desk_reindex coordinates exact non-force and force requests 
     snapshots: false,
     vectorPacks: false,
   }
-  const calls = []
-  const maintenance = completeMaintenance({
-    async runExplicitReindex(args) {
-      calls.push(args)
-      if (args.force) {
+  const ensureCalls = []
+  const resetCalls = []
+  const maintenance = createMaintenanceCoordinator({
+    async ensureIndex(deskRoot, options) {
+      ensureCalls.push({ deskRoot, options })
+      if (ensureCalls.length === 2) {
         return {
           built: true,
           reason: "missing",
@@ -1449,6 +1405,9 @@ test("default-wired desk_reindex coordinates exact non-force and force requests 
         }
       }
       return completeIndexResult({ chunks: 3, vectors: 3 })
+    },
+    async resetIndex(args) {
+      resetCalls.push(args)
     },
   })
   let restoreDefault
@@ -1479,28 +1438,17 @@ test("default-wired desk_reindex coordinates exact non-force and force requests 
       "default-wired force reindex did not use the shared coordinator",
     )
 
-    assert.deepEqual(calls, [
+    assert.deepEqual(ensureCalls, [
       {
         deskRoot: path.resolve(root),
-        force: false,
-        ensureOptions,
+        options: ensureOptions,
       },
       {
         deskRoot: path.resolve(root),
-        force: true,
-        ensureOptions,
+        options: ensureOptions,
       },
     ])
-    assert.deepEqual(Object.keys(calls[0]).sort(), [
-      "deskRoot",
-      "ensureOptions",
-      "force",
-    ])
-    assert.deepEqual(Object.keys(calls[1]).sort(), [
-      "deskRoot",
-      "ensureOptions",
-      "force",
-    ])
+    assert.deepEqual(resetCalls, [{ deskRoot: path.resolve(root) }])
     assert.equal("maintenance" in ensureOptions, false)
     assert.equal(nonForce.built, false)
     assert.equal(nonForce.reason, "fresh")
@@ -1540,7 +1488,6 @@ test("non-force desk_reindex cancels active repair before one locked full repair
   const repairCalls = []
   const resetCalls = []
   const cancelCalls = []
-  const explicitCalls = []
   const initialEmbed = { fetch: makeEmbedFetch() }
   const explicitEmbed = { fetch: makeEmbedFetch() }
   const competingEmbed = { fetch: makeEmbedFetch() }
@@ -1673,13 +1620,7 @@ test("non-force desk_reindex cancels active repair before one locked full repair
         return guardedWriter(options.deskRoot, "unexpected-reset", async () => {})
       },
     })
-    maintenance = {
-      ...coordinator,
-      async runExplicitReindex(args) {
-        explicitCalls.push(args)
-        return coordinator.runExplicitReindex(args)
-      },
-    }
+    maintenance = coordinator
 
     initialFreshness = coordinator.ensureSearchFreshness({
       deskRoot: root,
@@ -1782,13 +1723,6 @@ test("non-force desk_reindex cancels active repair before one locked full repair
       "cancelled background repair promise did not settle",
     )
 
-    assert.deepEqual(explicitCalls, [
-      {
-        deskRoot: path.resolve(root),
-        force: false,
-        ensureOptions: explicitEnsureOptions,
-      },
-    ])
     assert.deepEqual(cancelCalls, [
       path.resolve(root),
       path.resolve(root),
@@ -2112,19 +2046,14 @@ test("standalone search and force reindex reject split partial coordinators befo
 })
 
 test("maintenance integration preserves the exact 15 tools and current search/reindex result schemas", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
   const root = await mkTempDeskRoot()
-  const maintenance = completeMaintenance({
-    async runFreshRead({ deskRoot, read }) {
-      const db = openDb(deskRoot)
-      try {
-        return await read(db, completeIndexResult())
-      } finally {
-        closeDb(db)
-      }
-    },
-    async runExplicitReindex() {
+  const maintenance = createMaintenanceCoordinator({
+    async ensureIndex() {
       return completeIndexResult()
     },
+    openIndex: openDb,
+    closeIndex: closeDb,
   })
 
   try {

@@ -37,6 +37,7 @@ import { desk_status } from "./tools/status.js"
 import { doctorRuntime } from "./tools/doctor.js"
 import {
   createMaintenanceRuntimeBinding,
+  isMaintenanceCoordinator,
   maintenanceCoordinator,
   resolveRuntimeMaintenance,
 } from "./indexer/maintenance.js"
@@ -50,6 +51,7 @@ export {
   configureRuntimeArtifacts,
   createMaintenanceRuntimeBinding,
   ensureIndex,
+  isMaintenanceCoordinator,
   maintenanceCoordinator,
 }
 

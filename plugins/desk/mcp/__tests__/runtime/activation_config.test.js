@@ -632,6 +632,8 @@ test("entrypoint main resolves startup root before launching injected runtime se
       runtimeImporter: async ({ mcpRoot, runtimeCacheDir }) => {
         calls.push(["runtimeImporter", mcpRoot, runtimeCacheDir])
         return {
+          isMaintenanceCoordinator:
+            maintenanceModule.isMaintenanceCoordinator,
           maintenanceCoordinator: maintenanceModule.createMaintenanceCoordinator({
             ensureIndex: async () => ({ built: false, reason: "fresh" }),
           }),

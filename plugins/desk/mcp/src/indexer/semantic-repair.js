@@ -1,10 +1,12 @@
-import * as path from "node:path"
-
 import { closeDb, openDb } from "../db/init.js"
 import {
   embedChunkDetailed as defaultEmbedChunkDetailed,
   isChunkLocalEmbeddingFailure,
 } from "./embed.js"
+import {
+  resolveRootIdentity,
+  resolveRootPath,
+} from "./root-identity.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./spec.js"
 
 const DEFAULT_BATCH_CHUNKS = 100
@@ -46,8 +48,8 @@ export function createSemanticRepairCoordinator({
   const statuses = new Map()
 
   function status(deskRoot) {
-    const root = canonicalRoot(deskRoot)
-    const current = statuses.get(root) ?? repairStatus("idle")
+    const { key: rootKey } = resolveRootIdentity(deskRoot)
+    const current = statuses.get(rootKey) ?? repairStatus("idle")
     return repairStatusSnapshot(current)
   }
 
@@ -64,9 +66,9 @@ export function createSemanticRepairCoordinator({
     if (entry.settled) return
     entry.settled = true
     const storedStatus = repairStatusSnapshot(nextStatus)
-    statuses.set(entry.deskRoot, storedStatus)
-    if (inFlight.get(entry.deskRoot) === entry) {
-      inFlight.delete(entry.deskRoot)
+    statuses.set(entry.rootKey, storedStatus)
+    if (inFlight.get(entry.rootKey) === entry) {
+      inFlight.delete(entry.rootKey)
     }
     clearEntryTimer(entry)
     entry.resolve(repairStatusSnapshot(storedStatus))
@@ -144,8 +146,8 @@ export function createSemanticRepairCoordinator({
     batchMs = DEFAULT_BATCH_MS,
     ...repairOptions
   } = {}) {
-    const root = canonicalRoot(deskRoot)
-    const existing = inFlight.get(root)
+    const { path: root, key: rootKey } = resolveRootIdentity(deskRoot)
+    const existing = inFlight.get(rootKey)
     if (existing) return existing.promise
 
     let resolve
@@ -161,20 +163,21 @@ export function createSemanticRepairCoordinator({
       promise,
       repairOptions,
       resolve,
+      rootKey,
       settled: false,
       timer: undefined,
     }
-    inFlight.set(root, entry)
-    statuses.set(root, repairStatus("running"))
+    inFlight.set(rootKey, entry)
+    statuses.set(rootKey, repairStatus("running"))
     scheduleNext(entry)
     return promise
   }
 
   async function cancel(deskRoot) {
-    const root = canonicalRoot(deskRoot)
-    const entry = inFlight.get(root)
+    const { key: rootKey } = resolveRootIdentity(deskRoot)
+    const entry = inFlight.get(rootKey)
     if (!entry) {
-      return { ...status(root), cancelled: false }
+      return { ...status(deskRoot), cancelled: false }
     }
 
     entry.controller.abort()
@@ -203,7 +206,7 @@ export async function repairMissingVectorBatch({
   requirePositiveInteger(batchChunks, "batchChunks")
   requirePositiveInteger(batchMs, "batchMs")
   const ownsDb = !db
-  const database = db ?? openDb(canonicalRoot(deskRoot), { dbPath })
+  const database = db ?? openDb(resolveRootPath(deskRoot), { dbPath })
 
   try {
     const startedAt = now()
@@ -425,13 +428,6 @@ function countRepairableMissingVectors(db) {
     ACTIVE_EMBEDDING_SPEC.chunker_id,
     ACTIVE_EMBEDDING_SPEC.normalization_id,
   ).count
-}
-
-function canonicalRoot(deskRoot) {
-  if (typeof deskRoot !== "string" || deskRoot.trim() === "") {
-    throw new Error("deskRoot is required")
-  }
-  return path.resolve(deskRoot)
 }
 
 function compactError(error) {

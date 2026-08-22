@@ -7,7 +7,10 @@ import * as path from "node:path"
 
 import { __searchInternalsForTests, desk_search } from "../../src/tools/search.js"
 import { openDb, closeDb } from "../../src/db/init.js"
-import { createMaintenanceRuntimeBinding } from "../../src/indexer/maintenance.js"
+import {
+  createMaintenanceCoordinator,
+  createMaintenanceRuntimeBinding,
+} from "../../src/indexer/maintenance.js"
 import { ensureIndex } from "../../src/server-helpers.js"
 import {
   buildFixtureIndex,
@@ -60,17 +63,6 @@ async function awaitBounded(promise, message, timeoutMs = TEST_TIMEOUT_MS) {
     ])
   } finally {
     clearTimeout(timeout)
-  }
-}
-
-function completeMaintenance(overrides = {}) {
-  return {
-    async cancelBackgroundRepair() {},
-    async ensureSearchFreshness() {},
-    async runExplicitReindex() {},
-    async runFreshRead() {},
-    async runStartupEnsureIndex() {},
-    ...overrides,
   }
 }
 
@@ -375,42 +367,53 @@ test("desk_search — returns a partial result from a lexical-only index before 
   }
   let maintenanceCalls = 0
   let repairPromise = null
-  const maintenance = completeMaintenance({
-    async runFreshRead({ deskRoot, ensureOptions, read }) {
-      maintenanceCalls += 1
-      const index = await awaitBounded(
-        ensureIndex(deskRoot, {
-          ...ensureOptions,
-          skipEmbed: true,
-        }),
+  const maintenance = createMaintenanceCoordinator({
+    ensureIndex: async (deskRoot, ensureOptions) => {
+      if (ensureOptions.skipEmbed) maintenanceCalls += 1
+      return awaitBounded(
+        ensureIndex(deskRoot, ensureOptions),
         "direct search freshness maintenance did not settle",
       )
-      const db = openDb(deskRoot)
-      let result
-      try {
-        result = await read(db, index)
-      } finally {
-        closeDb(db)
-      }
-      if (!repairPromise && index.semantic?.missing_vectors > 0) {
-        repairPromise = (async () => {
-          repairStarted.resolve()
-          await awaitBounded(
-            repairRelease.promise,
-            "direct search background repair was not released",
-          )
-          return awaitBounded(
-            ensureIndex(deskRoot, {
-              embed: ensureOptions.embed,
-              snapshots: false,
-              vectorPacks: false,
-            }),
-            "direct search background repair did not settle",
-          )
-        })()
-      }
-      return result
     },
+    openIndex: openDb,
+    closeIndex: closeDb,
+    createRepairCoordinator: () => ({
+      start({ deskRoot, embed: repairEmbed }) {
+        if (!repairPromise) {
+          repairPromise = (async () => {
+            repairStarted.resolve()
+            await awaitBounded(
+              repairRelease.promise,
+              "direct search background repair was not released",
+            )
+            return awaitBounded(
+              ensureIndex(deskRoot, {
+                embed: repairEmbed,
+                snapshots: false,
+                vectorPacks: false,
+              }),
+              "direct search background repair did not settle",
+            )
+          })()
+        }
+        return repairPromise
+      },
+      async cancel() {
+        repairRelease.resolve()
+        await repairPromise
+        return {
+          state: "idle",
+          last_error: null,
+          cancelled: repairPromise !== null,
+        }
+      },
+      status() {
+        return {
+          state: repairPromise === null ? "idle" : "running",
+          last_error: null,
+        }
+      },
+    }),
   })
   const runtimeContext = createMaintenanceRuntimeBinding(maintenance)
 
