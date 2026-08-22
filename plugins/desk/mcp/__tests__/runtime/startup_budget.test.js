@@ -12,7 +12,11 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 
 import { main } from "../../index.js"
-import { createMaintenanceCoordinator } from "../../src/indexer/maintenance.js"
+import {
+  __setMaintenanceCoordinatorForTests,
+  createMaintenanceCoordinator,
+} from "../../src/indexer/maintenance.js"
+import { startServer as registerRuntimeServer } from "../../src/server.js"
 
 function makeRoot(prefix) {
   return mkdtempSync(path.join(tmpdir(), prefix))
@@ -376,28 +380,20 @@ test("startup stops waiting and aborts when bounded ensureIndex exceeds budget",
   }
 })
 
-test("startup skips an injected direct writer when shared maintenance is unavailable", async () => {
+test("startup enters truthful diagnostic mode without serving when shared maintenance is unavailable", async () => {
   const root = makeRoot("desk-startup-budget-no-maintenance-")
   writeStartupBudget(root, 0)
   const directEnsureRelease = deferred()
+  const diagnosticCalls = []
   let directEnsureCalls = 0
-  let directHandleOpen = false
-  let servedWhileOpen = false
   const runtimeServer = runtimeServerWithEnsureIndex({
     ensureIndex: async () => {
       directEnsureCalls += 1
-      directHandleOpen = true
       await directEnsureRelease.promise
-      directHandleOpen = false
       return { built: false, reason: "fresh" }
     },
     maintenanceCoordinator: null,
   })
-  const startServer = runtimeServer.startServer.bind(runtimeServer)
-  runtimeServer.startServer = async (args) => {
-    servedWhileOpen = directHandleOpen
-    return startServer(args)
-  }
 
   try {
     await main({
@@ -407,29 +403,165 @@ test("startup skips an injected direct writer when shared maintenance is unavail
       homeDir: root,
       mcpRoot: root,
       runtimeImporter: async () => runtimeServer,
+      diagnosticServerStarter: async (args) => {
+        diagnosticCalls.push(args)
+        return args.diagnostic
+      },
     })
 
-    assert.equal(
-      directEnsureCalls,
-      0,
-      "startup must not launch a writer outside the shared maintenance coordinator",
-    )
-    assert.equal(servedWhileOpen, false)
-    assert.deepEqual(runtimeServer.events, ["startServer"])
-    assert.deepEqual(runtimeServer.startCalls[0].statusContext.startup, {
-      ensure_index: {
-        built: false,
-        reason: "shared_maintenance_unavailable",
-        skipped: true,
-      },
-      duration_ms: 0,
-      budget_ms: 0,
-      fallback_mode: "maintenance_unavailable",
-      degraded: true,
-    })
+    assert.equal(directEnsureCalls, 0)
+    assert.equal(runtimeServer.startCalls.length, 0)
+    assert.deepEqual(runtimeServer.events, [])
+    assert.equal(diagnosticCalls.length, 1)
+    assert.equal(diagnosticCalls[0].diagnostic.reason, "maintenance_unavailable")
+    assert.match(diagnosticCalls[0].diagnostic.summary, /maintenance coordinator/i)
   } finally {
     directEnsureRelease.resolve()
     await flushAsyncWork()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("runtime-wide coordinator identity serializes timed-out startup with served force reindex", async () => {
+  const root = makeRoot("desk-startup-budget-runtime-identity-")
+  writeStartupBudget(root, 0)
+  const startupEntered = deferred()
+  const startupCleanupRelease = deferred()
+  const startupClosed = deferred()
+  const boundResetEntered = deferred()
+  const boundResetRelease = deferred()
+  const wrongResetEntered = deferred()
+  const wrongResetRelease = deferred()
+  const handlers = []
+  const events = []
+  let startupHandleOpen = false
+  let boundResetOverlappedStartup = false
+  let wrongResetOverlappedStartup = false
+  let forceCall
+  let startupCall
+
+  const ensureIndex = async (_deskRoot, opts = {}) => {
+    if (opts.startup) {
+      startupHandleOpen = true
+      events.push("startup-open")
+      startupEntered.resolve()
+      opts.signal.addEventListener("abort", () => {
+        events.push("startup-abort")
+      }, { once: true })
+      await startupCleanupRelease.promise
+      startupHandleOpen = false
+      events.push("startup-close")
+      startupClosed.resolve()
+      throw new Error("late startup cleanup rejection")
+    }
+    events.push("bound-reindex")
+    return { built: false, reason: "fresh" }
+  }
+  const boundMaintenance = createMaintenanceCoordinator({
+    ensureIndex,
+    resetIndex: async () => {
+      boundResetOverlappedStartup = startupHandleOpen
+      events.push("bound-reset")
+      boundResetEntered.resolve()
+      await boundResetRelease.promise
+    },
+  })
+  const wrongMaintenance = createMaintenanceCoordinator({
+    ensureIndex: async () => {
+      events.push("wrong-reindex")
+      return { built: false, reason: "fresh" }
+    },
+    resetIndex: async () => {
+      wrongResetOverlappedStartup = startupHandleOpen
+      events.push("wrong-reset")
+      wrongResetEntered.resolve()
+      await wrongResetRelease.promise
+    },
+  })
+  const restoreMaintenance =
+    __setMaintenanceCoordinatorForTests(wrongMaintenance)
+  const transport = { kind: "runtime-identity-test" }
+  const server = {
+    setRequestHandler(schema, handler) {
+      handlers.push({ schema, handler })
+    },
+    async connect(receivedTransport) {
+      assert.equal(receivedTransport, transport)
+    },
+  }
+  const runtimeServer = {
+    _deskRuntime: {
+      runtime_cache_dir: "/runtime-cache",
+      source_mirror_path: "/runtime-cache/source-mirror/hash",
+      target: `${process.platform}-${process.arch}-node-${process.versions.modules}`,
+      loaded_from_source_mirror: true,
+    },
+    ensureIndex,
+    maintenanceCoordinator: boundMaintenance,
+    async startServer(args) {
+      return registerRuntimeServer({
+        ...args,
+        server,
+        transport,
+      })
+    },
+  }
+
+  try {
+    startupCall = main({
+      argv: ["--root", root],
+      env: {},
+      cwd: root,
+      homeDir: root,
+      mcpRoot: root,
+      runtimeImporter: async () => runtimeServer,
+    })
+    await startupEntered.promise
+    await startupCall
+
+    assert.equal(handlers.length, 2)
+    forceCall = handlers[1].handler({
+      params: {
+        name: "desk_reindex",
+        arguments: { force: true },
+      },
+    })
+    const observedForce = observeSettlement(forceCall)
+    await flushAsyncWork()
+
+    assert.equal(
+      wrongResetEntered.settled,
+      false,
+      `served force reindex escaped to the module singleton and overlapped startup: ${JSON.stringify({
+        events,
+        wrongResetOverlappedStartup,
+      })}`,
+    )
+    assert.equal(boundResetEntered.settled, false)
+    assert.equal(observedForce.state, "pending")
+
+    startupCleanupRelease.resolve()
+    await startupClosed.promise
+    await boundResetEntered.promise
+    assert.equal(boundResetOverlappedStartup, false)
+    boundResetRelease.resolve()
+
+    const forceResult = await forceCall
+    assert.equal(forceResult.isError, undefined)
+    assert.equal(JSON.parse(forceResult.content[0].text).status, "ok")
+    assert.deepEqual(events, [
+      "startup-open",
+      "startup-abort",
+      "startup-close",
+      "bound-reset",
+      "bound-reindex",
+    ])
+  } finally {
+    restoreMaintenance()
+    startupCleanupRelease.resolve()
+    boundResetRelease.resolve()
+    wrongResetRelease.resolve()
+    await Promise.allSettled([startupCall, forceCall].filter(Boolean))
     rmSync(root, { recursive: true, force: true })
   }
 })

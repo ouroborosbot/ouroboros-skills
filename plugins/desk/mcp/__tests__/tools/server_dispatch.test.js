@@ -231,6 +231,61 @@ test("server.startServer registers list/call handlers and forwards status contex
   assert.match(missingParams.content[0].text, /unknown tool/)
 })
 
+test("server.startServer binds one runtime coordinator through dispatch without changing tool results", async () => {
+  const root = await mkTempDeskRoot()
+  const handlers = []
+  const maintenanceCalls = []
+  const runtimeContext = {
+    maintenanceCoordinator: {
+      async runExplicitReindex(args) {
+        maintenanceCalls.push(args)
+        return {
+          built: false,
+          reason: "fresh",
+          semantic: {
+            chunks_total: 0,
+            vectors_indexed: 0,
+            missing_vectors: 0,
+            embedding_available: true,
+          },
+        }
+      },
+    },
+  }
+  const server = {
+    setRequestHandler(schema, handler) {
+      handlers.push({ schema, handler })
+    },
+    async connect() {},
+  }
+
+  await startServer({
+    deskRoot: root,
+    runtimeContext,
+    server,
+    transport: { kind: "runtime-context-test" },
+  })
+  const called = await handlers[1].handler({
+    params: {
+      name: "desk_reindex",
+      arguments: {},
+    },
+  })
+  const body = JSON.parse(called.content[0].text)
+
+  assert.equal(called.isError, undefined)
+  assert.equal(body.status, "ok")
+  assert.equal(body.built, false)
+  assert.equal(body.reason, "fresh")
+  assert.deepEqual(maintenanceCalls, [
+    {
+      deskRoot: path.resolve(root),
+      force: false,
+      ensureOptions: {},
+    },
+  ])
+})
+
 test("server.startServer can construct its default transport", async () => {
   const root = await mkTempDeskRoot()
   const server = {

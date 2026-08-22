@@ -325,3 +325,35 @@ test("desk_reindex — omitted input defaults to non-force maintenance", async (
   assert.equal(res.semantic_available, undefined)
   assert.equal(res.semantic_diagnostic, undefined)
 })
+
+test("desk_reindex — rejects a mismatched per-tool maintenance override before either writer runs", async () => {
+  const root = await mkTempDeskRoot()
+  let runtimeWriterCalls = 0
+  let overrideWriterCalls = 0
+  const runtimeContext = {
+    maintenanceCoordinator: {
+      async runExplicitReindex() {
+        runtimeWriterCalls += 1
+        return { built: false, reason: "fresh" }
+      },
+    },
+  }
+  const mismatchedMaintenance = {
+    async runExplicitReindex() {
+      overrideWriterCalls += 1
+      return { built: false, reason: "fresh" }
+    },
+  }
+
+  await assert.rejects(
+    desk_reindex({
+      deskRoot: root,
+      input: { force: true },
+      runtimeContext,
+      opts: { maintenance: mismatchedMaintenance },
+    }),
+    /per-tool maintenance override/i,
+  )
+  assert.equal(runtimeWriterCalls, 0)
+  assert.equal(overrideWriterCalls, 0)
+})
