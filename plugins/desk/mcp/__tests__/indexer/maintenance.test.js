@@ -5,11 +5,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 
 import { createSemanticRepairCoordinator } from "../../src/indexer/semantic-repair.js"
-import {
-  physicalRootKey,
-  resolveRootIdentity,
-  resolveRootPath,
-} from "../../src/indexer/root-identity.js"
+import { createModeledCaseCollisionRootIdentity } from "../fixtures/root_identity_fixture.js"
 
 const maintenanceModuleUrl = new URL(
   "../../src/indexer/maintenance.js",
@@ -224,62 +220,6 @@ test("runtime maintenance binding brands one complete coordinator and rejects un
   assert.deepEqual(methodCalls, [])
 })
 
-test("physical root identity preserves unresolved and case-sensitive paths without collisions", () => {
-  const lexicalRoot = path.resolve("desk-root-identity")
-  const physicalRoot = path.join(
-    path.parse(lexicalRoot).root,
-    "Physical",
-    "DeskRoot",
-  )
-  const caseSensitiveRealpath = (candidate) => {
-    if (candidate === lexicalRoot) return physicalRoot
-    throw Object.assign(new Error("case alias missing"), { code: "ENOENT" })
-  }
-  const caseInsensitiveRealpath = () => physicalRoot
-  const unavailableRealpath = () => {
-    throw Object.assign(new Error("root unavailable"), { code: "EACCES" })
-  }
-
-  assert.deepEqual(
-    resolveRootIdentity(lexicalRoot, {
-      nativeRealpath: caseSensitiveRealpath,
-    }),
-    {
-      path: lexicalRoot,
-      key: `physical:${physicalRoot}`,
-    },
-  )
-  assert.deepEqual(
-    resolveRootIdentity(lexicalRoot, {
-      nativeRealpath: caseInsensitiveRealpath,
-    }),
-    {
-      path: lexicalRoot,
-      key: `physical:${physicalRoot.toLowerCase()}`,
-    },
-  )
-  assert.deepEqual(
-    resolveRootIdentity(lexicalRoot, {
-      nativeRealpath: unavailableRealpath,
-    }),
-    {
-      path: lexicalRoot,
-      key: `unresolved:${lexicalRoot}`,
-    },
-  )
-  assert.deepEqual(
-    resolveRootIdentity(path.parse(lexicalRoot).root, {
-      nativeRealpath: (candidate) => candidate,
-    }),
-    {
-      path: path.parse(lexicalRoot).root,
-      key: `physical:${path.parse(lexicalRoot).root}`,
-    },
-  )
-  assert.equal(resolveRootPath(lexicalRoot), lexicalRoot)
-  assert.equal(typeof physicalRootKey(lexicalRoot), "string")
-})
-
 function createManualScheduler() {
   const queued = []
   return {
@@ -309,6 +249,182 @@ function createManualScheduler() {
     },
   }
 }
+
+test("modeled case-only referent aliases share one queue while the distinct case variant stays concurrent", async () => {
+  const { createRootMaintenanceQueue } = await loadMaintenance()
+  const fixture = createModeledCaseCollisionRootIdentity()
+  const queue = createRootMaintenanceQueue({
+    resolveIdentity: fixture.resolveIdentity,
+  })
+  const rootAEntered = deferred()
+  const rootARelease = deferred()
+  const aliasAEntered = deferred()
+  const rootBEntered = deferred()
+  let rootA
+  let aliasA
+  let rootB
+
+  try {
+    rootA = queue.run(fixture.rootA, async () => {
+      rootAEntered.resolve()
+      await rootARelease.promise
+      return "root-a"
+    })
+    await awaitBounded(rootAEntered.promise, "modeled root A did not enter")
+    aliasA = queue.run(fixture.aliasA, async () => {
+      aliasAEntered.resolve()
+      return "alias-a"
+    })
+    rootB = queue.run(fixture.rootB, async () => {
+      rootBEntered.resolve()
+      return "root-b"
+    })
+
+    await awaitBounded(
+      rootBEntered.promise,
+      "distinct case-variant root B did not remain concurrent",
+    )
+    await flushAsyncWork("modeled root queue did not settle")
+    assert.equal(
+      aliasAEntered.settled,
+      false,
+      "case-only symlink alias entered while its referent held the queue",
+    )
+
+    rootARelease.resolve()
+    assert.deepEqual(
+      await awaitBounded(
+        Promise.all([rootA, aliasA, rootB]),
+        "modeled root queue operations did not settle",
+      ),
+      ["root-a", "alias-a", "root-b"],
+    )
+  } finally {
+    rootARelease.resolve()
+    await Promise.allSettled([rootA, aliasA, rootB].filter(Boolean))
+  }
+})
+
+test("modeled referent identity shares freshness generations for A and its alias without suppressing B", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const fixture = createModeledCaseCollisionRootIdentity()
+  const freshnessAEntered = deferred()
+  const freshnessARelease = deferred()
+  const reindexAEntered = deferred()
+  const freshnessBEntered = deferred()
+  const repairStarts = []
+  const repairCancels = []
+  let freshnessA
+  let freshnessB
+  let reindexA
+  const maintenance = createMaintenanceCoordinator({
+    resolveIdentity: fixture.resolveIdentity,
+    ensureIndex: async (_deskRoot, options) => {
+      if (options.marker === "freshness-a") {
+        freshnessAEntered.resolve()
+        await freshnessARelease.promise
+        return {
+          built: false,
+          reason: "fresh",
+          semantic: { missing_vectors: 1 },
+        }
+      }
+      if (options.marker === "freshness-b") {
+        freshnessBEntered.resolve()
+        return {
+          built: false,
+          reason: "fresh",
+          semantic: { missing_vectors: 1 },
+        }
+      }
+      assert.equal(options.marker, "reindex-a")
+      reindexAEntered.resolve()
+      return {
+        built: true,
+        reason: "semantic_missing",
+        semantic: { missing_vectors: 0 },
+      }
+    },
+    createRepairCoordinator: () => ({
+      start({ deskRoot }) {
+        repairStarts.push(deskRoot)
+        return Promise.resolve({
+          state: "complete",
+          last_error: null,
+        })
+      },
+      async cancel(deskRoot) {
+        repairCancels.push(deskRoot)
+        return {
+          state: "idle",
+          last_error: null,
+          cancelled: false,
+        }
+      },
+      status() {
+        return { state: "idle", last_error: null }
+      },
+    }),
+  })
+
+  try {
+    freshnessA = maintenance.ensureSearchFreshness({
+      deskRoot: fixture.rootA,
+      ensureOptions: { marker: "freshness-a" },
+    })
+    await awaitBounded(
+      freshnessAEntered.promise,
+      "modeled root A freshness did not enter",
+    )
+    reindexA = maintenance.runExplicitReindex({
+      deskRoot: fixture.aliasA,
+      ensureOptions: { marker: "reindex-a" },
+    })
+    freshnessB = maintenance.ensureSearchFreshness({
+      deskRoot: fixture.rootB,
+      ensureOptions: { marker: "freshness-b" },
+    })
+
+    await awaitBounded(
+      freshnessBEntered.promise,
+      "distinct root B freshness did not remain concurrent",
+    )
+    const resultB = await awaitBounded(
+      freshnessB,
+      "distinct root B freshness did not settle",
+    )
+    await resultB.repair
+    await flushAsyncWork("modeled reindex did not reach the root queue")
+    assert.equal(
+      reindexAEntered.settled,
+      false,
+      "case-only alias reindex bypassed the referent freshness lock",
+    )
+    assert.deepEqual(repairStarts, [fixture.rootB])
+
+    freshnessARelease.resolve()
+    const resultA = await awaitBounded(
+      freshnessA,
+      "modeled root A freshness did not settle",
+    )
+    await resultA.repair
+    await awaitBounded(reindexA, "modeled alias A reindex did not settle")
+
+    assert.equal(reindexAEntered.settled, true)
+    assert.deepEqual(
+      repairStarts,
+      [fixture.rootB],
+      "alias A reindex generation did not suppress stale root A repair",
+    )
+    assert.deepEqual(repairCancels, [
+      fixture.aliasA,
+      fixture.aliasA,
+    ])
+  } finally {
+    freshnessARelease.resolve()
+    await Promise.allSettled([freshnessA, freshnessB, reindexA].filter(Boolean))
+  }
+})
 
 async function makeRoot(prefix) {
   return fs.mkdtemp(path.join(tmpdir(), prefix))

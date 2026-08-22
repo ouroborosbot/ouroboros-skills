@@ -12,6 +12,7 @@ import {
   deterministicProcessRepairVector,
   deterministicRepairVector,
 } from "../fixtures/semantic_repair_test_vectors.js"
+import { createModeledCaseCollisionRootIdentity } from "../fixtures/root_identity_fixture.js"
 
 const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
 const repairProcessFixturePath = fileURLToPath(
@@ -437,6 +438,85 @@ test("semantic repair reuses state and cancellation across supported case aliase
     await assertRepairAliasesShareState({ alias, root })
   } finally {
     await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
+test("semantic repair shares modeled alias state while independently repairing and cancelling a distinct case variant", async () => {
+  const { createSemanticRepairCoordinator } = await loadSemanticRepair()
+  const fixture = createModeledCaseCollisionRootIdentity()
+  const scheduler = createManualScheduler()
+  const repairCalls = []
+  const coordinator = createSemanticRepairCoordinator({
+    resolveIdentity: fixture.resolveIdentity,
+    repairBatch: async ({ deskRoot }) => {
+      repairCalls.push(deskRoot)
+      return { processed_chunks: 1, remaining_chunks: 0 }
+    },
+    schedule: scheduler.schedule,
+    clearScheduled: scheduler.clearScheduled,
+  })
+  let rootA
+  let aliasA
+  let rootB
+
+  try {
+    rootA = coordinator.start({ deskRoot: fixture.rootA })
+    aliasA = coordinator.start({ deskRoot: fixture.aliasA })
+    rootB = coordinator.start({ deskRoot: fixture.rootB })
+
+    assert.strictEqual(
+      aliasA,
+      rootA,
+      "case-only symlink alias must reuse the referent repair promise",
+    )
+    assert.notStrictEqual(
+      rootB,
+      rootA,
+      "distinct case-variant root must own an independent repair promise",
+    )
+    assert.equal(scheduler.queued.length, 2)
+    assert.deepEqual(coordinator.status(fixture.aliasA), {
+      state: "running",
+      last_error: null,
+    })
+    assert.deepEqual(coordinator.status(fixture.rootB), {
+      state: "running",
+      last_error: null,
+    })
+
+    assert.deepEqual(await coordinator.cancel(fixture.aliasA), {
+      state: "idle",
+      last_error: null,
+      cancelled: true,
+    })
+    assert.deepEqual(await rootA, {
+      state: "idle",
+      last_error: null,
+    })
+    assert.deepEqual(
+      coordinator.status(fixture.rootB),
+      {
+        state: "running",
+        last_error: null,
+      },
+      "cancelling alias A must not cancel distinct root B",
+    )
+
+    await scheduler.runNext()
+    await scheduler.runNext()
+    assert.deepEqual(await rootB, {
+      state: "complete",
+      last_error: null,
+    })
+    assert.deepEqual(repairCalls, [fixture.rootB])
+  } finally {
+    await Promise.allSettled([
+      coordinator.cancel(fixture.rootA),
+      coordinator.cancel(fixture.aliasA),
+      coordinator.cancel(fixture.rootB),
+    ])
+    await scheduler.drain()
+    await Promise.allSettled([rootA, aliasA, rootB].filter(Boolean))
   }
 })
 
