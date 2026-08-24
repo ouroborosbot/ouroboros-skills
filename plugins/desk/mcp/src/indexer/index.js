@@ -73,7 +73,8 @@ const ACTIVE_CHUNK_FAILURE_JOIN = `
  *                     semantic_warnings: number }>}
  */
 export async function rebuildIndex(deskRoot, opts = {}) {
-  forgetFreshIndex(deskRoot)
+  const rootKey = opts.rootIdentity?.key ?? physicalRootKey(deskRoot)
+  forgetFreshIndex(rootKey)
   const ownsDb = !opts.db
   const db = opts.db ?? openDb(deskRoot, { dbPath: opts.dbPath })
 
@@ -225,7 +226,7 @@ export async function rebuildIndex(deskRoot, opts = {}) {
     setMeta(db, "embedding_model", opts.embed?.model ?? "nomic-embed-text")
     const checkpoint = db.pragma("wal_checkpoint(PASSIVE)")[0]
     if (statInventoryHash !== null) {
-      await rememberFreshIndex(deskRoot, db, {
+      await rememberFreshIndex(rootKey, db, {
         statInventoryHash,
         tombstoneLedgerFingerprint: tombstoneFilter.ledger_fingerprint,
         ignoreWal:
@@ -723,21 +724,26 @@ export function isIndexedContentCurrent(
   return isFtsIndexCurrent(db) && isRefsGraphCurrent(db, docs)
 }
 
-export async function isIndexFresh(deskRoot, db, { signal, tombstones } = {}) {
+export async function isIndexFresh(
+  deskRoot,
+  db,
+  { signal, tombstones, rootIdentity } = {},
+) {
+  const rootKey = rootIdentity?.key ?? physicalRootKey(deskRoot)
   if (!isDiscoveryGrammarCurrent(db)) {
-    forgetFreshIndex(deskRoot)
+    forgetFreshIndex(rootKey)
     return false
   }
   const row = db
     .prepare("SELECT value FROM meta WHERE key = 'last_indexed_at'")
     .get()
   if (!row) {
-    forgetFreshIndex(deskRoot)
+    forgetFreshIndex(rootKey)
     return false
   }
   const indexedMs = Date.parse(row.value)
   if (Number.isNaN(indexedMs)) {
-    forgetFreshIndex(deskRoot)
+    forgetFreshIndex(rootKey)
     return false
   }
   const tombstoneStatus = await tombstoneStatusForDocuments({
@@ -745,7 +751,7 @@ export async function isIndexFresh(deskRoot, db, { signal, tombstones } = {}) {
     docs: db.prepare("SELECT path, hash FROM docs").all(),
   })
   if (tombstoneStatus.tombstoned) {
-    forgetFreshIndex(deskRoot)
+    forgetFreshIndex(rootKey)
     return false
   }
   const tombstoneMetadataDrift =
@@ -758,7 +764,7 @@ export async function isIndexFresh(deskRoot, db, { signal, tombstones } = {}) {
   if (
     !tombstoneMetadataDrift &&
     !statInventoryMetadataDrift &&
-    await hasFreshIndexCache(deskRoot, db, {
+    await hasFreshIndexCache(rootKey, db, {
       statInventoryHash,
       tombstoneLedgerFingerprint: tombstoneStatus.ledger_fingerprint,
     })
@@ -778,16 +784,16 @@ export async function isIndexFresh(deskRoot, db, { signal, tombstones } = {}) {
   })
   const docs = tombstoneFilter.docs
   if (!await isIndexedDocumentTreeCurrent(deskRoot, db, { signal, docs })) {
-    forgetFreshIndex(deskRoot)
+    forgetFreshIndex(rootKey)
     return false
   }
   const fresh = isIndexedContentCurrent(db, docs, { signal })
   if (!fresh) {
-    forgetFreshIndex(deskRoot)
+    forgetFreshIndex(rootKey)
     return false
   }
   if (exactStatInventoryHash === null) {
-    forgetFreshIndex(deskRoot)
+    forgetFreshIndex(rootKey)
     return true
   }
   let ignoreWal = false
@@ -806,7 +812,7 @@ export async function isIndexFresh(deskRoot, db, { signal, tombstones } = {}) {
       checkpoint.busy === 0 &&
       checkpoint.log === checkpoint.checkpointed
   }
-  await rememberFreshIndex(deskRoot, db, {
+  await rememberFreshIndex(rootKey, db, {
     statInventoryHash: exactStatInventoryHash,
     tombstoneLedgerFingerprint: tombstoneStatus.ledger_fingerprint,
     ignoreWal,
@@ -886,12 +892,11 @@ function refreshPathDerivedMetadata(db, existingRow, doc) {
 }
 
 async function hasFreshIndexCache(
-  deskRoot,
+  rootKey,
   db,
   { statInventoryHash, tombstoneLedgerFingerprint },
 ) {
-  const key = physicalRootKey(deskRoot)
-  const cached = freshIndexCache.get(key)
+  const cached = freshIndexCache.get(rootKey)
   if (
     !cached ||
     cached.statInventoryHash !== statInventoryHash ||
@@ -901,14 +906,14 @@ async function hasFreshIndexCache(
   }
   const storageFingerprint = await indexStorageFingerprint(db.name)
   if (cached.storageFingerprint !== storageFingerprint) {
-    freshIndexCache.delete(key)
+    freshIndexCache.delete(rootKey)
     return false
   }
   return true
 }
 
 async function rememberFreshIndex(
-  deskRoot,
+  rootKey,
   db,
   {
     statInventoryHash,
@@ -916,15 +921,15 @@ async function rememberFreshIndex(
     ignoreWal = false,
   },
 ) {
-  freshIndexCache.set(physicalRootKey(deskRoot), {
+  freshIndexCache.set(rootKey, {
     statInventoryHash,
     tombstoneLedgerFingerprint,
     storageFingerprint: await indexStorageFingerprint(db.name, { ignoreWal }),
   })
 }
 
-function forgetFreshIndex(deskRoot) {
-  freshIndexCache.delete(physicalRootKey(deskRoot))
+function forgetFreshIndex(rootKey) {
+  freshIndexCache.delete(rootKey)
 }
 
 async function indexStorageFingerprint(dbPath, { ignoreWal = false } = {}) {

@@ -1,36 +1,58 @@
-import { realpathSync, statSync } from "node:fs"
+import { realpathSync } from "node:fs"
 import * as path from "node:path"
 
 export function resolveRootIdentity(deskRoot, {
   nativeRealpath = realpathSync.native,
-  nativeStat = statSync,
   normalizePath = path.normalize,
   resolvePath = path.resolve,
 } = {}) {
   const root = resolveRootPath(deskRoot, { resolvePath })
-  let physicalRoot
   try {
-    physicalRoot = nativeRealpath(root)
-  } catch {
-    return unresolvedRootIdentity(root)
-  }
-
-  try {
-    const stat = nativeStat(physicalRoot, { bigint: true })
-    const fileId = stableFileId(stat)
-    return {
+    return Object.freeze({
       path: root,
-      key: fileId === null
-        ? `physical-path:${normalizePath(physicalRoot)}`
-        : `physical-id:${fileId}`,
-    }
+      key: canonicalRootPath(root, {
+        nativeRealpath,
+        normalizePath,
+        resolvePath,
+      }),
+    })
   } catch {
-    return unresolvedRootIdentity(root)
+    throw rootIdentityError(
+      "desk_root_identity_unavailable",
+      "desk root identity is unavailable",
+    )
   }
 }
 
 export function physicalRootKey(deskRoot) {
   return resolveRootIdentity(deskRoot).key
+}
+
+export function validateRootIdentity(rootIdentity, {
+  nativeRealpath = realpathSync.native,
+  normalizePath = path.normalize,
+  resolvePath = path.resolve,
+} = {}) {
+  let currentKey
+  try {
+    currentKey = canonicalRootPath(rootIdentity.path, {
+      nativeRealpath,
+      normalizePath,
+      resolvePath,
+    })
+  } catch {
+    throw rootIdentityError(
+      "desk_root_identity_unavailable",
+      "desk root identity is unavailable",
+    )
+  }
+  if (currentKey !== rootIdentity.key) {
+    throw rootIdentityError(
+      "desk_root_identity_changed",
+      "desk root identity changed during maintenance",
+    )
+  }
+  return rootIdentity
 }
 
 export function resolveRootPath(deskRoot, {
@@ -42,26 +64,14 @@ export function resolveRootPath(deskRoot, {
   return resolvePath(deskRoot)
 }
 
-function unresolvedRootIdentity(root) {
-  return {
-    path: root,
-    key: `unresolved:${root}`,
-  }
+function canonicalRootPath(root, {
+  nativeRealpath,
+  normalizePath,
+  resolvePath,
+}) {
+  return normalizePath(resolvePath(nativeRealpath(root)))
 }
 
-function stableFileId(stat) {
-  const dev = stablePositiveInteger(stat?.dev)
-  const ino = stablePositiveInteger(stat?.ino)
-  return dev === null || ino === null
-    ? null
-    : `${dev}:${ino}`
-}
-
-function stablePositiveInteger(value) {
-  if (typeof value === "bigint") {
-    return value > 0n ? value.toString(10) : null
-  }
-  return Number.isSafeInteger(value) && value > 0
-    ? String(value)
-    : null
+function rootIdentityError(code, message) {
+  return Object.assign(new Error(message), { code })
 }

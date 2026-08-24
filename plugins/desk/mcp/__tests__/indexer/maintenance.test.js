@@ -464,8 +464,8 @@ test("alternating root resolution failure fails closed before writer, open, or r
   )
 
   failResolution = true
-  assert.throws(
-    () => maintenance.runExplicitReindex({
+  await assert.rejects(
+    maintenance.runExplicitReindex({
       deskRoot: root,
       force: true,
     }),
@@ -491,8 +491,8 @@ test("maintenance resolves once and threads one root lease through queued work",
       resolveCalls += 1
       return lease
     },
-    ensureIndex: async (_deskRoot, options) => {
-      seen.push(options.rootIdentity)
+    ensureIndex: async (_deskRoot, _options, rootIdentity) => {
+      seen.push(rootIdentity)
       return {
         built: false,
         reason: "fresh",
@@ -501,7 +501,7 @@ test("maintenance resolves once and threads one root lease through queued work",
     },
     createRepairCoordinator: () => ({
       start: async () => ({ state: "complete", last_error: null }),
-      async cancel(rootIdentity) {
+      async cancel(_deskRoot, rootIdentity) {
         seen.push(rootIdentity)
         return {
           state: "idle",
@@ -1413,6 +1413,10 @@ test("fresh read handles missing semantic metadata, default repair options, and 
     assert.deepEqual(repairOptions, [
       {
         deskRoot: path.resolve(root),
+        rootIdentity: {
+          path: path.resolve(root),
+          key: await fs.realpath(root),
+        },
         embed: {},
       },
     ])
@@ -1772,9 +1776,14 @@ test("active background repair holds the same-root lock while other roots stay i
       "batchMs",
       "deskRoot",
       "embed",
+      "rootIdentity",
       "signal",
     ])
     assert.equal(repairCalls[0].deskRoot, path.resolve(rootA))
+    assert.deepEqual(repairCalls[0].rootIdentity, {
+      path: path.resolve(rootA),
+      key: await fs.realpath(rootA),
+    })
     assert.equal(repairCalls[0].embed, initialEmbed)
     assert.equal(repairCalls[0].batchChunks, 100)
     assert.equal(repairCalls[0].batchMs, 5000)

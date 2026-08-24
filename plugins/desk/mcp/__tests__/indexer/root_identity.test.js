@@ -32,6 +32,11 @@ test("canonical realpaths merge an alias without merging a distinct case-variant
   )
   assert.equal(rootA.key, path.normalize(fixture.rootA))
   assert.equal(rootB.key, path.normalize(fixture.rootB))
+  assert.equal(
+    fixture.legacyFileIds.get(fixture.rootA),
+    fixture.legacyFileIds.get(fixture.rootB),
+    "the model must reproduce inode reuse across distinct referents",
+  )
   const freshnessByRoot = new Map([
     [rootA.key, { statInventoryHash: "root-a" }],
   ])
@@ -40,7 +45,6 @@ test("canonical realpaths merge an alias without merging a distinct case-variant
     freshnessByRoot.get(rootA.key),
   )
   assert.equal(freshnessByRoot.has(rootB.key), false)
-  assert.deepEqual(fixture.statCalls, [])
 })
 
 test("successful realpath ignores stat failure for direct and symlink aliases", () => {
@@ -88,7 +92,7 @@ test("canonical identity honors native path normalization without case folding",
 
   assert.deepEqual(identity, {
     path: windowsRoot,
-    key: "C:\\Desk\\Data\\",
+    key: "C:\\Desk\\Data",
   })
   assert.equal(
     resolveRootPath(path.join("Desk", "Root", "..", "Data")),

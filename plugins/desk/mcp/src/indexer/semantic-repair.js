@@ -6,6 +6,7 @@ import {
 import {
   resolveRootIdentity,
   resolveRootPath,
+  validateRootIdentity,
 } from "./root-identity.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./spec.js"
 
@@ -44,13 +45,36 @@ export function createSemanticRepairCoordinator({
   schedule = setTimeout,
   clearScheduled = clearTimeout,
   resolveIdentity = resolveRootIdentity,
+  validateIdentity = resolveIdentity === resolveRootIdentity
+    ? validateRootIdentity
+    : () => {},
 } = {}) {
   const inFlight = new Map()
   const statuses = new Map()
 
-  function status(deskRoot) {
-    const { key: rootKey } = resolveIdentity(deskRoot)
-    const current = statuses.get(rootKey) ?? repairStatus("idle")
+  function identityFor(deskRootOrIdentity) {
+    if (
+      deskRootOrIdentity !== null &&
+      typeof deskRootOrIdentity === "object" &&
+      typeof deskRootOrIdentity.path === "string" &&
+      typeof deskRootOrIdentity.key === "string"
+    ) {
+      return deskRootOrIdentity
+    }
+    return resolveIdentity(deskRootOrIdentity)
+  }
+
+  function status(deskRootOrIdentity) {
+    let rootIdentity
+    try {
+      rootIdentity = identityFor(deskRootOrIdentity)
+    } catch (error) {
+      if (error?.code === "desk_root_identity_unavailable") {
+        return repairStatus("idle")
+      }
+      throw error
+    }
+    const current = statuses.get(rootIdentity.key) ?? repairStatus("idle")
     return repairStatusSnapshot(current)
   }
 
@@ -102,9 +126,11 @@ export function createSemanticRepairCoordinator({
 
   async function runBatch(entry) {
     try {
+      validateIdentity(entry.rootIdentity)
       const result = await repairBatch({
         ...entry.repairOptions,
         deskRoot: entry.deskRoot,
+        rootIdentity: entry.rootIdentity,
         batchChunks: entry.batchChunks,
         batchMs: entry.batchMs,
         signal: entry.controller.signal,
@@ -143,11 +169,13 @@ export function createSemanticRepairCoordinator({
 
   function start({
     deskRoot,
+    rootIdentity: retainedIdentity,
     batchChunks = DEFAULT_BATCH_CHUNKS,
     batchMs = DEFAULT_BATCH_MS,
     ...repairOptions
   } = {}) {
-    const { path: root, key: rootKey } = resolveIdentity(deskRoot)
+    const rootIdentity = retainedIdentity ?? resolveIdentity(deskRoot)
+    const { path: root, key: rootKey } = rootIdentity
     const existing = inFlight.get(rootKey)
     if (existing) return existing.promise
 
@@ -164,6 +192,7 @@ export function createSemanticRepairCoordinator({
       promise,
       repairOptions,
       resolve,
+      rootIdentity,
       rootKey,
       settled: false,
       timer: undefined,
@@ -174,11 +203,24 @@ export function createSemanticRepairCoordinator({
     return promise
   }
 
-  async function cancel(deskRoot) {
-    const { key: rootKey } = resolveIdentity(deskRoot)
+  async function cancel(deskRootOrIdentity, retainedIdentity) {
+    let rootIdentity
+    try {
+      rootIdentity = retainedIdentity ?? identityFor(deskRootOrIdentity)
+    } catch (error) {
+      if (error?.code === "desk_root_identity_unavailable") {
+        return { ...repairStatus("idle"), cancelled: false }
+      }
+      throw error
+    }
+    const { key: rootKey } = rootIdentity
     const entry = inFlight.get(rootKey)
     if (!entry) {
-      return { ...status(deskRoot), cancelled: false }
+      const current = statuses.get(rootKey) ?? repairStatus("idle")
+      return {
+        ...repairStatusSnapshot(current),
+        cancelled: false,
+      }
     }
 
     entry.controller.abort()

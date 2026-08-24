@@ -74,13 +74,14 @@ let configuredArtifactPluginRoot = null
  * @param {object} [opts.embed] — forwarded to rebuildIndex (test injection).
  * @param {boolean} [opts.skipEmbed] — skip embedding when (re)building.
  * @param {object} [opts.vectorPacks] — forwarded to rebuildIndex.
+ * @param {{ path: string, key: string }} [rootIdentity] — retained maintenance lease for freshness-cache coordination.
  * @returns {Promise<{ built: boolean, reason: string,
  *                     summary?: import("./indexer/index.js").RebuildSummary,
  *                     semantic?: object }>}
  *   When `built=true`, `summary` carries the rebuildIndex counts. When
  *   `built=false` (fresh), `summary` is omitted — nothing was reindexed.
  */
-export async function ensureIndex(deskRoot, opts = {}) {
+export async function ensureIndex(deskRoot, opts = {}, rootIdentity) {
   const effectiveOpts = resolveEnsureIndexOptions(opts, { deskRoot })
   const dbPath = indexDbPath(deskRoot)
   let snapshot = null
@@ -105,6 +106,7 @@ export async function ensureIndex(deskRoot, opts = {}) {
     let repairMissing = false
     if (dbExisted) {
       const fresh = await isIndexFresh(deskRoot, db, {
+        rootIdentity,
         signal: effectiveOpts.signal,
         tombstones: effectiveOpts.tombstones,
       })
@@ -114,6 +116,7 @@ export async function ensureIndex(deskRoot, opts = {}) {
           db,
           effectiveOpts,
           semanticBefore,
+          rootIdentity,
         )
         if (repair) return withSnapshot(repair, snapshot)
         if (
@@ -139,6 +142,7 @@ export async function ensureIndex(deskRoot, opts = {}) {
       ...effectiveOpts,
       db,
       reembedMissing: repairMissing,
+      rootIdentity,
     })
     const semanticAfter = getSemanticCoverage(db)
     assignEmbeddingAvailability(semanticAfter, semanticBefore, summary)
@@ -443,13 +447,20 @@ async function shouldRepairMissingEmbeddings(db, opts, semantic) {
   return probe.available
 }
 
-async function maybeRepairMissingEmbeddings(deskRoot, db, opts, semantic) {
+async function maybeRepairMissingEmbeddings(
+  deskRoot,
+  db,
+  opts,
+  semantic,
+  rootIdentity,
+) {
   const shouldRepair = await shouldRepairMissingEmbeddings(db, opts, semantic)
   if (!shouldRepair) return null
   const summary = await rebuildIndex(deskRoot, {
     ...opts,
     db,
     reembedMissing: true,
+    rootIdentity,
   })
   const semanticAfter = assignEmbeddingAvailability(
     getSemanticCoverage(db),

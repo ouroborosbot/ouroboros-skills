@@ -1752,9 +1752,14 @@ test("non-force desk_reindex cancels active repair before one locked full repair
       "batchMs",
       "deskRoot",
       "embed",
+      "rootIdentity",
       "signal",
     ])
     assert.equal(repairCalls[0].deskRoot, path.resolve(root))
+    assert.deepEqual(repairCalls[0].rootIdentity, {
+      path: path.resolve(root),
+      key: await fs.realpath(root),
+    })
     assert.equal(repairCalls[0].embed, initialEmbed)
     assert.equal(repairCalls[0].signal instanceof AbortSignal, true)
     assert.equal(repairCalls[0].signal.aborted, true)

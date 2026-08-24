@@ -12,12 +12,11 @@ export function createModeledCaseCollisionRootIdentity() {
     [aliasA, rootA],
     [rootB, rootB],
   ])
-  const reusedStat = {
-    dev: 9007199254740993n,
-    ino: 18446744073709551617n,
-  }
+  const legacyFileIds = new Map([
+    [rootA, "9007199254740993:18446744073709551617"],
+    [rootB, "9007199254740993:18446744073709551617"],
+  ])
   const realpathCalls = []
-  const statCalls = []
 
   function nativeRealpath(candidate) {
     realpathCalls.push(candidate)
@@ -28,15 +27,9 @@ export function createModeledCaseCollisionRootIdentity() {
     })
   }
 
-  function nativeStat(candidate, options) {
-    statCalls.push({ candidate, options })
-    return reusedStat
-  }
-
   const resolveIdentity = (deskRoot) =>
     resolveRootIdentity(deskRoot, {
       nativeRealpath,
-      nativeStat,
     })
 
   function retargetAlias(target) {
@@ -53,14 +46,13 @@ export function createModeledCaseCollisionRootIdentity() {
 
   return {
     aliasA,
+    legacyFileIds,
     nativeRealpath,
-    nativeStat,
     realpathCalls,
     resolveIdentity,
     retargetAlias,
     rootA,
     rootB,
-    statCalls,
     validateIdentity,
   }
 }

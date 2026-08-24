@@ -29,6 +29,19 @@ async function loadSemanticRepair() {
   return import(semanticRepairModuleUrl.href)
 }
 
+function modeledRootIdentity(deskRoot) {
+  const root = path.resolve(deskRoot)
+  return Object.freeze({ path: root, key: root })
+}
+
+function createModeledRepairCoordinator(createCoordinator, options = {}) {
+  return createCoordinator({
+    resolveIdentity: modeledRootIdentity,
+    validateIdentity: () => {},
+    ...options,
+  })
+}
+
 async function makeRoot(prefix = "desk-semantic-repair-") {
   return fs.mkdtemp(path.join(tmpdir(), prefix))
 }
@@ -527,7 +540,7 @@ test("semantic repair retains one root lease through every scheduled batch", asy
   const lease = Object.freeze({ path: root, key: root })
   let resolveCalls = 0
   const repairLeases = []
-  const coordinator = createSemanticRepairCoordinator({
+  const coordinator = createModeledRepairCoordinator(createSemanticRepairCoordinator, {
     resolveIdentity: () => {
       resolveCalls += 1
       return lease
@@ -558,7 +571,7 @@ test("semantic repair cancellation resolves an idle root only once", async () =>
   const { createSemanticRepairCoordinator } = await loadSemanticRepair()
   const root = path.resolve("modeled-semantic-idle")
   let resolveCalls = 0
-  const coordinator = createSemanticRepairCoordinator({
+  const coordinator = createModeledRepairCoordinator(createSemanticRepairCoordinator, {
     resolveIdentity: () => {
       resolveCalls += 1
       return { path: root, key: root }
@@ -659,7 +672,7 @@ test("semantic repair reuses one in-flight promise per root and evicts it after 
   const { createSemanticRepairCoordinator } = await loadSemanticRepair()
   const scheduler = createManualScheduler()
   const calls = []
-  const coordinator = createSemanticRepairCoordinator({
+  const coordinator = createModeledRepairCoordinator(createSemanticRepairCoordinator, {
     repairBatch: async ({ deskRoot }) => {
       calls.push(deskRoot)
       return { processed_chunks: 1, remaining_chunks: 0 }
@@ -724,7 +737,7 @@ test("semantic repair reuses the same promise while a same-root batch is active"
   const batchGate = new Promise((resolve) => {
     releaseBatch = resolve
   })
-  const coordinator = createSemanticRepairCoordinator({
+  const coordinator = createModeledRepairCoordinator(createSemanticRepairCoordinator, {
     repairBatch: () => {
       calls += 1
       markStarted()
@@ -790,7 +803,7 @@ test("semantic repair runs different roots independently", async () => {
       return [root, { promise, release }]
     }),
   )
-  const coordinator = createSemanticRepairCoordinator({
+  const coordinator = createModeledRepairCoordinator(createSemanticRepairCoordinator, {
     repairBatch: ({ deskRoot, batchChunks, batchMs }) => {
       started.push({ deskRoot, batchChunks, batchMs })
       if (started.length === 2) markBothStarted()
@@ -843,7 +856,7 @@ test("semantic repair schedules every batch at zero delay on an unref'ed timer",
   const scheduler = createManualScheduler()
   const batches = []
   const root = path.resolve("/tmp/desk-root")
-  const coordinator = createSemanticRepairCoordinator({
+  const coordinator = createModeledRepairCoordinator(createSemanticRepairCoordinator, {
     repairBatch: async ({ deskRoot, batchChunks, batchMs }) => {
       batches.push({ deskRoot, batchChunks, batchMs })
       return {
@@ -889,7 +902,7 @@ test("semantic repair compacts synchronous scheduling failures and preserves sta
   const root = path.resolve("desk-root-schedule-failure")
   const error = new Error("private scheduler detail")
   error.reason = "embedding_service_unavailable"
-  const coordinator = createSemanticRepairCoordinator({
+  const coordinator = createModeledRepairCoordinator(createSemanticRepairCoordinator, {
     schedule: () => {
       throw error
     },
@@ -917,7 +930,7 @@ test("semantic repair isolates resolved terminal results from stored status", as
   const root = path.resolve("desk-root-result-isolation")
   const error = new Error("private scheduler detail")
   error.reason = "embedding_service_unavailable"
-  const coordinator = createSemanticRepairCoordinator({
+  const coordinator = createModeledRepairCoordinator(createSemanticRepairCoordinator, {
     schedule: () => {
       throw error
     },
@@ -961,7 +974,7 @@ test("semantic repair clears a registered timer when unref throws and permits re
     handles.push(handle)
     return handle
   }
-  const coordinator = createSemanticRepairCoordinator({
+  const coordinator = createModeledRepairCoordinator(createSemanticRepairCoordinator, {
     repairBatch: async () => {
       repairCalls += 1
       return { processed_chunks: 1, remaining_chunks: 0 }
@@ -1030,7 +1043,7 @@ test("semantic repair finish stays terminal when unref and timer clearing throw"
     handles.push(handle)
     return handle
   }
-  const coordinator = createSemanticRepairCoordinator({
+  const coordinator = createModeledRepairCoordinator(createSemanticRepairCoordinator, {
     repairBatch: async () => {
       repairCalls += 1
       return { processed_chunks: 1, remaining_chunks: 0 }
@@ -1117,7 +1130,7 @@ test("semantic repair preserves the active batch when a custom scheduler fires a
     }
     return handle
   }
-  const coordinator = createSemanticRepairCoordinator({
+  const coordinator = createModeledRepairCoordinator(createSemanticRepairCoordinator, {
     repairBatch: async () => {
       calls += 1
       return {
@@ -1167,7 +1180,7 @@ test("semantic repair fails after a custom batch makes no progress", async () =>
   const { createSemanticRepairCoordinator } = await loadSemanticRepair()
   const scheduler = createManualScheduler()
   let calls = 0
-  const coordinator = createSemanticRepairCoordinator({
+  const coordinator = createModeledRepairCoordinator(createSemanticRepairCoordinator, {
     repairBatch: async () => {
       calls += 1
       return { processed_chunks: 0, remaining_chunks: 2 }
@@ -1201,7 +1214,7 @@ test("semantic repair catches background rejection, records a compact failure, a
   const error = new Error("embedding endpoint unavailable")
   error.code = "embedding_service_unavailable"
   const calls = []
-  const coordinator = createSemanticRepairCoordinator({
+  const coordinator = createModeledRepairCoordinator(createSemanticRepairCoordinator, {
     repairBatch: async ({ deskRoot }) => {
       calls.push(deskRoot)
       if (calls.length === 1) {
@@ -1257,7 +1270,7 @@ test("semantic repair redacts private error details from status", async () => {
   const error = new Error(`failed to embed ${privatePath}`)
   error.code = "document_embedding_failed"
   error.stack = `Error: failed to embed ${privatePath}\n    at ${privatePath}:42:7`
-  const coordinator = createSemanticRepairCoordinator({
+  const coordinator = createModeledRepairCoordinator(createSemanticRepairCoordinator, {
     repairBatch: async () => {
       throw error
     },
@@ -1291,7 +1304,7 @@ test("semantic repair treats an active custom batch rejection after abort as can
   const started = new Promise((resolve) => {
     markStarted = resolve
   })
-  const coordinator = createSemanticRepairCoordinator({
+  const coordinator = createModeledRepairCoordinator(createSemanticRepairCoordinator, {
     repairBatch: ({ signal }) => new Promise((_resolve, reject) => {
       markStarted()
       signal.addEventListener("abort", () => {
@@ -1354,7 +1367,7 @@ test("semantic repair cancellation settles across the reschedule cleanup boundar
     }
     return handle
   }
-  coordinator = createSemanticRepairCoordinator({
+  coordinator = createModeledRepairCoordinator(createSemanticRepairCoordinator, {
     repairBatch: async () => {
       calls += 1
       return { processed_chunks: 1, remaining_chunks: 1 }
@@ -2004,7 +2017,7 @@ test("semantic repair cancellation clears a pending batch without running repair
   const unexpectedRepair = new Promise((resolve) => {
     releaseUnexpectedRepair = resolve
   })
-  const coordinator = createSemanticRepairCoordinator({
+  const coordinator = createModeledRepairCoordinator(createSemanticRepairCoordinator, {
     repairBatch: () => {
       calls += 1
       return unexpectedRepair
