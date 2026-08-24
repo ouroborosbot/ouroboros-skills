@@ -237,7 +237,14 @@ export function createSemanticRepairCoordinator({
     return { ...repairStatus("idle"), cancelled: true }
   }
 
-  return { cancel, start, status }
+  function markComplete(deskRootOrIdentity, retainedIdentity) {
+    const rootIdentity = retainedIdentity ?? identityFor(deskRootOrIdentity)
+    const complete = repairStatus("complete")
+    statuses.set(rootIdentity.key, complete)
+    return repairStatusSnapshot(complete)
+  }
+
+  return { cancel, markComplete, start, status }
 }
 
 export async function repairMissingVectorBatch({

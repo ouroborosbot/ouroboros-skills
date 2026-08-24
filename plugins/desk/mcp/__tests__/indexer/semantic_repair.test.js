@@ -435,6 +435,36 @@ test("semantic repair status accepts retained leases and rejects malformed ident
   }
 })
 
+test("semantic repair markComplete clears a resolved root's failed terminal state", async () => {
+  const { createSemanticRepairCoordinator } = await loadSemanticRepair()
+  const root = path.resolve("modeled-semantic-repair-complete")
+  const scheduler = createManualScheduler()
+  const coordinator = createModeledRepairCoordinator(
+    createSemanticRepairCoordinator,
+    {
+      repairBatch: async () => {
+        const error = new Error("private repair failure")
+        error.code = "embedding_service_unavailable"
+        throw error
+      },
+      schedule: scheduler.schedule,
+      clearScheduled: scheduler.clearScheduled,
+    },
+  )
+  const repair = coordinator.start({ deskRoot: root })
+  await scheduler.runNext()
+  assert.equal((await repair).state, "failed")
+
+  assert.deepEqual(coordinator.markComplete(root), {
+    state: "complete",
+    last_error: null,
+  })
+  assert.deepEqual(coordinator.status(root), {
+    state: "complete",
+    last_error: null,
+  })
+})
+
 test("semantic repair status projection allowlists state and error fields", async () => {
   const { projectSemanticRepairStatus } = await loadSemanticRepair()
 

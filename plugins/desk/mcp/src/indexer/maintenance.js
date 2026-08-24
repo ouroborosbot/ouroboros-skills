@@ -118,10 +118,7 @@ export function createMaintenanceCoordinator({
     if (readGeneration !== currentReindexGeneration(rootIdentity.key)) {
       return Promise.resolve({ ...COMPLETE_REPAIR })
     }
-    const repairableMissing =
-      index?.semantic?.repairable_missing_vectors ??
-      index?.semantic?.missing_vectors ??
-      0
+    const repairableMissing = repairableMissingVectors(index)
     return repairableMissing > 0
       ? repairCoordinator.start({
           deskRoot: rootIdentity.key,
@@ -215,7 +212,11 @@ export function createMaintenanceCoordinator({
         await resetIndex({ deskRoot: root })
         validateIdentity(rootIdentity)
       }
-      return ensureIndex(root, ensureOptions, rootIdentity)
+      const index = await ensureIndex(root, ensureOptions, rootIdentity)
+      if (repairableMissingVectors(index) === 0) {
+        repairCoordinator.markComplete?.(root, rootIdentity)
+      }
+      return index
     })
   }
 
@@ -250,6 +251,11 @@ export function createMaintenanceCoordinator({
   })
   maintenanceCoordinators.add(coordinator)
   return coordinator
+}
+
+function repairableMissingVectors(index) {
+  return index?.semantic?.repairable_missing_vectors ??
+    index?.semantic?.missing_vectors
 }
 
 function resetIndexFiles({ deskRoot }) {
