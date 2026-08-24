@@ -523,6 +523,269 @@ test("maintenance resolves once and threads one root lease through queued work",
   assert.deepEqual(seen, [lease, lease, lease])
 })
 
+async function assertRetargetedReindexFailsClosed({ force }) {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const fixture = createModeledCaseCollisionRootIdentity()
+  const secondCancelEntered = deferred()
+  const secondCancelRelease = deferred()
+  const laterAEntered = deferred()
+  const laterARelease = deferred()
+  const laterBEntered = deferred()
+  const staleEnsureTargets = []
+  const staleResetTargets = []
+  let cancelCalls = 0
+  let reindex
+  let laterA
+  let laterB
+
+  const maintenance = createMaintenanceCoordinator({
+    resolveIdentity: fixture.resolveIdentity,
+    validateIdentity: fixture.validateIdentity,
+    ensureIndex: async (deskRoot, options) => {
+      if (options.marker === "stale") {
+        staleEnsureTargets.push(fixture.nativeRealpath(deskRoot))
+      } else if (options.marker === "later-a") {
+        laterAEntered.resolve()
+        await laterARelease.promise
+      } else if (options.marker === "later-b") {
+        laterBEntered.resolve()
+      }
+      return { built: false, reason: "fresh" }
+    },
+    resetIndex: async ({ deskRoot }) => {
+      staleResetTargets.push(fixture.nativeRealpath(deskRoot))
+    },
+    createRepairCoordinator: () => ({
+      start: async () => ({ state: "complete", last_error: null }),
+      async cancel() {
+        cancelCalls += 1
+        if (cancelCalls === 2) {
+          secondCancelEntered.resolve()
+          await secondCancelRelease.promise
+        }
+        return {
+          state: "idle",
+          last_error: null,
+          cancelled: false,
+        }
+      },
+      status: () => ({ state: "idle", last_error: null }),
+    }),
+  })
+
+  try {
+    reindex = maintenance.runExplicitReindex({
+      deskRoot: fixture.aliasA,
+      force,
+      ensureOptions: { marker: "stale" },
+    })
+    await awaitBounded(
+      secondCancelEntered.promise,
+      "retained reindex did not pass queue validation before cancellation",
+    )
+    fixture.retargetAlias(fixture.rootB)
+    secondCancelRelease.resolve()
+
+    await assert.rejects(
+      reindex,
+      (error) => {
+        assert.equal(error.code, "desk_root_identity_changed")
+        return true
+      },
+    )
+    assert.deepEqual(staleResetTargets, [])
+    assert.deepEqual(staleEnsureTargets, [])
+
+    laterA = maintenance.runExplicitReindex({
+      deskRoot: fixture.rootA,
+      ensureOptions: { marker: "later-a" },
+    })
+    await awaitBounded(
+      laterAEntered.promise,
+      "later root A reindex did not enter",
+    )
+    laterB = maintenance.runExplicitReindex({
+      deskRoot: fixture.rootB,
+      ensureOptions: { marker: "later-b" },
+    })
+    await awaitBounded(
+      laterBEntered.promise,
+      "root B reindex did not remain independent of root A",
+    )
+    assert.deepEqual(
+      await awaitBounded(laterB, "later root B reindex did not settle"),
+      { built: false, reason: "fresh" },
+    )
+    laterARelease.resolve()
+    assert.deepEqual(
+      await awaitBounded(laterA, "later root A reindex did not settle"),
+      { built: false, reason: "fresh" },
+    )
+  } finally {
+    secondCancelRelease.resolve()
+    laterARelease.resolve()
+    await Promise.allSettled([reindex, laterA, laterB].filter(Boolean))
+  }
+}
+
+test("force reindex rejects alias retarget after cancellation before reset or full ensure", async () => {
+  await assertRetargetedReindexFailsClosed({ force: true })
+})
+
+test("non-force reindex rejects alias retarget after cancellation before full ensure", async () => {
+  await assertRetargetedReindexFailsClosed({ force: false })
+})
+
+test("fresh read rejects alias retarget after freshness ensure before database open or query", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const fixture = createModeledCaseCollisionRootIdentity()
+  const ensureEntered = deferred()
+  const ensureRelease = deferred()
+  const ensureTargets = []
+  const openTargets = []
+  let readCalls = 0
+  let freshRead
+
+  const maintenance = createMaintenanceCoordinator({
+    resolveIdentity: fixture.resolveIdentity,
+    validateIdentity: fixture.validateIdentity,
+    ensureIndex: async (deskRoot, options) => {
+      ensureTargets.push(fixture.nativeRealpath(deskRoot))
+      if (options.marker === "stale") {
+        ensureEntered.resolve()
+        await ensureRelease.promise
+      }
+      return {
+        built: false,
+        reason: "fresh",
+        semantic: { missing_vectors: 0 },
+      }
+    },
+    openIndex: (deskRoot) => {
+      openTargets.push(fixture.nativeRealpath(deskRoot))
+      return { open: true }
+    },
+    closeIndex: (db) => {
+      db.open = false
+    },
+  })
+
+  try {
+    freshRead = maintenance.runFreshRead({
+      deskRoot: fixture.aliasA,
+      ensureOptions: { marker: "stale" },
+      read() {
+        readCalls += 1
+        return "stale-read"
+      },
+    })
+    await awaitBounded(
+      ensureEntered.promise,
+      "fresh read did not enter freshness ensure",
+    )
+    fixture.retargetAlias(fixture.rootB)
+    ensureRelease.resolve()
+
+    await assert.rejects(
+      freshRead,
+      (error) => {
+        assert.equal(error.code, "desk_root_identity_changed")
+        return true
+      },
+    )
+    assert.deepEqual(ensureTargets, [fixture.rootA])
+    assert.deepEqual(openTargets, [])
+    assert.equal(readCalls, 0)
+
+    assert.equal(
+      await maintenance.runFreshRead({
+        deskRoot: fixture.rootA,
+        read: () => "later-a",
+      }),
+      "later-a",
+    )
+    assert.equal(
+      await maintenance.runFreshRead({
+        deskRoot: fixture.rootB,
+        read: () => "later-b",
+      }),
+      "later-b",
+    )
+    assert.deepEqual(openTargets, [fixture.rootA, fixture.rootB])
+  } finally {
+    ensureRelease.resolve()
+    await Promise.allSettled([freshRead].filter(Boolean))
+  }
+})
+
+test("scheduled repair batch keeps canonical root I/O after its retained alias retargets", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const fixture = createModeledCaseCollisionRootIdentity()
+  const scheduler = createManualScheduler()
+  const repairEntered = deferred()
+  const repairRelease = deferred()
+  const repairTargets = []
+  let initial
+  let scheduled
+
+  const maintenance = createMaintenanceCoordinator({
+    resolveIdentity: fixture.resolveIdentity,
+    validateIdentity: fixture.validateIdentity,
+    ensureIndex: async () => ({
+      built: false,
+      reason: "fresh",
+      semantic: { missing_vectors: 1 },
+    }),
+    repairBatch: async ({ deskRoot }) => {
+      repairEntered.resolve()
+      await repairRelease.promise
+      repairTargets.push(fixture.nativeRealpath(deskRoot))
+      return {
+        processed_chunks: 1,
+        vectors_indexed: 1,
+        remaining_chunks: 0,
+        stopped_by: "complete",
+      }
+    },
+    createRepairCoordinator: (options) =>
+      createSemanticRepairCoordinator({
+        ...options,
+        schedule: scheduler.schedule,
+        clearScheduled: scheduler.clear,
+      }),
+  })
+
+  try {
+    initial = await maintenance.ensureSearchFreshness({
+      deskRoot: fixture.aliasA,
+    })
+    scheduled = scheduler.runNext()
+    await awaitBounded(
+      repairEntered.promise,
+      "scheduled retained repair batch did not enter",
+    )
+    fixture.retargetAlias(fixture.rootB)
+    repairRelease.resolve()
+    await awaitBounded(scheduled, "scheduled retained repair batch did not settle")
+    assert.deepEqual(
+      await awaitBounded(initial.repair, "retained repair promise did not settle"),
+      { state: "complete", last_error: null },
+    )
+    assert.deepEqual(repairTargets, [fixture.rootA])
+
+    const laterB = await maintenance.ensureSearchFreshness({
+      deskRoot: fixture.rootB,
+    })
+    assert.deepEqual(
+      await awaitBounded(laterB.repair, "later root B repair did not settle"),
+      { state: "complete", last_error: null },
+    )
+  } finally {
+    repairRelease.resolve()
+    await Promise.allSettled([scheduled, initial?.repair].filter(Boolean))
+  }
+})
+
 test("modeled referent identity shares freshness generations for A and its alias without suppressing B", async () => {
   const { createMaintenanceCoordinator } = await loadMaintenance()
   const fixture = createModeledCaseCollisionRootIdentity()

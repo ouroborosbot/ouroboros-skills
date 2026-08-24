@@ -5,7 +5,9 @@ import { strict as assert } from "node:assert"
 import {
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
@@ -831,6 +833,98 @@ test("timed-out startup retains same-root maintenance until aborted cleanup clos
     await Promise.allSettled([forceReindex, nonForceReindex, freshRead].filter(Boolean))
     rmSync(root, { recursive: true, force: true })
     rmSync(otherRoot, { recursive: true, force: true })
+  }
+})
+
+test("timed-out startup keeps canonical cleanup I/O while later roots remain independent", async (t) => {
+  const rootA = makeRoot("desk-startup-retained-root-a-")
+  const rootB = makeRoot("desk-startup-retained-root-b-")
+  const aliasContainer = makeRoot("desk-startup-retained-alias-")
+  const alias = path.join(aliasContainer, "root")
+  const startupEntered = deferred()
+  const startupCleanupRelease = deferred()
+  const laterAEntered = deferred()
+  const laterARelease = deferred()
+  const laterBEntered = deferred()
+  const startupTargets = []
+  let laterA
+  let laterB
+
+  try {
+    try {
+      symlinkSync(rootA, alias, process.platform === "win32" ? "junction" : "dir")
+    } catch (error) {
+      if (["EPERM", "EACCES", "ENOTSUP"].includes(error?.code)) {
+        t.skip(`symlink aliases unavailable: ${error.code}`)
+        return
+      }
+      throw error
+    }
+
+    const ensureIndex = async (deskRoot, options) => {
+      if (options.startup) {
+        startupTargets.push(realpathSync(deskRoot))
+        startupEntered.resolve()
+        await startupCleanupRelease.promise
+        startupTargets.push(realpathSync(deskRoot))
+      } else if (options.marker === "later-a") {
+        laterAEntered.resolve()
+        await laterARelease.promise
+      } else if (options.marker === "later-b") {
+        laterBEntered.resolve()
+      }
+      return { built: false, reason: "fresh" }
+    }
+    const maintenance = createMaintenanceCoordinator({ ensureIndex })
+    const runtimeServer = runtimeServerWithEnsureIndex({
+      ensureIndex,
+      maintenanceCoordinator: maintenance,
+    })
+
+    const startup = main({
+      argv: ["--root", alias],
+      env: {},
+      cwd: rootA,
+      homeDir: rootA,
+      mcpRoot: rootA,
+      runtimeImporter: async () => runtimeServer,
+    })
+    await startupEntered.promise
+    await startup
+
+    laterA = maintenance.runExplicitReindex({
+      deskRoot: rootA,
+      ensureOptions: { marker: "later-a" },
+    })
+    rmSync(alias)
+    symlinkSync(rootB, alias, process.platform === "win32" ? "junction" : "dir")
+    laterB = maintenance.runExplicitReindex({
+      deskRoot: rootB,
+      ensureOptions: { marker: "later-b" },
+    })
+    await laterBEntered.promise
+    assert.deepEqual(await laterB, { built: false, reason: "fresh" })
+    assert.equal(
+      laterAEntered.settled,
+      false,
+      "later root A operation overlapped timed-out startup cleanup",
+    )
+
+    startupCleanupRelease.resolve()
+    await laterAEntered.promise
+    laterARelease.resolve()
+    assert.deepEqual(await laterA, { built: false, reason: "fresh" })
+    assert.deepEqual(startupTargets, [
+      realpathSync(rootA),
+      realpathSync(rootA),
+    ])
+  } finally {
+    startupCleanupRelease.resolve()
+    laterARelease.resolve()
+    await Promise.allSettled([laterA, laterB].filter(Boolean))
+    rmSync(aliasContainer, { recursive: true, force: true })
+    rmSync(rootA, { recursive: true, force: true })
+    rmSync(rootB, { recursive: true, force: true })
   }
 })
 
