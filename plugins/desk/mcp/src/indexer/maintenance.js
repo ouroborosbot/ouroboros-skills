@@ -74,7 +74,11 @@ export function createMaintenanceCoordinator({
   const reindexGenerations = new Map()
   const repairCoordinator = createRepairCoordinator({
     repairBatch: (options) =>
-      rootQueue.run(options.rootIdentity, () => repairBatch(options)),
+      rootQueue.run(options.rootIdentity, () =>
+        repairBatch({
+          ...options,
+          deskRoot: options.rootIdentity.key,
+        })),
     resolveIdentity,
     validateIdentity,
   })
@@ -98,7 +102,7 @@ export function createMaintenanceCoordinator({
       0
     return repairableMissing > 0
       ? repairCoordinator.start({
-          deskRoot: rootIdentity.path,
+          deskRoot: rootIdentity.key,
           rootIdentity,
           embed: ensureOptions.embed ?? {},
         })
@@ -112,7 +116,7 @@ export function createMaintenanceCoordinator({
     const rootIdentity = resolveIdentity(deskRoot)
     const readGeneration = currentReindexGeneration(rootIdentity.key)
     return rootQueue.run(rootIdentity, async () => {
-      const root = rootIdentity.path
+      const root = rootIdentity.key
       const index = await ensureIndex(root, {
         ...ensureOptions,
         skipEmbed: true,
@@ -133,7 +137,7 @@ export function createMaintenanceCoordinator({
   } = {}) {
     const rootIdentity = resolveIdentity(deskRoot)
     return rootQueue.run(rootIdentity, () =>
-      ensureIndex(rootIdentity.path, ensureOptions, rootIdentity))
+      ensureIndex(rootIdentity.key, ensureOptions, rootIdentity))
   }
 
   function runFreshRead({
@@ -144,11 +148,12 @@ export function createMaintenanceCoordinator({
     const rootIdentity = resolveIdentity(deskRoot)
     const readGeneration = currentReindexGeneration(rootIdentity.key)
     return rootQueue.run(rootIdentity, async () => {
-      const root = rootIdentity.path
+      const root = rootIdentity.key
       const index = await ensureIndex(root, {
         ...ensureOptions,
         skipEmbed: true,
       }, rootIdentity)
+      validateIdentity(rootIdentity)
       const db = openIndex(root)
       let result
       try {
@@ -172,7 +177,8 @@ export function createMaintenanceCoordinator({
     ensureOptions = {},
   } = {}) {
     const rootIdentity = resolveIdentity(deskRoot)
-    const { path: root, key: rootKey } = rootIdentity
+    const root = rootIdentity.key
+    const rootKey = rootIdentity.key
     reindexGenerations.set(
       rootKey,
       currentReindexGeneration(rootKey) + 1,
@@ -181,14 +187,18 @@ export function createMaintenanceCoordinator({
     return rootQueue.run(rootIdentity, async () => {
       await initialCancellation
       await repairCoordinator.cancel(root, rootIdentity)
-      if (force) await resetIndex({ deskRoot: root })
+      validateIdentity(rootIdentity)
+      if (force) {
+        await resetIndex({ deskRoot: root })
+        validateIdentity(rootIdentity)
+      }
       return ensureIndex(root, ensureOptions, rootIdentity)
     })
   }
 
   function cancelBackgroundRepair(deskRoot) {
     const rootIdentity = resolveIdentity(deskRoot)
-    return repairCoordinator.cancel(rootIdentity.path, rootIdentity)
+    return repairCoordinator.cancel(rootIdentity.key, rootIdentity)
   }
 
   const coordinator = Object.freeze({

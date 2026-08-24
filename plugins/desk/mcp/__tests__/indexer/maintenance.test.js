@@ -731,10 +731,12 @@ test("scheduled repair batch keeps canonical root I/O after its retained alias r
   const maintenance = createMaintenanceCoordinator({
     resolveIdentity: fixture.resolveIdentity,
     validateIdentity: fixture.validateIdentity,
-    ensureIndex: async () => ({
+    ensureIndex: async (deskRoot) => ({
       built: false,
       reason: "fresh",
-      semantic: { missing_vectors: 1 },
+      semantic: {
+        missing_vectors: deskRoot === fixture.rootA ? 1 : 0,
+      },
     }),
     repairBatch: async ({ deskRoot }) => {
       repairEntered.resolve()
@@ -898,8 +900,8 @@ test("modeled referent identity shares freshness generations for A and its alias
       "alias A reindex generation did not suppress stale root A repair",
     )
     assert.deepEqual(repairCancels, [
-      fixture.aliasA,
-      fixture.aliasA,
+      fixture.rootA,
+      fixture.rootA,
     ])
   } finally {
     freshnessARelease.resolve()
@@ -1065,7 +1067,7 @@ async function assertAliasSerializesReadAndReindex({
         events.findIndex((event) => event.startsWith("reindex:")),
     )
     assert.ok(events.includes(`read:ensure:${path.resolve(root)}`))
-    assert.ok(events.includes(`reindex:ensure:${path.resolve(alias)}`))
+    assert.ok(events.includes(`reindex:ensure:${path.resolve(root)}`))
   } finally {
     readRelease.resolve()
     await Promise.allSettled([read, reindex].filter(Boolean))
@@ -1155,7 +1157,7 @@ test("aliased repair waits for the physical-root read while a distinct root rema
     maintenance = createMaintenanceCoordinator({
       ensureIndex: async (deskRoot, options) => {
         if (options.marker === "other-root") {
-          assert.equal(deskRoot, path.resolve(aliasB.alias))
+          assert.equal(deskRoot, path.resolve(rootB))
           otherRootEntered.resolve()
           return { built: true, reason: "fresh" }
         }
@@ -1174,7 +1176,7 @@ test("aliased repair waits for the physical-root read while a distinct root rema
         db.open = false
       },
       repairBatch: async ({ deskRoot }) => {
-        assert.equal(deskRoot, path.resolve(aliasA.alias))
+        assert.equal(deskRoot, path.resolve(rootA))
         repairEntered.resolve()
         await repairRelease.promise
         return {

@@ -7,6 +7,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { closeDb, openDb } from "../../src/db/init.js"
+import { resolveRootIdentity } from "../../src/indexer/root-identity.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
 import {
   deterministicProcessRepairVector,
@@ -590,6 +591,107 @@ test("semantic repair retains one root lease through every scheduled batch", asy
   })
   assert.equal(resolveCalls, 1)
   assert.deepEqual(repairLeases, [lease, lease])
+})
+
+test("scheduled repair rejects a retained alias retarget before persisting an awaited embedding", async () => {
+  const {
+    createSemanticRepairCoordinator,
+    repairMissingVectorBatch,
+  } = await loadSemanticRepair()
+  const rootA = await makeRoot("desk-semantic-retained-root-a-")
+  const rootB = await makeRoot("desk-semantic-retained-root-b-")
+  const aliasFixture = await makeSymlinkAlias(
+    rootA,
+    "desk-semantic-retained-alias-",
+  )
+  const rootIdentity = resolveRootIdentity(aliasFixture.alias)
+  const db = openDb(rootA)
+  const scheduler = createManualScheduler()
+  const vector = deterministicRepairVector(515)
+  let batchError
+  let embeddingEntered
+  let releaseEmbedding
+  const embeddingStarted = new Promise((resolve) => {
+    embeddingEntered = resolve
+  })
+  const embeddingRelease = new Promise((resolve) => {
+    releaseEmbedding = resolve
+  })
+  const coordinator = createSemanticRepairCoordinator({
+    repairBatch: async (options) => {
+      try {
+        return await repairMissingVectorBatch({
+          ...options,
+          db,
+          embedChunkDetailed: async () => {
+            embeddingEntered()
+            await embeddingRelease
+            return {
+              vector,
+              available: true,
+              diagnostic: null,
+            }
+          },
+        })
+      } catch (error) {
+        batchError = error
+        throw error
+      }
+    },
+    schedule: scheduler.schedule,
+    clearScheduled: scheduler.clearScheduled,
+  })
+
+  try {
+    insertDocument(db, {
+      documentPath: "active/reference.md",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      texts: ["chunk-0"],
+    })
+    const repair = coordinator.start({
+      deskRoot: aliasFixture.alias,
+      rootIdentity,
+    })
+    const scheduled = scheduler.runNext()
+    await awaitBounded(
+      embeddingStarted,
+      "scheduled retained repair did not enter embedding",
+    )
+    await fs.rm(aliasFixture.alias)
+    await fs.symlink(
+      rootB,
+      aliasFixture.alias,
+      process.platform === "win32" ? "junction" : "dir",
+    )
+    releaseEmbedding()
+    await awaitBounded(
+      scheduled,
+      "scheduled retained repair did not settle after alias retarget",
+    )
+
+    assert.deepEqual(
+      await awaitBounded(repair, "retargeted repair promise did not settle"),
+      {
+        state: "failed",
+        last_error: {
+          reason: "semantic_repair_failed",
+          message: "semantic repair failed",
+        },
+      },
+    )
+    assert.equal(batchError?.code, "desk_root_identity_changed")
+    assert.equal(
+      db.prepare("SELECT COUNT(*) AS count FROM chunk_vecs").get().count,
+      0,
+    )
+  } finally {
+    releaseEmbedding()
+    await coordinator.cancel(rootIdentity)
+    closeDb(db)
+    await fs.rm(aliasFixture.container, { recursive: true, force: true })
+    await fs.rm(rootA, { recursive: true, force: true })
+    await fs.rm(rootB, { recursive: true, force: true })
+  }
 })
 
 test("semantic repair cancellation resolves an idle root only once", async () => {

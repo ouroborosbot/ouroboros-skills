@@ -175,7 +175,8 @@ export function createSemanticRepairCoordinator({
     ...repairOptions
   } = {}) {
     const rootIdentity = retainedIdentity ?? resolveIdentity(deskRoot)
-    const { path: root, key: rootKey } = rootIdentity
+    const root = rootIdentity.key
+    const rootKey = rootIdentity.key
     const existing = inFlight.get(rootKey)
     if (existing) return existing.promise
 
@@ -237,6 +238,7 @@ export function createSemanticRepairCoordinator({
 
 export async function repairMissingVectorBatch({
   deskRoot,
+  rootIdentity,
   db,
   dbPath,
   batchChunks = DEFAULT_BATCH_CHUNKS,
@@ -248,6 +250,7 @@ export async function repairMissingVectorBatch({
 } = {}) {
   requirePositiveInteger(batchChunks, "batchChunks")
   requirePositiveInteger(batchMs, "batchMs")
+  if (rootIdentity !== undefined) validateRootIdentity(rootIdentity)
   const ownsDb = !db
   const database = db ?? openDb(resolveRootPath(deskRoot), { dbPath })
 
@@ -405,6 +408,7 @@ export async function repairMissingVectorBatch({
         throw error
       }
 
+      if (rootIdentity !== undefined) validateRootIdentity(rootIdentity)
       if (signal?.aborted) {
         stoppedBy = "cancelled"
         break
