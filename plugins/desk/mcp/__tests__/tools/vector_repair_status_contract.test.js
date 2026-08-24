@@ -18,6 +18,7 @@ import {
 import { getSemanticCoverage } from "../../src/server-helpers.js"
 import { callTool } from "../../src/server.js"
 import { desk_search } from "../../src/tools/search.js"
+import { createModeledCaseCollisionRootIdentity } from "../fixtures/root_identity_fixture.js"
 import {
   buildFixtureIndex,
   mkTempDeskRoot,
@@ -90,6 +91,12 @@ function clone(value) {
 function createRuntimeHarness({
   initialRepairStatus = { state: "idle", last_error: null },
   startRepairStatus = initialRepairStatus,
+  indexRoot,
+  openIndex = openDb,
+  closeIndex = closeDb,
+  resolveIdentity,
+  validateIdentity,
+  statusForRoot,
 } = {}) {
   const calls = {
     cancel: [],
@@ -107,7 +114,7 @@ function createRuntimeHarness({
         skipEmbed: ensureOptions.skipEmbed,
         embed: ensureOptions.embed,
       })
-      const db = openDb(deskRoot)
+      const db = openDb(indexRoot ?? deskRoot)
       try {
         return {
           built: false,
@@ -115,11 +122,13 @@ function createRuntimeHarness({
           semantic: getSemanticCoverage(db),
         }
       } finally {
-        closeDb(db)
+        closeIndex(db)
       }
     },
-    openIndex: openDb,
-    closeIndex: closeDb,
+    openIndex,
+    closeIndex,
+    resolveIdentity,
+    validateIdentity,
     createRepairCoordinator: () => ({
       start(options) {
         calls.start.push(options)
@@ -133,7 +142,11 @@ function createRuntimeHarness({
       },
       status(deskRootOrIdentity) {
         calls.status.push(deskRootOrIdentity)
-        return clone(repairStatus)
+        return clone(
+          statusForRoot === undefined
+            ? repairStatus
+            : statusForRoot(deskRootOrIdentity),
+        )
       },
     }),
   })
@@ -189,11 +202,25 @@ function assertFreshnessInput(calls, root, embed) {
   assert.strictEqual(calls.ensure[0].embed, embed)
 }
 
-function assertRepairStatusInput(calls, root) {
+function assertRepairStatusInput(calls, root, {
+  canonicalRoot = root === undefined ? undefined : realpathSync(root),
+  retainedIdentity,
+} = {}) {
   assert.ok(calls.status.length >= 1, "repair status dependency was not queried")
-  const input = calls.status.at(-1)
-  const actualRoot = typeof input === "string" ? input : input?.key
-  assert.equal(actualRoot, realpathSync(root))
+  for (const input of calls.status) {
+    if (canonicalRoot === undefined) {
+      assert.equal(input, undefined)
+      continue
+    }
+    const actualRoot = typeof input === "string" ? input : input?.key
+    assert.equal(actualRoot, canonicalRoot)
+    if (retainedIdentity !== undefined) {
+      assert.ok(
+        input === retainedIdentity || input === retainedIdentity.key,
+        "repair status must receive the retained root identity or its canonical key",
+      )
+    }
+  }
 }
 
 function assertSearchContract(result, {
@@ -333,6 +360,117 @@ test("Unit 5a search preserves the hybrid legacy projection and adds complete-ve
     assertRepairStatusInput(harness.calls, root)
   } finally {
     rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("Unit 5a search pins repair status to the retained root when its caller alias retargets", async () => {
+  const fixture = createModeledCaseCollisionRootIdentity()
+  const dataRoot = await buildSearchRoot({ chunksTotal: 1, vectorsIndexed: 1 })
+  const openTargets = []
+  const embedCalls = []
+  const embed = {
+    endpoint: "http://127.0.0.1:11434",
+    fetch: recordingEmbedFetch(embedCalls),
+  }
+  const rootAStatus = {
+    state: "failed",
+    last_error: {
+      reason: "semantic_repair_failed",
+      message: "root A repair failed",
+      path: "root-a-private-marker",
+    },
+  }
+  const rootBStatus = {
+    state: "complete",
+    last_error: null,
+  }
+  let aliasRetargeted = false
+  const harness = createRuntimeHarness({
+    indexRoot: dataRoot,
+    resolveIdentity: fixture.resolveIdentity,
+    validateIdentity: fixture.validateIdentity,
+    openIndex(deskRoot) {
+      openTargets.push(deskRoot)
+      fixture.retargetAlias(fixture.rootB)
+      aliasRetargeted = true
+      return openDb(dataRoot)
+    },
+    statusForRoot(deskRootOrIdentity) {
+      assert.equal(
+        aliasRetargeted,
+        true,
+        "repair status must be projected after the controlled read/open retarget",
+      )
+      const requestedRoot = typeof deskRootOrIdentity === "string"
+        ? deskRootOrIdentity
+        : deskRootOrIdentity?.key ?? deskRootOrIdentity?.path
+      const canonicalRoot =
+        requestedRoot === fixture.rootA || requestedRoot === fixture.rootB
+          ? requestedRoot
+          : fixture.nativeRealpath(requestedRoot)
+      if (canonicalRoot === fixture.rootA) return rootAStatus
+      if (canonicalRoot === fixture.rootB) return rootBStatus
+      throw new Error(`unexpected repair status root: ${canonicalRoot}`)
+    },
+  })
+
+  try {
+    const result = await desk_search({
+      deskRoot: fixture.aliasA,
+      input: { query: "alpha" },
+      opts: { embed },
+      runtimeContext: harness.runtimeContext,
+    })
+    const retainedIdentity = harness.calls.ensure[0]?.rootIdentity
+    const expectedRepairStatus = {
+      state: "failed",
+      last_error: {
+        reason: "semantic_repair_failed",
+        message: "root A repair failed",
+      },
+    }
+
+    assert.equal(result.search_mode, "hybrid")
+    assert.equal(result.semantic_unavailable, false)
+    assert.equal(result.semantic_repair, undefined)
+    assert.equal(result.query, "alpha")
+    assert.equal(result.results.length, 1)
+    assertEmbeddingRequest(embedCalls, "alpha")
+    assert.equal(harness.calls.ensure.length, 1)
+    assert.equal(harness.calls.ensure[0].deskRoot, fixture.rootA)
+    assert.equal(retainedIdentity.path, path.resolve(fixture.aliasA))
+    assert.equal(retainedIdentity.key, fixture.rootA)
+    assert.equal(harness.calls.ensure[0].skipEmbed, true)
+    assert.strictEqual(harness.calls.ensure[0].embed, embed)
+    assert.deepEqual(openTargets, [fixture.rootA])
+    assert.equal(harness.calls.start.length, 0)
+    assert.deepEqual(result.semantic_repair_status, expectedRepairStatus)
+    assert.notDeepEqual(result.semantic_repair_status, rootBStatus)
+    assert.equal(
+      JSON.stringify(result.semantic_repair_status).includes(
+        "root-a-private-marker",
+      ),
+      false,
+    )
+    assertSearchContract(result, {
+      legacyKeys: HYBRID_LEGACY_KEYS,
+      documentVectors: {
+        state: "available",
+        chunks_total: 1,
+        vectors_indexed: 1,
+        missing_vectors: 0,
+        known_unembeddable_vectors: 0,
+        repairable_missing_vectors: 0,
+        coverage: 1,
+      },
+      repairStatus: expectedRepairStatus,
+    })
+    assertRepairStatusInput(harness.calls, fixture.aliasA, {
+      canonicalRoot: fixture.rootA,
+      retainedIdentity,
+    })
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true })
   }
 })
 
@@ -639,8 +777,7 @@ test("Unit 5a status retains unavailable-root vocabulary and exposes idle repair
   })
   assert.equal(harness.calls.ensure.length, 0)
   assert.equal(harness.calls.start.length, 0)
-  assert.ok(harness.calls.status.length >= 1, "repair status dependency was not queried")
-  assert.equal(harness.calls.status.at(-1), undefined)
+  assertRepairStatusInput(harness.calls, undefined)
 })
 
 test("Unit 5a status retains stale local DB vocabulary while repair is active", async () => {
