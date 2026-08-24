@@ -523,6 +523,70 @@ test("maintenance resolves once and threads one root lease through queued work",
   assert.deepEqual(seen, [lease, lease, lease])
 })
 
+test("fresh-read root leases are coordinator-issued and non-transferable", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const fixture = createModeledCaseCollisionRootIdentity()
+  const ensureTargets = []
+  const openTargets = []
+
+  function createCoordinator() {
+    return createMaintenanceCoordinator({
+      resolveIdentity: fixture.resolveIdentity,
+      validateIdentity: fixture.validateIdentity,
+      ensureIndex: async (deskRoot) => {
+        ensureTargets.push(fixture.nativeRealpath(deskRoot))
+        return {
+          built: false,
+          reason: "fresh",
+          semantic: { missing_vectors: 0 },
+        }
+      },
+      openIndex: (deskRoot) => {
+        openTargets.push(fixture.nativeRealpath(deskRoot))
+        return {}
+      },
+      closeIndex: () => {},
+    })
+  }
+
+  const owner = createCoordinator()
+  const other = createCoordinator()
+  assert.equal(typeof owner.acquireRootLease, "function")
+  const lease = owner.acquireRootLease(fixture.aliasA)
+
+  await assert.rejects(
+    Promise.resolve().then(() =>
+      owner.runFreshRead({
+        rootLease: Object.freeze({}),
+        read: () => "forged",
+      })),
+    (error) => {
+      assert.equal(error.code, "maintenance_root_lease_unavailable")
+      return true
+    },
+  )
+  await assert.rejects(
+    Promise.resolve().then(() =>
+      other.runFreshRead({
+        rootLease: lease,
+        read: () => "transferred",
+      })),
+    (error) => {
+      assert.equal(error.code, "maintenance_root_lease_unavailable")
+      return true
+    },
+  )
+  assert.equal(
+    await owner.runFreshRead({
+      rootLease: lease,
+      read: () => "owned",
+    }),
+    "owned",
+  )
+  assert.deepEqual(ensureTargets, [fixture.rootA])
+  assert.deepEqual(openTargets, [fixture.rootA])
+})
+
 async function assertRetargetedReindexFailsClosed({ force }) {
   const { createMaintenanceCoordinator } = await loadMaintenance()
   const fixture = createModeledCaseCollisionRootIdentity()

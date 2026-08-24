@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
 import { closeDb, openDb } from "../../src/db/init.js"
+import { createModeledCaseCollisionRootIdentity } from "../fixtures/root_identity_fixture.js"
 import { createMaintenanceRuntimeBinding } from "../../src/indexer/maintenance.js"
 import { createSemanticRepairCoordinator } from "../../src/indexer/semantic-repair.js"
 import { ensureIndex } from "../../src/server-helpers.js"
@@ -204,6 +205,101 @@ function completeIndexResult({
       embedding_available: true,
     },
   }
+}
+
+function mockFeaturedTrackReads(t, fixture, metadataTargets) {
+  const originalReadFile = fs.readFile.bind(fs)
+  t.mock.method(fs, "readFile", async (filePath, ...args) => {
+    const candidate = path.normalize(String(filePath))
+    const featuredSuffix = path.join("_meta", "featured.md")
+    if (!candidate.endsWith(featuredSuffix)) {
+      return originalReadFile(filePath, ...args)
+    }
+    let physicalRoot
+    if (candidate.startsWith(`${fixture.aliasA}${path.sep}`)) {
+      physicalRoot = fixture.nativeRealpath(fixture.aliasA)
+    } else if (candidate.startsWith(`${fixture.rootA}${path.sep}`)) {
+      physicalRoot = fixture.rootA
+    } else if (candidate.startsWith(`${fixture.rootB}${path.sep}`)) {
+      physicalRoot = fixture.rootB
+    } else {
+      throw new Error(`unexpected featured-track root: ${candidate}`)
+    }
+    metadataTargets.push(physicalRoot)
+    return physicalRoot === fixture.rootA ? "trackA\n" : "trackB\n"
+  })
+}
+
+async function assertDeferredEmbeddingRetargetFailsClosed(t, invokeTool) {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const fixture = createModeledCaseCollisionRootIdentity()
+  const embedEntered = deferred()
+  const embedRelease = deferred()
+  const ensureTargets = []
+  const openTargets = []
+  const metadataTargets = []
+  const baseFetch = makeEmbedFetch()
+  mockFeaturedTrackReads(t, fixture, metadataTargets)
+  const maintenance = createMaintenanceCoordinator({
+    resolveIdentity: fixture.resolveIdentity,
+    validateIdentity: fixture.validateIdentity,
+    ensureIndex: async (deskRoot) => {
+      ensureTargets.push(fixture.nativeRealpath(deskRoot))
+      return completeIndexResult()
+    },
+    openIndex: (deskRoot) => {
+      openTargets.push(fixture.nativeRealpath(deskRoot))
+      throw Object.assign(new Error("unexpected database open"), {
+        code: "unexpected_db_open",
+      })
+    },
+    closeIndex: () => {
+      assert.fail("failed-closed read must not close an unopened database")
+    },
+  })
+  const embed = {
+    fetch: async (...args) => {
+      embedEntered.resolve()
+      await embedRelease.promise
+      return baseFetch(...args)
+    },
+  }
+  let operation
+  let caught
+  try {
+    operation = invokeTool({
+      deskRoot: fixture.aliasA,
+      embed,
+      runtimeContext: runtimeContextFor(maintenance),
+    })
+    await awaitBounded(
+      embedEntered.promise,
+      "query embedding did not enter its deterministic gate",
+    )
+    fixture.retargetAlias(fixture.rootB)
+    embedRelease.resolve()
+    await operation
+  } catch (error) {
+    caught = error
+  } finally {
+    embedRelease.resolve()
+    await Promise.allSettled([operation].filter(Boolean))
+  }
+
+  assert.deepEqual(
+    {
+      errorCode: caught?.code,
+      ensureTargets,
+      openTargets,
+      metadataTargets,
+    },
+    {
+      errorCode: "desk_root_identity_changed",
+      ensureTargets: [],
+      openTargets: [],
+      metadataTargets: [],
+    },
+  )
 }
 
 const runtimeContexts = new WeakMap()
@@ -669,6 +765,115 @@ test("all five writable read tools share one complete lifecycle through omitted 
   } finally {
     if (restoreDefault) restoreDefault()
     await cleanupRoot(root)
+  }
+})
+
+test("desk_search retains its canonical root lease across deferred query embedding", async (t) => {
+  await assertDeferredEmbeddingRetargetFailsClosed(
+    t,
+    ({ deskRoot, embed, runtimeContext }) =>
+      desk_search({
+        deskRoot,
+        input: { query: "alpha" },
+        opts: { embed },
+        runtimeContext,
+      }),
+  )
+})
+
+test("desk_recall retains its canonical root lease across deferred query embedding", async (t) => {
+  await assertDeferredEmbeddingRetargetFailsClosed(
+    t,
+    ({ deskRoot, embed, runtimeContext }) =>
+      desk_recall({
+        deskRoot,
+        input: { topic: "alpha" },
+        opts: { embed },
+        runtimeContext,
+      }),
+  )
+})
+
+test("queried desk_timeline retains its canonical root lease across deferred query embedding", async (t) => {
+  await assertDeferredEmbeddingRetargetFailsClosed(
+    t,
+    ({ deskRoot, embed, runtimeContext }) =>
+      desk_timeline({
+        deskRoot,
+        input: { query: "alpha" },
+        opts: { embed },
+        runtimeContext,
+      }),
+  )
+})
+
+test("desk_search reads featured-track metadata from the lease canonical root after alias retarget", async (t) => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const fixture = createModeledCaseCollisionRootIdentity()
+  const dataRoot = await mkTempDeskRoot()
+  const metadataTargets = []
+  const openTargets = []
+  mockFeaturedTrackReads(t, fixture, metadataTargets)
+  let search
+
+  try {
+    for (const track of ["trackA", "trackB"]) {
+      await writeFile(
+        dataRoot,
+        `${track}/task/iter/doing.md`,
+        "alpha iteration body\n",
+      )
+      await writeFile(
+        dataRoot,
+        `${track}/task/task.md`,
+        `---
+status: processing
+schema_version: 1
+iterations:
+  history:
+    - outcome: in-progress
+      path: ./iter
+---
+alpha task body
+`,
+      )
+    }
+    await buildFixtureIndex(dataRoot)
+
+    const maintenance = createMaintenanceCoordinator({
+      resolveIdentity: fixture.resolveIdentity,
+      validateIdentity: fixture.validateIdentity,
+      ensureIndex: async () => completeIndexResult({ chunks: 4, vectors: 4 }),
+      openIndex: (deskRoot) => {
+        openTargets.push(fixture.nativeRealpath(deskRoot))
+        fixture.retargetAlias(fixture.rootB)
+        return openDb(dataRoot)
+      },
+      closeIndex: closeDb,
+    })
+
+    search = desk_search({
+      deskRoot: fixture.aliasA,
+      input: { query: "alpha" },
+      opts: { embed: { fetch: makeEmbedFetch() } },
+      runtimeContext: runtimeContextFor(maintenance),
+    })
+    const result = await awaitBounded(
+      search,
+      "featured-track canonical-root search did not settle",
+    )
+    const trackA = result.results.find((entry) =>
+      entry.path === "trackA/task/iter/doing.md")
+    const trackB = result.results.find((entry) =>
+      entry.path === "trackB/task/iter/doing.md")
+
+    assert.deepEqual(openTargets, [fixture.rootA])
+    assert.deepEqual(metadataTargets, [fixture.rootA])
+    assert.equal(trackA?.score_breakdown.pin, 0.3)
+    assert.equal(trackB?.score_breakdown.pin, 0)
+  } finally {
+    await Promise.allSettled([search].filter(Boolean))
+    await cleanupRoot(dataRoot)
   }
 })
 
