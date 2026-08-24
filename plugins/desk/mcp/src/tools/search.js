@@ -29,6 +29,7 @@ import {
   recencyDecay,
   stateBias,
 } from "../util/rank.js"
+import { projectDocumentVectors } from "./status.js"
 
 const DEFAULT_LIMIT = 10
 const MAX_LIMIT = 50
@@ -457,10 +458,10 @@ export async function desk_search(args) {
     query,
     opts?.embed ?? {},
   )
-  return maintenance.runFreshRead({
+  const result = await maintenance.runFreshRead({
     rootLease,
     ensureOptions: { embed: opts?.embed ?? {} },
-    async read(db, _index, { deskRoot: canonicalDeskRoot }) {
+    async read(db, index, { deskRoot: canonicalDeskRoot }) {
       const { matchExpr, terms } = buildFtsQuery(query)
       const filter = buildDocsFilter(filters)
       // desk_search default: active. Day-to-day signal; archive on opt-in.
@@ -545,10 +546,18 @@ export async function desk_search(args) {
         search_mode: semanticAvailable ? "hybrid" : "lexical",
         semantic_unavailable: !semanticAvailable,
         latency_ms: Date.now() - t0,
+        document_vectors: projectDocumentVectors(index?.semantic, {
+          operationalOnly: true,
+        }),
         ...(!semanticAvailable ? semanticUnavailableFields(semanticDiagnostic) : {}),
       }
     },
   })
+  const repair = maintenance.semanticRepairSnapshot({ rootLease })
+  return {
+    ...result,
+    semantic_repair_status: repair.status,
+  }
 }
 
 // ---------------------------------------------------------------------------

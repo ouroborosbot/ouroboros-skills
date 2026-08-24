@@ -32,6 +32,7 @@ const GENERIC_REPAIR_ERROR = {
   reason: "semantic_repair_failed",
   message: "semantic repair failed",
 }
+const REPAIR_STATES = new Set(["idle", "running", "complete", "failed"])
 const ACTIVE_FAILURE_JOIN = `
   f.chunk_key = c.chunk_key AND
   f.text_hash = c.text_hash AND
@@ -65,6 +66,9 @@ export function createSemanticRepairCoordinator({
   }
 
   function status(deskRootOrIdentity) {
+    if (deskRootOrIdentity === undefined) {
+      return repairStatus("idle")
+    }
     let rootIdentity
     try {
       rootIdentity = identityFor(deskRootOrIdentity)
@@ -499,13 +503,28 @@ function repairStatus(state, lastError = null) {
   }
 }
 
-function repairStatusSnapshot(status) {
+export function projectSemanticRepairStatus(status) {
+  const state = REPAIR_STATES.has(status?.state) ? status.state : "idle"
+  const lastError = state === "failed" &&
+      status?.last_error !== null &&
+      typeof status?.last_error === "object"
+    ? {
+        reason: typeof status.last_error.reason === "string"
+          ? status.last_error.reason
+          : GENERIC_REPAIR_ERROR.reason,
+        message: typeof status.last_error.message === "string"
+          ? status.last_error.message
+          : GENERIC_REPAIR_ERROR.message,
+      }
+    : null
   return {
-    ...status,
-    last_error: status.last_error === null
-      ? null
-      : { ...status.last_error },
+    state,
+    last_error: lastError,
   }
+}
+
+function repairStatusSnapshot(status) {
+  return projectSemanticRepairStatus(status)
 }
 
 function requirePositiveInteger(value, label) {

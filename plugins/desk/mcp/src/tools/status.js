@@ -4,6 +4,7 @@ import * as path from "node:path"
 import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
 import { indexDbPath } from "../db/init.js"
+import { resolveRuntimeMaintenance } from "../indexer/maintenance.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 import { personPrefix } from "../util/paths.js"
 
@@ -22,7 +23,17 @@ const EMBEDDING_SPEC = {
   normalization_id: ACTIVE_EMBEDDING_SPEC.normalization_id,
 }
 
-export async function desk_status({ deskRoot, person, statusContext = {} }) {
+export async function desk_status(args) {
+  const {
+    deskRoot,
+    person,
+    runtimeContext,
+    statusContext = {},
+  } = args
+  const maintenance = resolveRuntimeMaintenance({
+    runtimeContext,
+    runtimeContextProvided: Object.hasOwn(args, "runtimeContext"),
+  })
   const effectiveRoot = personPrefix(deskRoot, person)
   const writeScope = effectiveRoot === deskRoot
     ? { mode: "workspace", person: null, relative_path: "." }
@@ -31,10 +42,19 @@ export async function desk_status({ deskRoot, person, statusContext = {} }) {
         person: path.basename(effectiveRoot),
         relative_path: path.posix.join("desks", path.basename(effectiveRoot)),
       }
-  const root = rootStatus(deskRoot, statusContext.root)
+  const requestedRoot = rootStatus(deskRoot, statusContext.root)
+  const rootLease = requestedRoot.valid
+    ? maintenance.acquireRootLease(deskRoot)
+    : undefined
+  const repair = maintenance.semanticRepairSnapshot({
+    deskRoot,
+    rootLease,
+  })
+  const root = requestedRoot
+  const inspectionRoot = repair.rootIdentity?.key ?? deskRoot
   const runtime = runtimeStatus(statusContext.runtime ?? {})
   const localDb = root.valid
-    ? inspectLocalDb(root.path)
+    ? inspectLocalDb(inspectionRoot, { reportedRoot: root.path })
     : unavailableLocalDb(root.path === null ? null : indexDbPath(root.path), "root_unavailable")
   const startup = normalizeStartup(statusContext.startup)
   const snapshots = snapshotStatus(startup)
@@ -65,6 +85,7 @@ export async function desk_status({ deskRoot, person, statusContext = {} }) {
     snapshots,
     vector_packs: vectorPacks,
     document_vectors: localDb.document_vectors,
+    semantic_repair_status: repair.status,
     query_embedding: queryEmbedding,
     lexical_index: localDb.lexical_index,
     startup_fallback: startupFallback,
@@ -74,10 +95,11 @@ export async function desk_status({ deskRoot, person, statusContext = {} }) {
   }
 }
 
-function inspectLocalDb(deskRoot) {
+function inspectLocalDb(deskRoot, { reportedRoot = deskRoot } = {}) {
   const dbPath = indexDbPath(deskRoot)
+  const reportedDbPath = indexDbPath(reportedRoot)
   if (!existsSync(dbPath)) {
-    return unavailableLocalDb(dbPath, "missing")
+    return unavailableLocalDb(reportedDbPath, "missing")
   }
 
   const db = new Database(dbPath, { readonly: true, fileMustExist: true })
@@ -102,7 +124,7 @@ function inspectLocalDb(deskRoot) {
     const freshness = inspectFreshness(deskRoot, db)
     return {
       local_db: {
-        path: dbPath,
+        path: reportedDbPath,
         exists: true,
         schema: DB_SCHEMA,
         state: freshness.state === "stale" ? "stale" : "available",
@@ -112,21 +134,13 @@ function inspectLocalDb(deskRoot) {
         available: lexicalAvailable,
         state: ["missing", "available"][Number(lexicalAvailable)],
       },
-      document_vectors: {
-        state: documentVectorState({
-          chunksTotal,
-          missingVectors,
-          repairableMissingVectors,
-          vectorsIndexed,
-          vectorsTableExists,
-        }),
+      document_vectors: projectDocumentVectors({
         chunks_total: chunksTotal,
         vectors_indexed: vectorsIndexed,
         missing_vectors: missingVectors,
         known_unembeddable_vectors: knownUnembeddableVectors,
         repairable_missing_vectors: repairableMissingVectors,
-        coverage: vectorsIndexed / Math.max(1, chunksTotal),
-      },
+      }, { vectorsTableExists }),
     }
   } finally {
     db.close()
@@ -260,6 +274,38 @@ function snapshotRestoreState(snapshot) {
   if (snapshot.restored === true) return "restored"
   if (snapshot.reason === "snapshot_already_restored") return "already_restored"
   return "skipped"
+}
+
+export function projectDocumentVectors(semantic = {}, {
+  operationalOnly = false,
+  vectorsTableExists = true,
+} = {}) {
+  const chunksTotal = semantic.chunks_total ?? 0
+  const vectorsIndexed = semantic.vectors_indexed ?? 0
+  const missingVectors = semantic.missing_vectors ?? 0
+  const knownUnembeddableVectors =
+    semantic.known_unembeddable_vectors ?? 0
+  const repairableMissingVectors =
+    semantic.repairable_missing_vectors ?? 0
+  const operationalStates = new Set(["missing", "partial", "available"])
+  const state = operationalOnly && typeof semantic.state === "string"
+    ? operationalStates.has(semantic.state) ? semantic.state : "missing"
+    : documentVectorState({
+        chunksTotal,
+        missingVectors,
+        repairableMissingVectors,
+        vectorsIndexed,
+        vectorsTableExists,
+      })
+  return {
+    state,
+    chunks_total: chunksTotal,
+    vectors_indexed: vectorsIndexed,
+    missing_vectors: missingVectors,
+    known_unembeddable_vectors: knownUnembeddableVectors,
+    repairable_missing_vectors: repairableMissingVectors,
+    coverage: vectorsIndexed / Math.max(1, chunksTotal),
+  }
 }
 
 function documentVectorState({

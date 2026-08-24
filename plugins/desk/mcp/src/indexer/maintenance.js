@@ -8,6 +8,7 @@ import {
 import { ensureIndex as defaultEnsureIndex } from "../server-helpers.js"
 import {
   createSemanticRepairCoordinator,
+  projectSemanticRepairStatus,
   repairMissingVectorBatch,
 } from "./semantic-repair.js"
 import {
@@ -223,6 +224,21 @@ export function createMaintenanceCoordinator({
     return repairCoordinator.cancel(rootIdentity.key, rootIdentity)
   }
 
+  function semanticRepairSnapshot({
+    deskRoot,
+    rootLease,
+  } = {}) {
+    const rootIdentity = rootLease === undefined
+      ? null
+      : resolveFreshReadIdentity(deskRoot, rootLease)
+    return {
+      rootIdentity,
+      status: projectSemanticRepairStatus(
+        repairCoordinator.status(rootIdentity ?? deskRoot),
+      ),
+    }
+  }
+
   const coordinator = Object.freeze({
     acquireRootLease,
     cancelBackgroundRepair,
@@ -230,6 +246,7 @@ export function createMaintenanceCoordinator({
     runExplicitReindex,
     runFreshRead,
     runStartupEnsureIndex,
+    semanticRepairSnapshot,
   })
   maintenanceCoordinators.add(coordinator)
   return coordinator
