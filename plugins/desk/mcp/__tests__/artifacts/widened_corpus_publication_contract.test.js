@@ -12,6 +12,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises"
+import * as os from "node:os"
 import * as path from "node:path"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
@@ -106,26 +107,58 @@ const PUBLICATION_GUIDANCE_DOCS = Object.freeze([
   "plugins/desk/README.md",
   "plugins/desk/mcp/README.md",
   "plugins/desk/activation/README.md",
+  "plugins/desk/artifacts/vector-packs/README.md",
+  "plugins/desk/artifacts/snapshots/README.md",
 ])
+const PUBLIC_VECTOR_MANIFEST_PATH = path.join(
+  pluginRoot,
+  "artifacts",
+  "vector-packs",
+  ACTIVE_EMBEDDING_SPEC.id,
+  "repo-public-bootstrap-2026-06-15.manifest.json",
+)
+const PUBLIC_SNAPSHOT_MANIFEST_PATH = path.join(
+  pluginRoot,
+  "artifacts",
+  "snapshots",
+  ACTIVE_EMBEDDING_SPEC.id,
+  "repo-public-bootstrap-2026-06-15.manifest.json",
+)
 const PUBLIC_MANIFEST_PATHS = Object.freeze([
-  path.join(
-    pluginRoot,
-    "artifacts",
-    "vector-packs",
-    ACTIVE_EMBEDDING_SPEC.id,
-    "repo-public-bootstrap-2026-06-15.manifest.json",
-  ),
-  path.join(
-    pluginRoot,
-    "artifacts",
-    "snapshots",
-    ACTIVE_EMBEDDING_SPEC.id,
-    "repo-public-bootstrap-2026-06-15.manifest.json",
-  ),
+  PUBLIC_VECTOR_MANIFEST_PATH,
+  PUBLIC_SNAPSHOT_MANIFEST_PATH,
+])
+const REMOVED_DOCUMENTS = Object.freeze([
+  {
+    path: "references/cache-only.md",
+    marker: "SYNTHETIC_ALLOWED_CACHE_BODY",
+  },
+  {
+    path: "references/deleted.md",
+    marker: "SYNTHETIC_ALLOWED_DELETED_BODY",
+  },
+  {
+    path: "references/redacted.md",
+    marker: "SYNTHETIC_ALLOWED_REDACTED_BODY",
+  },
+])
+const PRIVATE_CORPUS_MARKERS = Object.freeze([
+  ".state/benchmarks",
+  "queries-blind",
+  "release-partition",
+  "private-canary",
 ])
 
 async function scratchRoot(prefix) {
-  return mkdtemp(path.join(mcpRoot, `.${prefix}-`))
+  const scratch = await mkdtemp(path.join(os.tmpdir(), `${prefix}-`))
+  const relativeToSource = path.relative(mcpRoot, scratch)
+  assert.ok(
+    path.isAbsolute(relativeToSource) ||
+      relativeToSource === ".." ||
+      relativeToSource.startsWith(`..${path.sep}`),
+    `scratch root must stay outside source: ${scratch}`,
+  )
+  return scratch
 }
 
 async function writeText(root, relativePath, body) {
@@ -250,9 +283,134 @@ function indexedPaths(deskRoot) {
 }
 
 function indexedText(deskRoot) {
+  return indexedChunks(deskRoot).map((row) => row.text).join("\n")
+}
+
+function indexedChunks(deskRoot) {
   const db = openDb(deskRoot)
   try {
-    return db.prepare("SELECT text FROM chunks ORDER BY id").all().map((row) => row.text).join("\n")
+    return db.prepare(
+      `SELECT d.path, c.chunk_key, c.text_hash, c.text
+       FROM chunks c
+       JOIN docs d ON d.id = c.doc_id
+       ORDER BY d.path, c.chunk_index`,
+    ).all()
+  } finally {
+    closeDb(db)
+  }
+}
+
+function captureRemovedDocuments(deskRoot) {
+  const db = openDb(deskRoot)
+  try {
+    const allText = db.prepare("SELECT text FROM chunks ORDER BY id").all()
+      .map((row) => row.text)
+      .join("\n")
+    return REMOVED_DOCUMENTS.map((document) => {
+      const chunks = db.prepare(
+        `SELECT c.chunk_key, c.text_hash, c.text
+         FROM chunks c
+         JOIN docs d ON d.id = c.doc_id
+         WHERE d.path = ?
+         ORDER BY c.chunk_index`,
+      ).all(document.path)
+      assert.ok(chunks.length > 0, `${document.path} must have indexed chunks before removal`)
+      assert.equal(
+        chunks.filter((chunk) => chunk.text.includes(document.marker)).length,
+        1,
+        `${document.path} must expose one indexed chunk with its unique marker`,
+      )
+      assert.equal(
+        allText.split(document.marker).length - 1,
+        1,
+        `${document.marker} must be unique in the pre-removal index`,
+      )
+      return {
+        ...document,
+        chunks: chunks.map((chunk) => ({
+          chunk_key: chunk.chunk_key,
+          text_hash: chunk.text_hash,
+        })),
+      }
+    })
+  } finally {
+    closeDb(db)
+  }
+}
+
+function capturedIdentity(identity) {
+  return `${identity.chunk_key}\0${identity.text_hash}`
+}
+
+function assertCapturedDocumentsPresent(rows, captures, label) {
+  const identities = new Set(rows.map(capturedIdentity))
+  for (const capture of captures) {
+    for (const identity of capture.chunks) {
+      assert.ok(
+        identities.has(capturedIdentity(identity)),
+        `${label} must initially contain captured identity for ${capture.path}`,
+      )
+    }
+  }
+}
+
+function assertCapturedDocumentsAbsent(rows, captures, label, { text = true } = {}) {
+  const chunkKeys = new Set(rows.map((row) => row.chunk_key))
+  const textHashes = new Set(rows.map((row) => row.text_hash))
+  const liveText = text
+    ? rows.map((row) => row.text ?? "").join("\n")
+    : ""
+  for (const capture of captures) {
+    if (text) {
+      assert.equal(
+        liveText.includes(capture.marker),
+        false,
+        `${label} leaked removed marker for ${capture.path}`,
+      )
+    }
+    for (const identity of capture.chunks) {
+      assert.equal(
+        chunkKeys.has(identity.chunk_key),
+        false,
+        `${label} leaked removed chunk key for ${capture.path}`,
+      )
+      assert.equal(
+        textHashes.has(identity.text_hash),
+        false,
+        `${label} leaked removed text hash for ${capture.path}`,
+      )
+    }
+  }
+}
+
+function parseVectorPackRows(packBytes) {
+  return packBytes
+    .toString("utf8")
+    .split(/\n/u)
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line))
+}
+
+async function inspectSnapshotPayload({
+  snapshotBytes,
+  scratch,
+  name,
+}) {
+  const sqliteBytes = zstdDecompressSync(snapshotBytes)
+  const dbPath = path.join(scratch, `${name}.sqlite`)
+  await writeFile(dbPath, sqliteBytes)
+  const db = openDb(scratch, { dbPath })
+  try {
+    return {
+      sqliteBytes,
+      docs: db.prepare("SELECT path FROM docs ORDER BY path").all().map((row) => row.path),
+      chunks: db.prepare(
+        `SELECT d.path, c.chunk_key, c.text_hash, c.text
+         FROM chunks c
+         JOIN docs d ON d.id = c.doc_id
+         ORDER BY d.path, c.chunk_index`,
+      ).all(),
+    }
   } finally {
     closeDb(db)
   }
@@ -294,6 +452,9 @@ function assertManifestIsMetadataOnly(manifest, scratch, expectedPaths) {
     )),
   )
   assert.equal(manifest.discovery_grammar_version, 2)
+}
+
+function assertManifestSourceScope(manifest) {
   assert.equal(new Set(manifest.source_paths).size, manifest.source_paths.length)
   for (const sourcePath of WIDENED_SOURCE_SCOPE_PATHS) {
     assert.ok(manifest.source_paths.includes(sourcePath), `source scope must include ${sourcePath}`)
@@ -305,24 +466,6 @@ function assertManifestIsMetadataOnly(manifest, scratch, expectedPaths) {
     !sourcePath.includes("benchmark") &&
     !sourcePath.includes("canary")
   )))
-}
-
-async function publicArtifactFiles() {
-  const out = []
-  for (const root of [
-    path.join(pluginRoot, "artifacts", "vector-packs"),
-    path.join(pluginRoot, "artifacts", "snapshots"),
-  ]) {
-    const specs = await readdir(root, { withFileTypes: true })
-    for (const spec of specs) {
-      if (!spec.isDirectory()) continue
-      const files = await readdir(path.join(root, spec.name), { withFileTypes: true })
-      for (const file of files) {
-        if (file.isFile()) out.push(path.join(root, spec.name, file.name))
-      }
-    }
-  }
-  return out
 }
 
 test("directory-form and nested exclusions run before discovery, chunking, embedding, and local index writes", async () => {
@@ -437,6 +580,17 @@ test("tombstones and deletions cannot reappear through packs, snapshots, restore
       embed,
       tombstones: { pluginRoot: targetPluginRoot },
     })
+    const initialDb = openDb(deskRoot)
+    try {
+      assert.equal(
+        initialDb.pragma("secure_delete", { simple: true }),
+        0,
+        "privacy fixture must exercise SQLite secure_delete=0",
+      )
+    } finally {
+      closeDb(initialDb)
+    }
+    const removedCaptures = captureRemovedDocuments(deskRoot)
 
     const historicalPackId = "synthetic-before-redaction"
     await buildVectorPackFromLocalDb({
@@ -445,10 +599,16 @@ test("tombstones and deletions cannot reappear through packs, snapshots, restore
       mcpRoot,
       packId: historicalPackId,
     })
+    const historicalPack = artifactPaths(targetPluginRoot, "vector-pack", historicalPackId)
+    const historicalPackRows = parseVectorPackRows(await readFile(historicalPack.primary))
+    assertCapturedDocumentsPresent(
+      historicalPackRows,
+      removedCaptures,
+      "pre-removal vector pack",
+    )
     const redactedPath = "references/redacted.md"
     const redactedBody = await readFile(path.join(deskRoot, redactedPath), "utf8")
     await writeTombstone(targetPluginRoot, redactedPath, redactedBody)
-    const historicalPack = artifactPaths(targetPluginRoot, "vector-pack", historicalPackId)
     await assert.rejects(
       () => validateVectorPackFile({
         pluginRoot: targetPluginRoot,
@@ -472,6 +632,11 @@ test("tombstones and deletions cannot reappear through packs, snapshots, restore
     })
     assert.equal(indexedPaths(deskRoot).includes(redactedPath), false)
     assert.equal(indexedPaths(deskRoot).includes("references/deleted.md"), false)
+    assertCapturedDocumentsAbsent(
+      indexedChunks(deskRoot),
+      removedCaptures.filter((capture) => capture.path !== "references/cache-only.md"),
+      "post-tombstone live index",
+    )
 
     const cacheSnapshotId = "synthetic-before-cache-delete"
     await buildSnapshotFromLocalDb({
@@ -487,6 +652,11 @@ test("tombstones and deletions cannot reappear through packs, snapshots, restore
       vectorPacks: false,
       tombstones: { pluginRoot: targetPluginRoot },
     })
+    assertCapturedDocumentsAbsent(
+      indexedChunks(deskRoot),
+      removedCaptures,
+      "post-deletion live index",
+    )
 
     await copyDeskWithoutLocalState(deskRoot, restoredRoot)
     const restored = await ensureIndex(restoredRoot, {
@@ -497,14 +667,11 @@ test("tombstones and deletions cannot reappear through packs, snapshots, restore
     })
     assert.equal(restored.reason, "stale_snapshot_reconciled")
     assert.equal(restored.snapshot?.snapshot_id, cacheSnapshotId)
-    for (const removedPath of [
-      "references/cache-only.md",
-      "references/deleted.md",
-      redactedPath,
-    ]) {
-      assert.equal(indexedPaths(restoredRoot).includes(removedPath), false)
-      assert.equal(indexedText(restoredRoot).includes(removedPath), false)
-    }
+    assertCapturedDocumentsAbsent(
+      indexedChunks(restoredRoot),
+      removedCaptures,
+      "reconciled restored index",
+    )
 
     const currentPackId = "synthetic-current-pack"
     const currentSnapshotId = "synthetic-current-snapshot"
@@ -537,36 +704,49 @@ test("tombstones and deletions cannot reappear through packs, snapshots, restore
     ])
     assertManifestIsMetadataOnly(packManifest, scratch, expectedPaths)
     assertManifestIsMetadataOnly(snapshotManifest, scratch, expectedPaths)
-    assert.equal(
-      packManifest.artifact_source_scope_hash,
-      generatedArtifacts.artifactSourceScopeHash(mcpRoot),
+    const packRows = parseVectorPackRows(packBytes)
+    assertCapturedDocumentsAbsent(
+      packRows,
+      removedCaptures,
+      "current vector pack",
+      { text: false },
     )
-    assert.equal(
-      snapshotManifest.artifact_source_scope_hash,
-      generatedArtifacts.artifactSourceScopeHash(mcpRoot),
+    assert.ok(
+      packRows.every((row) => (
+        !Object.hasOwn(row, "path") &&
+        !Object.hasOwn(row, "text") &&
+        !Object.hasOwn(row, "body")
+      )),
+      "vector-pack rows must expose identities and vectors, not source paths or bodies",
     )
-    const portableRuntimeScope = resolveEnsureIndexOptions(
-      { vectorPacks: { pluginRoot: targetPluginRoot } },
-      { deskRoot },
-    ).vectorPacks.expectedArtifactSourceScopeHash
-    assert.equal(portableRuntimeScope, packManifest.artifact_source_scope_hash)
-
-    const decompressedSnapshot = zstdDecompressSync(snapshotBytes).toString("utf8")
+    const snapshot = await inspectSnapshotPayload({
+      snapshotBytes,
+      scratch,
+      name: currentSnapshotId,
+    })
+    assertCapturedDocumentsAbsent(
+      snapshot.chunks,
+      removedCaptures,
+      "decoded current snapshot DB",
+    )
     for (const marker of EXCLUDED_MARKERS) {
-      assert.equal(packBytes.includes(marker), false)
-      assert.equal(decompressedSnapshot.includes(marker), false)
+      assert.equal(
+        snapshot.chunks.some((chunk) => chunk.text.includes(marker)),
+        false,
+        `decoded current snapshot DB leaked excluded marker ${marker}`,
+      )
+      assert.equal(
+        snapshot.sqliteBytes.includes(Buffer.from(marker)),
+        false,
+        `raw current snapshot pages leaked excluded marker ${marker}`,
+      )
     }
-    for (const excludedPath of EXCLUDED_PATHS) {
-      assert.equal(packBytes.includes(excludedPath), false)
-      assert.equal(decompressedSnapshot.includes(excludedPath), false)
-    }
-    for (const removedPath of [
-      "references/cache-only.md",
-      "references/deleted.md",
-      redactedPath,
-    ]) {
-      assert.equal(packBytes.includes(removedPath), false)
-      assert.equal(decompressedSnapshot.includes(removedPath), false)
+    for (const capture of removedCaptures) {
+      assert.equal(
+        snapshot.sqliteBytes.includes(Buffer.from(capture.marker)),
+        false,
+        `snapshot publication must rebuild or compact secure_delete=0 pages before publishing ${capture.path}`,
+      )
     }
   } finally {
     await rm(scratch, { recursive: true, force: true })
@@ -603,6 +783,56 @@ test("artifact source-scope hashing invalidates deterministically when restored-
   }
 })
 
+test("new vector-pack and snapshot manifests carry the complete widened source scope", async () => {
+  const scratch = await scratchRoot("unit-6a-built-source-scope")
+  const deskRoot = path.join(scratch, "desk")
+  const targetPluginRoot = path.join(scratch, "plugin")
+  try {
+    await copyCorpusFixture(deskRoot)
+    await writePublicationPolicy(targetPluginRoot, publicationPolicy({ approved: true }))
+    await rebuildIndex(deskRoot, { embed: { fetch: embedFetch() } })
+    await buildVectorPackFromLocalDb({
+      deskRoot,
+      pluginRoot: targetPluginRoot,
+      mcpRoot,
+      packId: "synthetic-source-scope-pack",
+    })
+    await buildSnapshotFromLocalDb({
+      deskRoot,
+      pluginRoot: targetPluginRoot,
+      mcpRoot,
+      snapshotId: "synthetic-source-scope-snapshot",
+    })
+
+    const [packManifest, snapshotManifest] = await Promise.all([
+      readJson(artifactPaths(
+        targetPluginRoot,
+        "vector-pack",
+        "synthetic-source-scope-pack",
+      ).manifest),
+      readJson(artifactPaths(
+        targetPluginRoot,
+        "snapshot",
+        "synthetic-source-scope-snapshot",
+      ).manifest),
+    ])
+    for (const manifest of [packManifest, snapshotManifest]) {
+      assertManifestSourceScope(manifest)
+      assert.equal(
+        manifest.artifact_source_scope_hash,
+        generatedArtifacts.artifactSourceScopeHash(mcpRoot),
+      )
+    }
+    const portableRuntimeScope = resolveEnsureIndexOptions(
+      { vectorPacks: { pluginRoot: targetPluginRoot } },
+      { deskRoot },
+    ).vectorPacks.expectedArtifactSourceScopeHash
+    assert.equal(portableRuntimeScope, packManifest.artifact_source_scope_hash)
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+})
+
 for (const relativeDocPath of PUBLICATION_GUIDANCE_DOCS) {
   test(`${relativeDocPath} discloses widened-corpus review and approval requirements`, async () => {
     const body = (await readFile(path.join(repoRoot, relativeDocPath), "utf8")).toLowerCase()
@@ -625,52 +855,88 @@ for (const relativeDocPath of PUBLICATION_GUIDANCE_DOCS) {
   })
 }
 
-test("committed public artifacts identify widened production scope without private corpus data", async () => {
+test("committed public artifact manifests identify the widened production source scope", async () => {
   const manifests = await Promise.all(PUBLIC_MANIFEST_PATHS.map(readJson))
   const sourceScopeHash = generatedArtifacts.artifactSourceScopeHash(mcpRoot)
   for (const manifest of manifests) {
     assert.equal(manifest.artifact_source_scope_hash, sourceScopeHash)
     assert.equal(manifest.discovery_grammar_version, 2)
-    for (const sourcePath of WIDENED_SOURCE_SCOPE_PATHS) {
-      assert.ok(manifest.source_paths.includes(sourcePath), `source scope must include ${sourcePath}`)
+    assertManifestSourceScope(manifest)
+  }
+})
+
+test("committed public artifacts contain only approved public corpus data", async () => {
+  const scratch = await scratchRoot("unit-6a-committed-artifact-privacy")
+  try {
+    const [vectorManifest, snapshotManifest] = await Promise.all([
+      readJson(PUBLIC_VECTOR_MANIFEST_PATH),
+      readJson(PUBLIC_SNAPSHOT_MANIFEST_PATH),
+    ])
+    for (const manifest of [vectorManifest, snapshotManifest]) {
+      assert.deepEqual(
+        manifest.represented_documents.map((doc) => doc.path),
+        ["tasks/dependency-activation/task.md"],
+      )
+      const serialized = JSON.stringify(manifest)
+      assert.doesNotMatch(
+        serialized,
+        /(?:^|[\\/])\.state(?:[\\/]|$)|queries-blind|release-partition|private-canary/u,
+      )
+      assert.doesNotMatch(serialized, /"(?:absPath|body|frontmatter|raw)"\s*:/u)
     }
+
+    const vectorRows = parseVectorPackRows(
+      await readFile(PUBLIC_VECTOR_MANIFEST_PATH.replace(/\.manifest\.json$/u, ".jsonl")),
+    )
+    assert.ok(
+      vectorRows.every((row) => (
+        Object.keys(row).sort().join(",") ===
+          "chunk_key,dimension,embedding_spec_id,encoding,text_hash,vector"
+      )),
+      "committed vector rows must contain only chunk identities and vectors",
+    )
+    const snapshot = await inspectSnapshotPayload({
+      snapshotBytes: await readFile(path.join(
+        path.dirname(PUBLIC_SNAPSHOT_MANIFEST_PATH),
+        snapshotManifest.artifact.file,
+      )),
+      scratch,
+      name: "committed-public-snapshot",
+    })
     assert.deepEqual(
-      manifest.represented_documents.map((doc) => doc.path),
+      snapshot.docs,
       ["tasks/dependency-activation/task.md"],
     )
-    const serialized = JSON.stringify(manifest)
-    assert.doesNotMatch(serialized, /(?:^|[\\/])\.state(?:[\\/]|$)|queries-blind|release-partition|private-canary/u)
-    assert.doesNotMatch(serialized, /"(?:absPath|body|frontmatter|raw)"\s*:/u)
-  }
+    const snapshotText = snapshot.chunks.map((chunk) => chunk.text).join("\n")
+    for (const marker of PRIVATE_CORPUS_MARKERS) {
+      assert.equal(snapshotText.includes(marker), false)
+      assert.equal(snapshot.sqliteBytes.includes(Buffer.from(marker)), false)
+    }
 
-  const notes = (await readFile(productionNotesPath, "utf8")).toLowerCase()
-  assert.ok(
-    /repo-local public desk documents only/u.test(notes),
-    "production artifact notes must retain the approved public-document boundary",
-  )
-  assert.ok(
-    /synthetic|de-identified/u.test(notes),
-    "production artifact notes must identify committed public inputs as synthetic or de-identified",
-  )
-  assert.ok(
-    /all allowed markdown/u.test(notes),
-    "production artifact notes must disclose the wider local discovery corpus",
-  )
+    const notes = (await readFile(productionNotesPath, "utf8")).toLowerCase()
+    assert.ok(
+      /repo-local public desk documents only/u.test(notes),
+      "production artifact notes must retain the approved public-document boundary",
+    )
+    assert.ok(
+      /synthetic|de-identified/u.test(notes),
+      "production artifact notes must identify committed public inputs as synthetic or de-identified",
+    )
+    assert.ok(
+      /all allowed markdown/u.test(notes),
+      "production artifact notes must disclose the wider local discovery corpus",
+    )
 
-  const tracked = spawnSync("git", ["ls-files"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-  })
-  assert.equal(tracked.status, 0, tracked.stderr)
-  assert.doesNotMatch(
-    tracked.stdout,
-    /(?:^|\/)\.state(?:\/|$)|queries-blind|release-partition|private-canary/u,
-  )
-  for (const artifactPath of await publicArtifactFiles()) {
-    const bytes = await readFile(artifactPath)
-    assert.equal(bytes.includes(".state/benchmarks"), false)
-    assert.equal(bytes.includes("queries-blind"), false)
-    assert.equal(bytes.includes("release-partition"), false)
-    assert.equal(bytes.includes("private-canary"), false)
+    const tracked = spawnSync("git", ["ls-files"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    })
+    assert.equal(tracked.status, 0, tracked.stderr)
+    assert.doesNotMatch(
+      tracked.stdout,
+      /(?:^|\/)\.state(?:\/|$)|queries-blind|release-partition|private-canary/u,
+    )
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
   }
 })
