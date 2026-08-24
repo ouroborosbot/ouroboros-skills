@@ -81,6 +81,12 @@ const EXCLUDED_MARKERS = Object.freeze([
   "SYNTHETIC_EXCLUDED_SENSITIVE_NAME_BODY",
   "SYNTHETIC_EXCLUDED_STATE_BODY",
 ])
+const MANIFEST_VALUE_LEAK_PROBES = Object.freeze([
+  "SYNTHETIC_PRIVATE_BODY_MARKER",
+  "SYNTHETIC_PRIVATE_CONTENT_MARKER",
+  "SYNTHETIC_PRIVATE_SNIPPET_MARKER",
+  "SYNTHETIC_PRIVATE_QUERY_MARKER",
+])
 const WIDENED_SOURCE_SCOPE_PATHS = Object.freeze([
   "plugins/desk/mcp/src/artifacts/tombstones.js",
   "plugins/desk/mcp/src/indexer/chunk.js",
@@ -156,6 +162,109 @@ const VECTOR_PACK_ROW_KEYS = Object.freeze([
   "text_hash",
   "vector",
 ])
+const IDENTIFIER_SCHEMA = Object.freeze({
+  type: "string",
+  pattern: /^[a-z0-9][a-z0-9._-]*$/iu,
+})
+const SHA256_SCHEMA = Object.freeze({
+  type: "string",
+  pattern: /^sha256:[a-f0-9]{64}$/u,
+})
+const REPRESENTED_DOCUMENT_SCHEMA = objectSchema({
+  hash: SHA256_SCHEMA,
+  path: { type: "string", minLength: 1 },
+})
+const SHARED_MANIFEST_SCHEMA = Object.freeze({
+  artifact_source_scope_hash: SHA256_SCHEMA,
+  created_at: { type: "string", format: "iso-timestamp" },
+  dimension: { type: "number", integer: true, const: ACTIVE_EMBEDDING_SPEC.dimension },
+  discovery_grammar_version: { type: "number", integer: true, const: 2 },
+  document_tree_hash: SHA256_SCHEMA,
+  embedding_spec_id: { type: "string", const: ACTIVE_EMBEDDING_SPEC.id },
+  represented_documents: arraySchema(REPRESENTED_DOCUMENT_SCHEMA),
+  schema_version: { type: "number", integer: true, const: 1 },
+  source_paths: arraySchema({ type: "string", minLength: 1 }),
+})
+const VECTOR_PACK_MANIFEST_SCHEMA = objectSchema({
+  ...SHARED_MANIFEST_SCHEMA,
+  encoding: { type: "string", const: "float32-json" },
+  pack_id: IDENTIFIER_SCHEMA,
+  provenance: provenanceSchema("plugins/desk/mcp/scripts/build-vector-pack.js"),
+  row_count: { type: "number", integer: true, minimum: 0 },
+  rows_sha256: { type: "string", pattern: /^[a-f0-9]{64}$/u },
+})
+const SNAPSHOT_MANIFEST_SCHEMA = objectSchema({
+  ...SHARED_MANIFEST_SCHEMA,
+  artifact: objectSchema({
+    compressed: { type: "boolean", const: true },
+    file: { type: "string", pattern: /^[a-z0-9][a-z0-9._-]*\.sqlite\.zst$/iu },
+    format: { type: "string", const: "sqlite-zstd" },
+    sha256: SHA256_SCHEMA,
+  }),
+  chunker_id: { type: "string", const: ACTIVE_EMBEDDING_SPEC.chunker_id },
+  db_schema: objectSchema({
+    id: { type: "string", const: "desk-index-sqlite-v1" },
+    version: { type: "number", integer: true, const: 1 },
+  }),
+  included_pack_ids: arraySchema(IDENTIFIER_SCHEMA),
+  normalization_id: { type: "string", const: ACTIVE_EMBEDDING_SPEC.normalization_id },
+  provenance: provenanceSchema("plugins/desk/mcp/scripts/build-snapshot.js"),
+  runtime: objectSchema({
+    arch: { type: "string", const: "portable" },
+    node_abi: { type: "string", const: "portable" },
+    platform: { type: "string", const: "portable" },
+  }),
+  snapshot_id: IDENTIFIER_SCHEMA,
+  sqlite_vec: objectSchema({
+    package: { type: "string", const: "sqlite-vec" },
+    table: { type: "string", const: "vec0" },
+    version: { type: "string", pattern: /^\d+\.\d+\.\d+$/u },
+  }),
+})
+const MANIFEST_SCHEMAS = Object.freeze({
+  snapshot: SNAPSHOT_MANIFEST_SCHEMA,
+  "vector-pack": VECTOR_PACK_MANIFEST_SCHEMA,
+})
+
+function objectSchema(properties) {
+  return Object.freeze({ type: "object", properties: Object.freeze(properties) })
+}
+
+function arraySchema(items) {
+  return Object.freeze({ type: "array", items })
+}
+
+function provenanceSchema(builder) {
+  return objectSchema({
+    builder: { type: "string", const: builder },
+    commit: { type: "string", pattern: /^[a-f0-9]{40}$/u },
+    source: { type: "string", const: "local-db" },
+  })
+}
+
+async function collectSyntheticFixtureBodyMarkers() {
+  const markers = new Set(EXCLUDED_MARKERS)
+  const visit = async (directory) => {
+    const entries = await readdir(directory, { withFileTypes: true })
+    for (const entry of entries) {
+      const entryPath = path.join(directory, entry.name)
+      if (entry.isDirectory()) {
+        await visit(entryPath)
+        continue
+      }
+      const body = await readFile(entryPath, "utf8")
+      for (const marker of body.match(/\bSYNTHETIC_[A-Z0-9_]+_BODY\b/gu) ?? []) {
+        markers.add(marker)
+      }
+    }
+  }
+  await visit(fixtureRoot)
+  return [...markers].sort()
+}
+
+const SYNTHETIC_FIXTURE_BODY_MARKERS = Object.freeze(
+  await collectSyntheticFixtureBodyMarkers(),
+)
 
 async function scratchRoot(prefix) {
   const scratch = await mkdtemp(path.join(os.tmpdir(), `${prefix}-`))
@@ -443,6 +552,146 @@ function assertSerializedTreeExcludesCaptured(value, captures, label) {
   assert.deepEqual(leaks, [], `${label} leaked captured values:\n${leaks.join("\n")}`)
 }
 
+function assertAllowedManifestSchema(manifest, artifactType, label) {
+  const schema = MANIFEST_SCHEMAS[artifactType]
+  assert.ok(schema, `${label} must identify a supported artifact type`)
+  const visit = (value, currentSchema, location) => {
+    if (currentSchema.type === "object") {
+      assert.ok(
+        value !== null && typeof value === "object" && !Array.isArray(value),
+        `${label} ${location} must be an object`,
+      )
+      assert.deepEqual(
+        Object.keys(value).sort(),
+        Object.keys(currentSchema.properties).sort(),
+        `${label} ${location} must contain exactly the allowed fields`,
+      )
+      for (const [key, childSchema] of Object.entries(currentSchema.properties)) {
+        visit(value[key], childSchema, `${location}.${key}`)
+      }
+      return
+    }
+    if (currentSchema.type === "array") {
+      assert.ok(Array.isArray(value), `${label} ${location} must be an array`)
+      value.forEach((entry, index) => {
+        visit(entry, currentSchema.items, `${location}[${index}]`)
+      })
+      return
+    }
+    assert.equal(typeof value, currentSchema.type, `${label} ${location} has the wrong type`)
+    if (currentSchema.type === "number") {
+      assert.ok(Number.isFinite(value), `${label} ${location} must be finite`)
+      if (currentSchema.integer) {
+        assert.ok(Number.isInteger(value), `${label} ${location} must be an integer`)
+      }
+      if (currentSchema.minimum !== undefined) {
+        assert.ok(value >= currentSchema.minimum, `${label} ${location} is below its minimum`)
+      }
+    }
+    if (currentSchema.type === "string" && currentSchema.minLength !== undefined) {
+      assert.ok(
+        value.length >= currentSchema.minLength,
+        `${label} ${location} must not be empty`,
+      )
+    }
+    if (currentSchema.pattern) {
+      assert.match(value, currentSchema.pattern, `${label} ${location} has an invalid value`)
+    }
+    if (currentSchema.format === "iso-timestamp") {
+      const parsed = new Date(value)
+      assert.equal(
+        Number.isNaN(parsed.getTime()) ? null : parsed.toISOString(),
+        value,
+        `${label} ${location} must be an ISO timestamp`,
+      )
+    }
+    if (Object.hasOwn(currentSchema, "const")) {
+      assert.equal(value, currentSchema.const, `${label} ${location} must preserve its contract`)
+    }
+  }
+  visit(manifest, schema, "$")
+  if (artifactType === "snapshot") {
+    assert.equal(
+      manifest.artifact.file,
+      `${manifest.snapshot_id}.sqlite.zst`,
+      `${label} artifact file must match snapshot_id`,
+    )
+  }
+}
+
+function manifestStringValueLeaks(value, forbiddenMarkers, location = "$", leaks = []) {
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => {
+      manifestStringValueLeaks(entry, forbiddenMarkers, `${location}[${index}]`, leaks)
+    })
+    return leaks
+  }
+  if (value !== null && typeof value === "object") {
+    for (const [key, entry] of Object.entries(value)) {
+      manifestStringValueLeaks(entry, forbiddenMarkers, `${location}.${key}`, leaks)
+    }
+    return leaks
+  }
+  if (typeof value !== "string") return leaks
+  for (const marker of forbiddenMarkers) {
+    if (value.includes(marker)) leaks.push(`${location}: ${marker}`)
+  }
+  return leaks
+}
+
+function assertManifestStringValuesExcludeMarkers(manifest, markers, label) {
+  const leaks = manifestStringValueLeaks(manifest, markers)
+  assert.deepEqual(leaks, [], `${label} leaked private content markers:\n${leaks.join("\n")}`)
+}
+
+function normalizedPathCandidates(value) {
+  return String(value)
+    .replaceAll("\\", "/")
+    .split(/[\s"'`<>{}\[\](),;:=]+/u)
+    .map((candidate) => candidate.replace(/^\/+|\/+$/gu, ""))
+    .filter((candidate) => candidate !== "")
+}
+
+function statePathLeaks(value, location = "$", leaks = []) {
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => statePathLeaks(entry, `${location}[${index}]`, leaks))
+    return leaks
+  }
+  if (value !== null && typeof value === "object") {
+    for (const [key, entry] of Object.entries(value)) {
+      statePathLeaks(entry, `${location}.${key}`, leaks)
+    }
+    return leaks
+  }
+  if (typeof value !== "string") return leaks
+  for (const candidate of normalizedPathCandidates(value)) {
+    if (candidate.split("/").includes(".state")) {
+      leaks.push(`${location}: ${candidate}`)
+    }
+  }
+  return leaks
+}
+
+function assertTreeExcludesStatePaths(value, label) {
+  const leaks = statePathLeaks(value)
+  assert.deepEqual(leaks, [], `${label} leaked .state paths:\n${leaks.join("\n")}`)
+}
+
+function parseGitTrackedPaths(stdout) {
+  const delimiter = stdout.includes("\0") ? "\0" : /\r?\n/u
+  return stdout
+    .split(delimiter)
+    .map((trackedPath) => trackedPath.trim())
+    .filter((trackedPath) => trackedPath !== "")
+    .map((trackedPath) => trackedPath.replaceAll("\\", "/"))
+}
+
+function assertTrackedPathsExcludeState(stdout, label) {
+  const leaks = parseGitTrackedPaths(stdout)
+    .filter((trackedPath) => trackedPath.split("/").includes(".state"))
+  assert.deepEqual(leaks, [], `${label} tracked .state paths:\n${leaks.join("\n")}`)
+}
+
 function assertVectorPackRowSchema(row, label, index) {
   assert.deepEqual(
     Object.keys(row).sort(),
@@ -531,12 +780,24 @@ async function readJson(filePath) {
   return JSON.parse(await readFile(filePath, "utf8"))
 }
 
-function assertManifestIsMetadataOnly(manifest, scratch, expectedPaths, captures = []) {
+function assertManifestIsMetadataOnly(
+  manifest,
+  artifactType,
+  scratch,
+  expectedPaths,
+  captures = [],
+) {
   const serialized = JSON.stringify(manifest)
+  assertAllowedManifestSchema(manifest, artifactType, `${artifactType} manifest`)
   assert.doesNotMatch(serialized, /"(?:absPath|body|frontmatter|raw)"\s*:/u)
   assert.equal(serialized.includes(scratch), false)
-  for (const marker of EXCLUDED_MARKERS) assert.equal(serialized.includes(marker), false)
   for (const excludedPath of EXCLUDED_PATHS) assert.equal(serialized.includes(excludedPath), false)
+  assertManifestStringValuesExcludeMarkers(
+    manifest,
+    [...SYNTHETIC_FIXTURE_BODY_MARKERS, ...MANIFEST_VALUE_LEAK_PROBES],
+    `${artifactType} manifest`,
+  )
+  assertTreeExcludesStatePaths(manifest, `${artifactType} manifest`)
   assertSerializedTreeExcludesCaptured(manifest, captures, "artifact manifest")
   assert.deepEqual(
     manifest.represented_documents.map((doc) => doc.path).sort(),
@@ -553,13 +814,14 @@ function assertManifestIsMetadataOnly(manifest, scratch, expectedPaths, captures
 
 function assertManifestSourceScope(manifest) {
   assert.equal(new Set(manifest.source_paths).size, manifest.source_paths.length)
-  for (const sourcePath of WIDENED_SOURCE_SCOPE_PATHS) {
-    assert.ok(manifest.source_paths.includes(sourcePath), `source scope must include ${sourcePath}`)
-  }
+  assert.deepEqual(
+    [...manifest.source_paths].sort(),
+    [...WIDENED_SOURCE_SCOPE_PATHS].sort(),
+    "source scope must contain exactly the widened production paths",
+  )
   assert.ok(manifest.source_paths.every((sourcePath) => (
     sourcePath.startsWith("plugins/desk/mcp/") &&
     !sourcePath.includes("\\") &&
-    !sourcePath.includes(".state") &&
     !sourcePath.includes("benchmark") &&
     !sourcePath.includes("canary")
   )))
@@ -802,8 +1064,20 @@ test("tombstones and deletions cannot reappear through packs, snapshots, restore
       readFile(currentSnapshot.primary),
     ])
     await t.test("generated manifests structurally exclude every captured value", () => {
-      assertManifestIsMetadataOnly(packManifest, scratch, expectedPaths, removedCaptures)
-      assertManifestIsMetadataOnly(snapshotManifest, scratch, expectedPaths, removedCaptures)
+      assertManifestIsMetadataOnly(
+        packManifest,
+        "vector-pack",
+        scratch,
+        expectedPaths,
+        removedCaptures,
+      )
+      assertManifestIsMetadataOnly(
+        snapshotManifest,
+        "snapshot",
+        scratch,
+        expectedPaths,
+        removedCaptures,
+      )
     })
     const packRows = parseVectorPackRows(packBytes)
     await t.test("generated vector-pack rows enforce the exact schema and exclude every captured value", () => {
@@ -959,6 +1233,170 @@ test("committed public artifact manifests identify the widened production source
   }
 })
 
+test("manifest privacy guards reject unknown fields, scalar drift, and every private value marker", async () => {
+  const [vectorManifest, snapshotManifest] = await Promise.all(
+    PUBLIC_MANIFEST_PATHS.map(readJson),
+  )
+  assertAllowedManifestSchema(vectorManifest, "vector-pack", "vector-pack manifest")
+  assertAllowedManifestSchema(snapshotManifest, "snapshot", "snapshot manifest")
+
+  const schemaProbes = [
+    {
+      label: "vector top-level unknown field",
+      artifactType: "vector-pack",
+      manifest: { ...vectorManifest, unexpected: "metadata" },
+    },
+    {
+      label: "vector provenance unknown field",
+      artifactType: "vector-pack",
+      manifest: {
+        ...vectorManifest,
+        provenance: { ...vectorManifest.provenance, unexpected: "metadata" },
+      },
+    },
+    {
+      label: "vector represented-document unknown field",
+      artifactType: "vector-pack",
+      manifest: {
+        ...vectorManifest,
+        represented_documents: [{
+          ...vectorManifest.represented_documents[0],
+          unexpected: "metadata",
+        }],
+      },
+    },
+    {
+      label: "snapshot DB schema unknown field",
+      artifactType: "snapshot",
+      manifest: {
+        ...snapshotManifest,
+        db_schema: { ...snapshotManifest.db_schema, unexpected: "metadata" },
+      },
+    },
+    {
+      label: "snapshot sqlite-vec unknown field",
+      artifactType: "snapshot",
+      manifest: {
+        ...snapshotManifest,
+        sqlite_vec: { ...snapshotManifest.sqlite_vec, unexpected: "metadata" },
+      },
+    },
+    {
+      label: "snapshot runtime unknown field",
+      artifactType: "snapshot",
+      manifest: {
+        ...snapshotManifest,
+        runtime: { ...snapshotManifest.runtime, unexpected: "metadata" },
+      },
+    },
+    {
+      label: "snapshot artifact unknown field",
+      artifactType: "snapshot",
+      manifest: {
+        ...snapshotManifest,
+        artifact: { ...snapshotManifest.artifact, unexpected: "metadata" },
+      },
+    },
+    {
+      label: "snapshot provenance unknown field",
+      artifactType: "snapshot",
+      manifest: {
+        ...snapshotManifest,
+        provenance: { ...snapshotManifest.provenance, unexpected: "metadata" },
+      },
+    },
+    {
+      label: "snapshot represented-document unknown field",
+      artifactType: "snapshot",
+      manifest: {
+        ...snapshotManifest,
+        represented_documents: [{
+          ...snapshotManifest.represented_documents[0],
+          unexpected: "metadata",
+        }],
+      },
+    },
+    {
+      label: "vector row count scalar drift",
+      artifactType: "vector-pack",
+      manifest: { ...vectorManifest, row_count: String(vectorManifest.row_count) },
+    },
+    {
+      label: "vector source paths array scalar drift",
+      artifactType: "vector-pack",
+      manifest: { ...vectorManifest, source_paths: [123] },
+    },
+    {
+      label: "snapshot nested scalar drift",
+      artifactType: "snapshot",
+      manifest: {
+        ...snapshotManifest,
+        artifact: { ...snapshotManifest.artifact, compressed: "true" },
+      },
+    },
+    {
+      label: "snapshot included pack IDs array scalar drift",
+      artifactType: "snapshot",
+      manifest: { ...snapshotManifest, included_pack_ids: [123] },
+    },
+  ]
+  for (const probe of schemaProbes) {
+    assert.throws(
+      () => assertAllowedManifestSchema(probe.manifest, probe.artifactType, probe.label),
+      undefined,
+      probe.label,
+    )
+  }
+
+  for (const marker of [...SYNTHETIC_FIXTURE_BODY_MARKERS, ...MANIFEST_VALUE_LEAK_PROBES]) {
+    const leakProbe = {
+      ...vectorManifest,
+      provenance: { ...vectorManifest.provenance, source: marker },
+    }
+    assert.throws(
+      () => assertManifestStringValuesExcludeMarkers(leakProbe, [marker], "manifest probe"),
+      /private content markers/u,
+      marker,
+    )
+  }
+})
+
+test("structural publication guards reject root, nested, Windows, quoted, and serialized .state paths", () => {
+  const statePathProbes = [
+    ".state/benchmarks/other.json",
+    "nested/.state/benchmarks/other.json",
+    "nested\\.state\\benchmarks\\other.json",
+    "\".state/benchmarks/other.json\"",
+    JSON.stringify({ path: "nested/.state/benchmarks/other.json" }),
+    `safe/path.json\n${JSON.stringify({ path: "nested\\.state\\benchmarks\\other.json" })}`,
+  ]
+  for (const probe of statePathProbes) {
+    assert.throws(
+      () => assertTreeExcludesStatePaths({ value: probe }, "manifest path probe"),
+      /leaked \.state paths/u,
+      probe,
+    )
+  }
+  for (const probe of statePathProbes.slice(0, 3)) {
+    assert.throws(
+      () => assertTrackedPathsExcludeState(`${probe}\0`, "git path probe"),
+      /tracked \.state paths/u,
+      probe,
+    )
+  }
+
+  const cleanValues = {
+    prose: "The publication status.state marker is prose, not a path.",
+    hash: "sha256:unrelated.state.digest",
+    path: "artifacts/snapshots/public.manifest.json",
+  }
+  assert.doesNotThrow(() => assertTreeExcludesStatePaths(cleanValues, "clean manifest"))
+  assert.doesNotThrow(() => assertTrackedPathsExcludeState(
+    "artifacts/snapshots/public.manifest.json\0notes/about.state.json\0",
+    "clean git paths",
+  ))
+})
+
 test("committed public artifacts contain only approved public corpus data", async () => {
   const scratch = await scratchRoot("unit-6a-committed-artifact-privacy")
   try {
@@ -966,17 +1404,24 @@ test("committed public artifacts contain only approved public corpus data", asyn
       readJson(PUBLIC_VECTOR_MANIFEST_PATH),
       readJson(PUBLIC_SNAPSHOT_MANIFEST_PATH),
     ])
+    assertManifestIsMetadataOnly(
+      vectorManifest,
+      "vector-pack",
+      scratch,
+      ["tasks/dependency-activation/task.md"],
+    )
+    assertManifestIsMetadataOnly(
+      snapshotManifest,
+      "snapshot",
+      scratch,
+      ["tasks/dependency-activation/task.md"],
+    )
     for (const manifest of [vectorManifest, snapshotManifest]) {
-      assert.deepEqual(
-        manifest.represented_documents.map((doc) => doc.path),
-        ["tasks/dependency-activation/task.md"],
+      assertManifestStringValuesExcludeMarkers(
+        manifest,
+        PRIVATE_CORPUS_MARKERS,
+        "committed public manifest",
       )
-      const serialized = JSON.stringify(manifest)
-      assert.doesNotMatch(
-        serialized,
-        /(?:^|[\\/])\.state(?:[\\/]|$)|queries-blind|release-partition|private-canary/u,
-      )
-      assert.doesNotMatch(serialized, /"(?:absPath|body|frontmatter|raw)"\s*:/u)
     }
 
     const vectorRows = parseVectorPackRows(
@@ -1017,15 +1462,20 @@ test("committed public artifacts contain only approved public corpus data", asyn
       "production artifact notes must disclose the wider local discovery corpus",
     )
 
-    const tracked = spawnSync("git", ["ls-files"], {
+    const tracked = spawnSync("git", ["ls-files", "-z"], {
       cwd: repoRoot,
       encoding: "utf8",
     })
     assert.equal(tracked.status, 0, tracked.stderr)
-    assert.doesNotMatch(
-      tracked.stdout,
-      /(?:^|\/)\.state(?:\/|$)|queries-blind|release-partition|private-canary/u,
-    )
+    assertTrackedPathsExcludeState(tracked.stdout, "repository")
+    const trackedPaths = parseGitTrackedPaths(tracked.stdout)
+    for (const marker of PRIVATE_CORPUS_MARKERS.filter((marker) => marker !== ".state/benchmarks")) {
+      assert.equal(
+        trackedPaths.some((trackedPath) => trackedPath.includes(marker)),
+        false,
+        `repository tracked private marker ${marker}`,
+      )
+    }
   } finally {
     await rm(scratch, { recursive: true, force: true })
   }
