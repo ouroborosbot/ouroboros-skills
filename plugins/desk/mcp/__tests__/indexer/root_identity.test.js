@@ -6,6 +6,7 @@ import {
   physicalRootKey,
   resolveRootIdentity,
   resolveRootPath,
+  validateRootIdentity,
 } from "../../src/indexer/root-identity.js"
 import { createModeledCaseCollisionRootIdentity } from "../fixtures/root_identity_fixture.js"
 
@@ -74,6 +75,42 @@ test("realpath failure fails closed without creating an unresolved identity", ()
     (error) => {
       assert.equal(error.code, "desk_root_identity_unavailable")
       assert.equal(error.message, "desk root identity is unavailable")
+      return true
+    },
+  )
+})
+
+test("root identity validation returns a stable lease and rejects unavailable or changed referents", () => {
+  const fixture = createModeledCaseCollisionRootIdentity()
+  const identity = fixture.resolveIdentity(fixture.aliasA)
+
+  assert.strictEqual(
+    validateRootIdentity(identity, {
+      nativeRealpath: fixture.nativeRealpath,
+    }),
+    identity,
+  )
+  assert.throws(
+    () => validateRootIdentity(identity, {
+      nativeRealpath: failingFilesystemCall("EIO", "realpath failed"),
+    }),
+    (error) => {
+      assert.equal(error.code, "desk_root_identity_unavailable")
+      assert.equal(error.message, "desk root identity is unavailable")
+      return true
+    },
+  )
+  fixture.retargetAlias(fixture.rootB)
+  assert.throws(
+    () => validateRootIdentity(identity, {
+      nativeRealpath: fixture.nativeRealpath,
+    }),
+    (error) => {
+      assert.equal(error.code, "desk_root_identity_changed")
+      assert.equal(
+        error.message,
+        "desk root identity changed during maintenance",
+      )
       return true
     },
   )

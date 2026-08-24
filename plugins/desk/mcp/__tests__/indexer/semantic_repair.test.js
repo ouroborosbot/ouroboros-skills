@@ -409,6 +409,31 @@ test("semantic repair validates roots and positive batch limits", async () => {
   )
 })
 
+test("semantic repair status accepts retained leases and rejects malformed identity objects", async () => {
+  const { createSemanticRepairCoordinator } = await loadSemanticRepair()
+  const root = await makeRoot("desk-semantic-repair-status-identity-")
+  const coordinator = createSemanticRepairCoordinator()
+  const rootIdentity = {
+    path: path.resolve(root),
+    key: await fs.realpath(root),
+  }
+
+  try {
+    assert.deepEqual(coordinator.status(rootIdentity), {
+      state: "idle",
+      last_error: null,
+    })
+    for (const invalid of [null, {}, { path: root }]) {
+      assert.throws(
+        () => coordinator.status(invalid),
+        /deskRoot is required/u,
+      )
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
 test("semantic repair reuses state and cancellation across symlink aliases", async (t) => {
   const root = await makeRoot("desk-semantic-repair-alias-root-")
   let aliasFixture
