@@ -111,6 +111,8 @@ Runtime startup prefers workspace artifacts over plugin release artifacts. It re
 
 Embeddings and snapshots are derivative data and may carry privacy risk. Vector packs store document-side embedding data, and snapshots may preserve searchable index state, so artifact publication is explicit, policy-checked, and separate from ordinary MCP startup.
 
+Local indexing can represent all allowed Markdown and may therefore include non-secret personal content. Local index eligibility does not grant permission to publish or share artifacts. Preserve the existing secret exclusions, and require explicit human review and approval before any vector pack or snapshot is shared, published, or committed.
+
 ## Tests
 
 ```sh

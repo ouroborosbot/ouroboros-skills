@@ -96,6 +96,8 @@ For shared repos, document-side embeddings and warm-start SQLite snapshots live 
 
 Embeddings and snapshots are derivative data and may carry privacy risk even when they are not plain-text documents. Shared vector packs and warm boot snapshots are published only through explicit, policy-controlled artifact paths such as `$DESK/artifacts/`; public or sensitive repositories should require approval before these artifacts are committed.
 
+Local indexing can represent all allowed Markdown and may therefore include non-secret personal content. Local index eligibility does not grant permission to publish or share artifacts. Preserve the existing secret exclusions, and require explicit human review and approval before any vector pack or snapshot is shared, published, or committed.
+
 See `desk:codex-onboarding` for the repair checklist and verification steps.
 
 ## Invocation — the default `worker` agent

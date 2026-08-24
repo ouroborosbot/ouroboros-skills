@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { createReadStream } from "node:fs"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
@@ -85,9 +85,9 @@ export async function writeVectorPackArtifact({
     relative_path: paths.relativePackPath,
   })
   await fs.mkdir(paths.packDir, { recursive: true })
-  await fs.writeFile(paths.packPath, packBytes)
-  await fs.writeFile(paths.manifestPath, manifestBytes)
-  await fs.writeFile(paths.checksumPath, checksumBytes)
+  await writeAtomic(paths.packPath, packBytes)
+  await writeAtomic(paths.manifestPath, manifestBytes)
+  await writeAtomic(paths.checksumPath, checksumBytes)
   return paths
 }
 
@@ -490,6 +490,16 @@ async function readRequiredChecksum(filePath, label, signal) {
     throw new Error(`${label} must start with a sha256 digest`)
   }
   return match[1]
+}
+
+async function writeAtomic(filePath, bytes) {
+  const temporaryPath = `${filePath}.${randomUUID()}.tmp`
+  try {
+    await fs.writeFile(temporaryPath, bytes)
+    await fs.rename(temporaryPath, filePath)
+  } finally {
+    await fs.rm(temporaryPath, { force: true })
+  }
 }
 
 function sidecarPath(packPath, suffix) {

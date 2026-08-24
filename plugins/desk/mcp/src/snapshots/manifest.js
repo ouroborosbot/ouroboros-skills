@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import {
@@ -22,6 +22,7 @@ const ALLOWED_SOURCE_PREFIXES = Object.freeze([
 ])
 const ALLOWED_SOURCE_FILES = Object.freeze([
   "plugins/desk/mcp/src/db/schema.sql",
+  "plugins/desk/mcp/src/server-helpers.js",
   "plugins/desk/mcp/package.json",
   "plugins/desk/mcp/package-lock.json",
 ])
@@ -81,9 +82,9 @@ export async function writeSnapshotArtifact({
     relative_path: paths.relativeSnapshotPath,
   })
   await fs.mkdir(paths.snapshotDir, { recursive: true })
-  await fs.writeFile(paths.snapshotPath, snapshotBytes)
-  await fs.writeFile(paths.manifestPath, manifestBytes)
-  await fs.writeFile(paths.checksumPath, checksumBytes)
+  await writeAtomic(paths.snapshotPath, snapshotBytes)
+  await writeAtomic(paths.manifestPath, manifestBytes)
+  await writeAtomic(paths.checksumPath, checksumBytes)
   return paths
 }
 
@@ -341,6 +342,16 @@ async function readRequiredChecksum(filePath, label) {
     throw new Error(`${label} must start with a sha256 digest`)
   }
   return match[1].startsWith("sha256:") ? match[1] : `sha256:${match[1]}`
+}
+
+async function writeAtomic(filePath, bytes) {
+  const temporaryPath = `${filePath}.${randomUUID()}.tmp`
+  try {
+    await fs.writeFile(temporaryPath, bytes)
+    await fs.rename(temporaryPath, filePath)
+  } finally {
+    await fs.rm(temporaryPath, { force: true })
+  }
 }
 
 function sidecarPath(snapshotPath, suffix) {

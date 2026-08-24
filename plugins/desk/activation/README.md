@@ -87,6 +87,8 @@ Desk workers also carry a startup health guard: if `desk_status` or the Desk MCP
 
 Embeddings and snapshots are derivative data and may carry privacy risk. Activation manifests declare the shared embedding and snapshot policies so host adapters can keep publication explicit, approval-gated, and separate from ordinary startup.
 
+Local indexing can represent all allowed Markdown and may therefore include non-secret personal content. Local index eligibility does not grant permission to publish or share artifacts. Preserve the existing secret exclusions, and require explicit human review and approval before any vector pack or snapshot is shared, published, or committed.
+
 ## Ouroboros Autonomous Agent
 
 Disposition: `supported-flattened`.

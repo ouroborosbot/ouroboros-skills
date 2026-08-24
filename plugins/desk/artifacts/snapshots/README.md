@@ -17,3 +17,5 @@ pack IDs, creation time, artifact checksum, provenance, and source paths.
 Source-scope or document-tree hash mismatches are freshness signals, not hard
 compatibility failures. Schema, embedding, runtime, artifact checksum, unsafe
 path, or provenance failures make the snapshot incompatible.
+
+Local indexing can represent all allowed Markdown and may therefore include non-secret personal content. Local index eligibility does not grant permission to publish or share artifacts. Preserve the existing secret exclusions, and require explicit human review and approval before any snapshot is shared, published, or committed.

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process"
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { promises as fs } from "node:fs"
 import { readFileSync } from "node:fs"
 import * as path from "node:path"
@@ -63,6 +63,7 @@ const DEFAULT_SOURCE_PATHS = Object.freeze([
   "plugins/desk/mcp/src/snapshots/restore.js",
   "plugins/desk/mcp/src/artifacts/artifact-scripts.js",
   "plugins/desk/mcp/src/artifacts/policy.js",
+  "plugins/desk/mcp/src/server-helpers.js",
   "plugins/desk/mcp/scripts/build-vector-pack.js",
   "plugins/desk/mcp/scripts/build-snapshot.js",
   "plugins/desk/mcp/scripts/verify-snapshot.js",
@@ -215,6 +216,7 @@ export async function buildSnapshotFromLocalDb({
   budgetConfig,
   now = Date.now,
   provenanceCommit,
+  signal,
 } = {}) {
   const budgets = await loadPerformanceBudgets({ configPath: budgetConfig, mcpRoot })
   const budgetMs = budgetValue(budgets, "rebuild", "snapshot_build_ms")
@@ -222,7 +224,7 @@ export async function buildSnapshotFromLocalDb({
   const startedAt = now()
   const db = openDb(requiredPath(deskRoot, "deskRoot"))
   try {
-    checkpointDb(db)
+    throwIfAborted(signal)
     const sourceDocs = representedDocuments(db)
     await assertCurrentArtifactIndex({
       db,
@@ -231,7 +233,11 @@ export async function buildSnapshotFromLocalDb({
       artifactType: "snapshot",
       sourceDocs,
     })
-    const sqliteBytes = await fs.readFile(indexDbPath(deskRoot))
+    const sqliteBytes = await readSanitizedSnapshotBytes({
+      db,
+      deskRoot,
+      signal,
+    })
     const snapshotBytes = compressSnapshotBytes(sqliteBytes)
     const artifactSha = `sha256:${sha256Hex(snapshotBytes)}`
     const context = snapshotCompatibilityContext({ mcpRoot, docs: sourceDocs })
@@ -704,6 +710,58 @@ function checkpointDb(db) {
   }
 }
 
+async function readSanitizedSnapshotBytes({
+  db,
+  deskRoot,
+  signal,
+  makeId = randomUUID,
+  readFile = fs.readFile,
+  removeFile = fs.rm,
+  vacuumInto = vacuumDbInto,
+} = {}) {
+  const sanitizedDbPath = path.join(
+    path.dirname(indexDbPath(deskRoot)),
+    `.desk-snapshot-sanitized-${makeId()}.sqlite`,
+  )
+  let failure
+  try {
+    throwIfAborted(signal)
+    vacuumInto(db, sanitizedDbPath)
+    throwIfAborted(signal)
+    const bytes = await readFile(sanitizedDbPath)
+    throwIfAborted(signal)
+    return bytes
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      failure = error
+    } else {
+      failure = new Error("snapshot sanitized logical copy failed")
+      failure.code = "snapshot_sanitization_failed"
+    }
+    throw failure
+  } finally {
+    try {
+      await removeFile(sanitizedDbPath, { force: true })
+    } catch {
+      const cleanupError = new Error("snapshot sanitized database cleanup failed")
+      cleanupError.code = "snapshot_sanitization_cleanup_failed"
+      if (failure?.name === "AbortError") cleanupError.name = "AbortError"
+      throw cleanupError
+    }
+  }
+}
+
+function vacuumDbInto(db, destinationPath) {
+  db.prepare("VACUUM INTO ?").run(destinationPath)
+}
+
+function throwIfAborted(signal) {
+  if (!signal?.aborted) return
+  const error = new Error("snapshot build aborted")
+  error.name = "AbortError"
+  throw error
+}
+
 function readFileOrEmpty(filePath) {
   try {
     return readFileSync(filePath)
@@ -812,6 +870,7 @@ export const __artifactScriptInternalsForTests = {
   gitCommit,
   optionalProvenanceCommit,
   optionalString,
+  readSanitizedSnapshotBytes,
   readFileOrEmpty,
   requiredPath,
   valuesFor,
