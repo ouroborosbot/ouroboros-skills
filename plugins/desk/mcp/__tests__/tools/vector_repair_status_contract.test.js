@@ -61,6 +61,25 @@ const SEARCH_RESULT_KEYS = [
   "track",
   "updated_at",
 ]
+const STATUS_LEGACY_KEYS = [
+  "activation",
+  "active_embedding_spec",
+  "db_schema",
+  "degraded_modes",
+  "document_vectors",
+  "lexical_index",
+  "local_db",
+  "query_embedding",
+  "root",
+  "runtime",
+  "snapshots",
+  "startup_fallback",
+  "status",
+  "summary",
+  "vector_packs",
+  "write_scope",
+]
+const LOCAL_DB_KEYS = ["exists", "freshness", "path", "schema", "state"]
 const SEARCH_VECTOR_STATES = new Set(["missing", "partial", "available"])
 const REPAIR_STATES = new Set(["idle", "running", "complete", "failed"])
 
@@ -492,6 +511,90 @@ test("Unit 5a search treats known-unembeddable-only gaps as available after succ
   }
 })
 
+test("Unit 5a search preserves hybrid legacy behavior and redacts failed repair details", async () => {
+  const root = await buildSearchRoot({ chunksTotal: 1, vectorsIndexed: 1 })
+  const harness = createRuntimeHarness({
+    initialRepairStatus: {
+      state: "failed",
+      last_error: {
+        reason: "semantic_repair_failed",
+        message: "semantic repair failed",
+        path: "forbidden-path-marker",
+        paths: ["forbidden-paths-marker"],
+        query: "forbidden-query-marker",
+        body: "forbidden-body-marker",
+        snippet: "forbidden-snippet-marker",
+        snippets: ["forbidden-snippets-marker"],
+        request: { body: "forbidden-request-marker" },
+        stack: "forbidden-stack-marker",
+        extra_key: "forbidden-extra-marker",
+      },
+    },
+  })
+  const embedCalls = []
+  const embed = {
+    endpoint: "http://127.0.0.1:11434",
+    fetch: recordingEmbedFetch(embedCalls),
+  }
+  try {
+    const result = await desk_search({
+      deskRoot: root,
+      input: { query: "alpha" },
+      opts: { embed },
+      runtimeContext: harness.runtimeContext,
+    })
+
+    assert.equal(result.search_mode, "hybrid")
+    assert.equal(result.semantic_unavailable, false)
+    assert.equal(result.semantic_repair, undefined)
+    assert.equal(result.query, "alpha")
+    assert.equal(result.results.length, 1)
+    assertFreshnessInput(harness.calls, root, embed)
+    assertEmbeddingRequest(embedCalls, "alpha")
+    assert.equal(harness.calls.start.length, 0)
+    assertSearchContract(result, {
+      legacyKeys: HYBRID_LEGACY_KEYS,
+      documentVectors: {
+        state: "available",
+        chunks_total: 1,
+        vectors_indexed: 1,
+        missing_vectors: 0,
+        known_unembeddable_vectors: 0,
+        repairable_missing_vectors: 0,
+        coverage: 1,
+      },
+      repairStatus: {
+        state: "failed",
+        last_error: {
+          reason: "semantic_repair_failed",
+          message: "semantic repair failed",
+        },
+      },
+    })
+    assert.deepEqual(
+      Object.keys(result.semantic_repair_status.last_error).sort(),
+      ["message", "reason"],
+    )
+    const serialized = JSON.stringify(result.semantic_repair_status)
+    for (const marker of [
+      "forbidden-path-marker",
+      "forbidden-paths-marker",
+      "forbidden-query-marker",
+      "forbidden-body-marker",
+      "forbidden-snippet-marker",
+      "forbidden-snippets-marker",
+      "forbidden-request-marker",
+      "forbidden-stack-marker",
+      "forbidden-extra-marker",
+    ]) {
+      assert.equal(serialized.includes(marker), false)
+    }
+    assertRepairStatusInput(harness.calls, root)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test("Unit 5a status retains missing local DB vocabulary and exposes idle repair", async () => {
   const root = await mkTempDeskRoot()
   const harness = createRuntimeHarness()
@@ -575,6 +678,59 @@ test("Unit 5a status retains stale local DB vocabulary while repair is active", 
       state: "running",
       last_error: null,
     })
+    assert.equal(harness.calls.ensure.length, 0)
+    assert.equal(harness.calls.start.length, 0)
+    assertRepairStatusInput(harness.calls, root)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("Unit 5a status preserves complete local/vector vocabulary and exposes complete repair", async () => {
+  const root = await buildSearchRoot({ chunksTotal: 1, vectorsIndexed: 1 })
+  const harness = createRuntimeHarness({
+    initialRepairStatus: { state: "complete", last_error: null },
+  })
+  try {
+    const body = parseToolResult(await callTool({
+      deskRoot: root,
+      name: "desk_status",
+      input: {},
+      runtimeContext: harness.runtimeContext,
+    }))
+    const {
+      semantic_repair_status: repairStatus,
+      ...legacyStatus
+    } = body
+
+    assert.deepEqual(Object.keys(legacyStatus).sort(), STATUS_LEGACY_KEYS)
+    assert.equal(body.status, "ok")
+    assert.deepEqual(Object.keys(body.local_db).sort(), LOCAL_DB_KEYS)
+    assert.equal(body.local_db.exists, true)
+    assert.deepEqual(body.local_db.schema, { id: "desk-index", version: 1 })
+    assert.equal(body.local_db.state, "available")
+    assert.equal(body.local_db.freshness.state, "fresh")
+    assert.deepEqual(body.lexical_index, {
+      available: true,
+      state: "available",
+    })
+    assert.deepEqual(body.document_vectors, {
+      state: "available",
+      chunks_total: 1,
+      vectors_indexed: 1,
+      missing_vectors: 0,
+      known_unembeddable_vectors: 0,
+      repairable_missing_vectors: 0,
+      coverage: 1,
+    })
+    assert.deepEqual(Object.keys(body.document_vectors).sort(), DOCUMENT_VECTOR_KEYS)
+    assert.equal(body.query_embedding.available, "not_checked")
+    assert.deepEqual(body.degraded_modes, [])
+    assert.deepEqual(repairStatus, {
+      state: "complete",
+      last_error: null,
+    })
+    assert.deepEqual(Object.keys(repairStatus).sort(), REPAIR_STATUS_KEYS)
     assert.equal(harness.calls.ensure.length, 0)
     assert.equal(harness.calls.start.length, 0)
     assertRepairStatusInput(harness.calls, root)
