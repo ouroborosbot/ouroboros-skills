@@ -148,6 +148,14 @@ const PRIVATE_CORPUS_MARKERS = Object.freeze([
   "release-partition",
   "private-canary",
 ])
+const VECTOR_PACK_ROW_KEYS = Object.freeze([
+  "chunk_key",
+  "dimension",
+  "embedding_spec_id",
+  "encoding",
+  "text_hash",
+  "vector",
+])
 
 async function scratchRoot(prefix) {
   const scratch = await mkdtemp(path.join(os.tmpdir(), `${prefix}-`))
@@ -383,6 +391,94 @@ function assertCapturedDocumentsAbsent(rows, captures, label, { text = true } = 
   }
 }
 
+function capturedRemovedValues(captures) {
+  return captures.flatMap((capture) => [
+    {
+      kind: "body marker",
+      path: capture.path,
+      value: capture.marker,
+    },
+    ...capture.chunks.flatMap((identity) => [
+      {
+        kind: "chunk key",
+        path: capture.path,
+        value: identity.chunk_key,
+      },
+      {
+        kind: "text hash",
+        path: capture.path,
+        value: identity.text_hash,
+      },
+    ]),
+  ])
+}
+
+function assertSerializedTreeExcludesCaptured(value, captures, label) {
+  const removedValues = capturedRemovedValues(captures)
+  const leaks = []
+  const inspectSerialized = (candidate, location) => {
+    const serialized = JSON.stringify(candidate)
+    assert.notEqual(serialized, undefined, `${label} ${location} must be JSON-serializable`)
+    for (const removed of removedValues) {
+      if (serialized.includes(removed.value)) {
+        leaks.push(`${location}: ${removed.kind} for ${removed.path}`)
+      }
+    }
+  }
+  const visit = (candidate, location) => {
+    if (Array.isArray(candidate)) {
+      candidate.forEach((entry, index) => visit(entry, `${location}[${index}]`))
+      return
+    }
+    if (candidate !== null && typeof candidate === "object") {
+      for (const [key, entry] of Object.entries(candidate)) {
+        inspectSerialized(key, `${location} key`)
+        visit(entry, `${location}.${key}`)
+      }
+      return
+    }
+    inspectSerialized(candidate, location)
+  }
+  visit(value, "$")
+  assert.deepEqual(leaks, [], `${label} leaked captured values:\n${leaks.join("\n")}`)
+}
+
+function assertVectorPackRowSchema(row, label, index) {
+  assert.deepEqual(
+    Object.keys(row).sort(),
+    VECTOR_PACK_ROW_KEYS,
+    `${label} row ${index + 1} must contain exactly the allowed fields`,
+  )
+  assert.match(row.chunk_key, /^ck_[a-f0-9]{40}$/u)
+  assert.match(row.text_hash, /^sha256:[a-f0-9]{64}$/u)
+  assert.equal(row.embedding_spec_id, ACTIVE_EMBEDDING_SPEC.id)
+  assert.equal(row.dimension, ACTIVE_EMBEDDING_SPEC.dimension)
+  assert.equal(row.encoding, "float32-json")
+  assert.ok(Array.isArray(row.vector), `${label} row ${index + 1} vector must be an array`)
+  assert.equal(row.vector.length, ACTIVE_EMBEDDING_SPEC.dimension)
+  assert.ok(
+    row.vector.every((component) => typeof component === "number" && Number.isFinite(component)),
+    `${label} row ${index + 1} vector components must be finite numbers`,
+  )
+}
+
+function assertVectorPackRowsExcludeCaptured(rows, captures, label) {
+  rows.forEach((row, index) => {
+    assertVectorPackRowSchema(row, label, index)
+    assertSerializedTreeExcludesCaptured(row, captures, `${label} row ${index + 1}`)
+  })
+}
+
+function assertSnapshotBytesExcludeCaptured(sqliteBytes, captures, label) {
+  const leaks = []
+  for (const removed of capturedRemovedValues(captures)) {
+    if (sqliteBytes.includes(Buffer.from(removed.value))) {
+      leaks.push(`${removed.kind} for ${removed.path}`)
+    }
+  }
+  assert.deepEqual(leaks, [], `${label} leaked captured values:\n${leaks.join("\n")}`)
+}
+
 function parseVectorPackRows(packBytes) {
   return packBytes
     .toString("utf8")
@@ -435,12 +531,13 @@ async function readJson(filePath) {
   return JSON.parse(await readFile(filePath, "utf8"))
 }
 
-function assertManifestIsMetadataOnly(manifest, scratch, expectedPaths) {
+function assertManifestIsMetadataOnly(manifest, scratch, expectedPaths, captures = []) {
   const serialized = JSON.stringify(manifest)
   assert.doesNotMatch(serialized, /"(?:absPath|body|frontmatter|raw)"\s*:/u)
   assert.equal(serialized.includes(scratch), false)
   for (const marker of EXCLUDED_MARKERS) assert.equal(serialized.includes(marker), false)
   for (const excludedPath of EXCLUDED_PATHS) assert.equal(serialized.includes(excludedPath), false)
+  assertSerializedTreeExcludesCaptured(manifest, captures, "artifact manifest")
   assert.deepEqual(
     manifest.represented_documents.map((doc) => doc.path).sort(),
     [...expectedPaths].sort(),
@@ -567,7 +664,7 @@ test("widened local index eligibility never bypasses snapshot or vector-pack app
   }
 })
 
-test("tombstones and deletions cannot reappear through packs, snapshots, restored caches, or regenerated manifests", async () => {
+test("tombstones and deletions cannot reappear through packs, snapshots, restored caches, or regenerated manifests", async (t) => {
   const scratch = await scratchRoot("unit-6a-artifacts")
   const deskRoot = path.join(scratch, "desk")
   const restoredRoot = path.join(scratch, "restored-desk")
@@ -667,11 +764,13 @@ test("tombstones and deletions cannot reappear through packs, snapshots, restore
     })
     assert.equal(restored.reason, "stale_snapshot_reconciled")
     assert.equal(restored.snapshot?.snapshot_id, cacheSnapshotId)
-    assertCapturedDocumentsAbsent(
-      indexedChunks(restoredRoot),
-      removedCaptures,
-      "reconciled restored index",
-    )
+    await t.test("restored snapshot logical rows exclude every captured value", () => {
+      assertCapturedDocumentsAbsent(
+        indexedChunks(restoredRoot),
+        removedCaptures,
+        "reconciled restored index",
+      )
+    })
 
     const currentPackId = "synthetic-current-pack"
     const currentSnapshotId = "synthetic-current-snapshot"
@@ -702,52 +801,47 @@ test("tombstones and deletions cannot reappear through packs, snapshots, restore
       readFile(currentPack.primary),
       readFile(currentSnapshot.primary),
     ])
-    assertManifestIsMetadataOnly(packManifest, scratch, expectedPaths)
-    assertManifestIsMetadataOnly(snapshotManifest, scratch, expectedPaths)
+    await t.test("generated manifests structurally exclude every captured value", () => {
+      assertManifestIsMetadataOnly(packManifest, scratch, expectedPaths, removedCaptures)
+      assertManifestIsMetadataOnly(snapshotManifest, scratch, expectedPaths, removedCaptures)
+    })
     const packRows = parseVectorPackRows(packBytes)
-    assertCapturedDocumentsAbsent(
-      packRows,
-      removedCaptures,
-      "current vector pack",
-      { text: false },
-    )
-    assert.ok(
-      packRows.every((row) => (
-        !Object.hasOwn(row, "path") &&
-        !Object.hasOwn(row, "text") &&
-        !Object.hasOwn(row, "body")
-      )),
-      "vector-pack rows must expose identities and vectors, not source paths or bodies",
-    )
+    await t.test("generated vector-pack rows enforce the exact schema and exclude every captured value", () => {
+      assertVectorPackRowsExcludeCaptured(packRows, removedCaptures, "current vector pack")
+    })
     const snapshot = await inspectSnapshotPayload({
       snapshotBytes,
       scratch,
       name: currentSnapshotId,
     })
-    assertCapturedDocumentsAbsent(
-      snapshot.chunks,
-      removedCaptures,
-      "decoded current snapshot DB",
-    )
-    for (const marker of EXCLUDED_MARKERS) {
-      assert.equal(
-        snapshot.chunks.some((chunk) => chunk.text.includes(marker)),
-        false,
-        `decoded current snapshot DB leaked excluded marker ${marker}`,
+    await t.test("generated snapshot logical rows exclude every captured value", () => {
+      assertCapturedDocumentsAbsent(
+        snapshot.chunks,
+        removedCaptures,
+        "decoded current snapshot DB",
       )
-      assert.equal(
-        snapshot.sqliteBytes.includes(Buffer.from(marker)),
-        false,
-        `raw current snapshot pages leaked excluded marker ${marker}`,
+      for (const marker of EXCLUDED_MARKERS) {
+        assert.equal(
+          snapshot.chunks.some((chunk) => chunk.text.includes(marker)),
+          false,
+          `decoded current snapshot DB leaked excluded marker ${marker}`,
+        )
+      }
+    })
+    await t.test("generated snapshot raw SQLite bytes exclude every captured value", () => {
+      for (const marker of EXCLUDED_MARKERS) {
+        assert.equal(
+          snapshot.sqliteBytes.includes(Buffer.from(marker)),
+          false,
+          `raw current snapshot pages leaked excluded marker ${marker}`,
+        )
+      }
+      assertSnapshotBytesExcludeCaptured(
+        snapshot.sqliteBytes,
+        removedCaptures,
+        "raw current snapshot pages",
       )
-    }
-    for (const capture of removedCaptures) {
-      assert.equal(
-        snapshot.sqliteBytes.includes(Buffer.from(capture.marker)),
-        false,
-        `snapshot publication must rebuild or compact secure_delete=0 pages before publishing ${capture.path}`,
-      )
-    }
+    })
   } finally {
     await rm(scratch, { recursive: true, force: true })
   }
@@ -888,13 +982,9 @@ test("committed public artifacts contain only approved public corpus data", asyn
     const vectorRows = parseVectorPackRows(
       await readFile(PUBLIC_VECTOR_MANIFEST_PATH.replace(/\.manifest\.json$/u, ".jsonl")),
     )
-    assert.ok(
-      vectorRows.every((row) => (
-        Object.keys(row).sort().join(",") ===
-          "chunk_key,dimension,embedding_spec_id,encoding,text_hash,vector"
-      )),
-      "committed vector rows must contain only chunk identities and vectors",
-    )
+    vectorRows.forEach((row, index) => {
+      assertVectorPackRowSchema(row, "committed vector pack", index)
+    })
     const snapshot = await inspectSnapshotPayload({
       snapshotBytes: await readFile(path.join(
         path.dirname(PUBLIC_SNAPSHOT_MANIFEST_PATH),
