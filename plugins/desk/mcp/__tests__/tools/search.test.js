@@ -367,6 +367,7 @@ test("desk_search — returns a partial result from a lexical-only index before 
   }
   let maintenanceCalls = 0
   let repairPromise = null
+  let repairStatus = { state: "idle", last_error: null }
   const maintenance = createMaintenanceCoordinator({
     ensureIndex: async (deskRoot, ensureOptions) => {
       if (ensureOptions.skipEmbed) maintenanceCalls += 1
@@ -380,13 +381,14 @@ test("desk_search — returns a partial result from a lexical-only index before 
     createRepairCoordinator: () => ({
       start({ deskRoot, embed: repairEmbed }) {
         if (!repairPromise) {
+          repairStatus = { state: "running", last_error: null }
           repairPromise = (async () => {
             repairStarted.resolve()
             await awaitBounded(
               repairRelease.promise,
               "direct search background repair was not released",
             )
-            return awaitBounded(
+            const repaired = await awaitBounded(
               ensureIndex(deskRoot, {
                 embed: repairEmbed,
                 snapshots: false,
@@ -394,6 +396,8 @@ test("desk_search — returns a partial result from a lexical-only index before 
               }),
               "direct search background repair did not settle",
             )
+            repairStatus = { state: "complete", last_error: null }
+            return repaired
           })()
         }
         return repairPromise
@@ -408,10 +412,7 @@ test("desk_search — returns a partial result from a lexical-only index before 
         }
       },
       status() {
-        return {
-          state: repairPromise === null ? "idle" : "running",
-          last_error: null,
-        }
+        return { ...repairStatus }
       },
     }),
   })
@@ -462,13 +463,31 @@ test("desk_search — returns a partial result from a lexical-only index before 
       ["alpha"],
       "query embedding must still run before return",
     )
-    assert.deepEqual(Object.keys(first).sort(), [
+    const {
+      document_vectors: firstDocumentVectors,
+      semantic_repair_status: firstRepairStatus,
+      ...firstLegacyResult
+    } = first
+    assert.deepEqual(Object.keys(firstLegacyResult).sort(), [
       "latency_ms",
       "query",
       "results",
       "search_mode",
       "semantic_unavailable",
     ])
+    assert.deepEqual(firstDocumentVectors, {
+      state: "missing",
+      chunks_total: 1,
+      vectors_indexed: 0,
+      missing_vectors: 1,
+      known_unembeddable_vectors: 0,
+      repairable_missing_vectors: 1,
+      coverage: 0,
+    })
+    assert.deepEqual(firstRepairStatus, {
+      state: "running",
+      last_error: null,
+    })
     assert.deepEqual(Object.keys(first.results[0]).sort(), [
       "kind",
       "path",
@@ -498,7 +517,28 @@ test("desk_search — returns a partial result from a lexical-only index before 
     )
 
     assert.equal(maintenanceCalls, 2)
-    assert.deepEqual(Object.keys(later).sort(), Object.keys(first).sort())
+    const {
+      document_vectors: laterDocumentVectors,
+      semantic_repair_status: laterRepairStatus,
+      ...laterLegacyResult
+    } = later
+    assert.deepEqual(
+      Object.keys(laterLegacyResult).sort(),
+      Object.keys(firstLegacyResult).sort(),
+    )
+    assert.deepEqual(laterDocumentVectors, {
+      state: "available",
+      chunks_total: 1,
+      vectors_indexed: 1,
+      missing_vectors: 0,
+      known_unembeddable_vectors: 0,
+      repairable_missing_vectors: 0,
+      coverage: 1,
+    })
+    assert.deepEqual(laterRepairStatus, {
+      state: "complete",
+      last_error: null,
+    })
     assert.deepEqual(
       Object.keys(later.results[0]).sort(),
       Object.keys(first.results[0]).sort(),

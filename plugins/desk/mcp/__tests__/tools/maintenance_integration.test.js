@@ -2299,13 +2299,31 @@ test("maintenance integration preserves the exact 15 tools and current search/re
     )
 
     assert.deepEqual([...TOOL_NAMES].sort(), EXPECTED_TOOL_NAMES)
-    assert.deepEqual(Object.keys(search).sort(), [
+    const {
+      document_vectors: documentVectors,
+      semantic_repair_status: semanticRepairStatus,
+      ...legacySearch
+    } = search
+    assert.deepEqual(Object.keys(legacySearch).sort(), [
       "latency_ms",
       "query",
       "results",
       "search_mode",
       "semantic_unavailable",
     ])
+    assert.deepEqual(documentVectors, {
+      state: "available",
+      chunks_total: 1,
+      vectors_indexed: 1,
+      missing_vectors: 0,
+      known_unembeddable_vectors: 0,
+      repairable_missing_vectors: 0,
+      coverage: 1,
+    })
+    assert.deepEqual(semanticRepairStatus, {
+      state: "idle",
+      last_error: null,
+    })
     assert.ok(search.results.length >= 1)
     assert.deepEqual(Object.keys(search.results[0]).sort(), [
       "kind",
