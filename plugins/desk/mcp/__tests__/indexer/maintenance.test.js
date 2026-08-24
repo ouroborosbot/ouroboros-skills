@@ -4,11 +4,13 @@ import { promises as fs } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
+import { indexDbPath } from "../../src/db/init.js"
 import { createSemanticRepairCoordinator } from "../../src/indexer/semantic-repair.js"
 import {
   physicalRootKey,
   resolveRootIdentity,
 } from "../../src/indexer/root-identity.js"
+import { desk_status } from "../../src/tools/status.js"
 import { createModeledCaseCollisionRootIdentity } from "../fixtures/root_identity_fixture.js"
 
 const maintenanceModuleUrl = new URL(
@@ -726,6 +728,10 @@ test("successful explicit reindex replaces prior failed repair status on its ret
       }
       explicitEnsureCalls += 1
       assert.equal(deskRoot, fixture.rootA)
+      assert.deepEqual(
+        maintenance.semanticRepairSnapshot({ deskRoot: fixture.rootA }).status,
+        { state: "running", last_error: null },
+      )
       fixture.retargetAlias(fixture.rootB)
       return {
         built: true,
@@ -815,6 +821,10 @@ test("successful explicit reindex completes repair status after cancelling an ac
             },
           }
         }
+        assert.deepEqual(
+          maintenance.semanticRepairSnapshot({ deskRoot: root }).status,
+          { state: "running", last_error: null },
+        )
         return {
           built: true,
           reason: "semantic_missing",
@@ -887,7 +897,7 @@ test("successful explicit reindex completes repair status after cancelling an ac
   }
 })
 
-test("explicit reindex failure preserves prior failed repair status and redaction", async () => {
+test("explicit reindex failure replaces prior failed repair status with its redacted failure", async () => {
   const { createMaintenanceCoordinator } = await loadMaintenance()
   const root = await makeRoot("desk-maintenance-reindex-failure-")
   const scheduler = createManualScheduler()
@@ -905,6 +915,10 @@ test("explicit reindex failure preserves prior failed repair status and redactio
           },
         }
       }
+      assert.deepEqual(
+        maintenance.semanticRepairSnapshot({ deskRoot: root }).status,
+        { state: "running", last_error: null },
+      )
       throw new Error("private explicit reindex failure detail")
     },
     repairBatch: async () => {
@@ -940,7 +954,13 @@ test("explicit reindex failure preserves prior failed repair status and redactio
     )
     assert.deepEqual(
       maintenance.semanticRepairSnapshot({ deskRoot: root }).status,
-      failedStatus,
+      {
+        state: "failed",
+        last_error: {
+          reason: "semantic_repair_failed",
+          message: "semantic repair failed",
+        },
+      },
     )
   } finally {
     await maintenance.cancelBackgroundRepair(root).catch(() => {})
@@ -996,17 +1016,24 @@ test("explicit reindex cancellation cleanup failure preserves running repair sta
 test("explicit reindex with a repairable vector gap preserves idle repair status", async () => {
   const { createMaintenanceCoordinator } = await loadMaintenance()
   const root = await makeRoot("desk-maintenance-reindex-gap-")
-  const maintenance = createMaintenanceCoordinator({
-    ensureIndex: async () => ({
-      built: true,
-      reason: "semantic_missing",
-      semantic: {
-        chunks_total: 2,
-        vectors_indexed: 1,
-        missing_vectors: 1,
-        repairable_missing_vectors: 1,
-      },
-    }),
+  let maintenance
+  maintenance = createMaintenanceCoordinator({
+    ensureIndex: async () => {
+      assert.deepEqual(
+        maintenance.semanticRepairSnapshot({ deskRoot: root }).status,
+        { state: "running", last_error: null },
+      )
+      return {
+        built: true,
+        reason: "semantic_missing",
+        semantic: {
+          chunks_total: 2,
+          vectors_indexed: 1,
+          missing_vectors: 1,
+          repairable_missing_vectors: 1,
+        },
+      }
+    },
   })
 
   try {
@@ -1018,6 +1045,186 @@ test("explicit reindex with a repairable vector gap preserves idle repair status
       { state: "idle", last_error: null },
     )
   } finally {
+    await maintenance.cancelBackgroundRepair(root).catch(() => {})
+    await removeRoots(root)
+  }
+})
+
+test("explicit reindex replaces prior complete with idle when a repairable vector gap remains", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const root = await makeRoot("desk-maintenance-reindex-complete-gap-")
+  let ensureCalls = 0
+  const maintenance = createMaintenanceCoordinator({
+    ensureIndex: async () => {
+      ensureCalls += 1
+      return ensureCalls === 1
+        ? {
+            built: true,
+            reason: "semantic_missing",
+            semantic: {
+              chunks_total: 1,
+              vectors_indexed: 1,
+              missing_vectors: 0,
+              repairable_missing_vectors: 0,
+            },
+          }
+        : {
+            built: true,
+            reason: "semantic_missing",
+            semantic: {
+              chunks_total: 2,
+              vectors_indexed: 1,
+              missing_vectors: 1,
+              repairable_missing_vectors: 1,
+            },
+          }
+    },
+  })
+
+  try {
+    await maintenance.runExplicitReindex({ deskRoot: root })
+    assert.deepEqual(
+      maintenance.semanticRepairSnapshot({ deskRoot: root }).status,
+      { state: "complete", last_error: null },
+    )
+
+    const result = await maintenance.runExplicitReindex({ deskRoot: root })
+
+    assert.equal(result.semantic.repairable_missing_vectors, 1)
+    assert.deepEqual(
+      maintenance.semanticRepairSnapshot({ deskRoot: root }).status,
+      { state: "idle", last_error: null },
+    )
+  } finally {
+    await maintenance.cancelBackgroundRepair(root).catch(() => {})
+    await removeRoots(root)
+  }
+})
+
+test("force explicit reindex failure after prior complete deletes the DB and publishes a redacted failure", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const root = await makeRoot("desk-maintenance-reindex-complete-force-failure-")
+  const dbPath = indexDbPath(root)
+  let ensureCalls = 0
+  const maintenance = createMaintenanceCoordinator({
+    ensureIndex: async () => {
+      ensureCalls += 1
+      if (ensureCalls === 1) {
+        return {
+          built: true,
+          reason: "semantic_missing",
+          semantic: {
+            chunks_total: 1,
+            vectors_indexed: 1,
+            missing_vectors: 0,
+            repairable_missing_vectors: 0,
+          },
+        }
+      }
+      throw new Error(`private force failure at ${dbPath}`)
+    },
+  })
+
+  try {
+    await maintenance.runExplicitReindex({ deskRoot: root })
+    assert.deepEqual(
+      maintenance.semanticRepairSnapshot({ deskRoot: root }).status,
+      { state: "complete", last_error: null },
+    )
+    await fs.mkdir(path.dirname(dbPath), { recursive: true })
+    await fs.writeFile(dbPath, "stale index", "utf8")
+
+    await assert.rejects(
+      maintenance.runExplicitReindex({
+        deskRoot: root,
+        force: true,
+      }),
+      new RegExp(`private force failure at ${dbPath.replaceAll("\\", "\\\\")}`, "u"),
+    )
+
+    await assert.rejects(fs.access(dbPath), { code: "ENOENT" })
+    const status = maintenance.semanticRepairSnapshot({ deskRoot: root }).status
+    assert.deepEqual(status, {
+      state: "failed",
+      last_error: {
+        reason: "semantic_repair_failed",
+        message: "semantic repair failed",
+      },
+    })
+    assert.deepEqual(Object.keys(status.last_error).sort(), ["message", "reason"])
+    assert.equal(JSON.stringify(status).includes(dbPath), false)
+  } finally {
+    await maintenance.cancelBackgroundRepair(root).catch(() => {})
+    await removeRoots(root)
+  }
+})
+
+test("desk_status observes running instead of prior complete while explicit reindex ensure is gated", async () => {
+  const {
+    createMaintenanceCoordinator,
+    createMaintenanceRuntimeBinding,
+  } = await loadMaintenance()
+  const root = await makeRoot("desk-maintenance-reindex-running-status-")
+  const ensureEntered = deferred()
+  const ensureRelease = deferred()
+  let ensureCalls = 0
+  let reindex
+  const maintenance = createMaintenanceCoordinator({
+    ensureIndex: async () => {
+      ensureCalls += 1
+      if (ensureCalls === 1) {
+        return {
+          built: true,
+          reason: "semantic_missing",
+          semantic: {
+            chunks_total: 1,
+            vectors_indexed: 1,
+            missing_vectors: 0,
+            repairable_missing_vectors: 0,
+          },
+        }
+      }
+      ensureEntered.resolve()
+      await ensureRelease.promise
+      return {
+        built: true,
+        reason: "semantic_missing",
+        semantic: {
+          chunks_total: 1,
+          vectors_indexed: 1,
+          missing_vectors: 0,
+          repairable_missing_vectors: 0,
+        },
+      }
+    },
+  })
+
+  try {
+    await maintenance.runExplicitReindex({ deskRoot: root })
+    assert.deepEqual(
+      maintenance.semanticRepairSnapshot({ deskRoot: root }).status,
+      { state: "complete", last_error: null },
+    )
+
+    reindex = maintenance.runExplicitReindex({ deskRoot: root })
+    await awaitBounded(
+      ensureEntered.promise,
+      "explicit reindex ensure did not enter its deterministic gate",
+    )
+    const status = await desk_status({
+      deskRoot: root,
+      runtimeContext: createMaintenanceRuntimeBinding(maintenance),
+    })
+
+    assert.deepEqual(status.semantic_repair_status, {
+      state: "running",
+      last_error: null,
+    })
+    ensureRelease.resolve()
+    await reindex
+  } finally {
+    ensureRelease.resolve()
+    await Promise.allSettled([reindex].filter(Boolean))
     await maintenance.cancelBackgroundRepair(root).catch(() => {})
     await removeRoots(root)
   }
