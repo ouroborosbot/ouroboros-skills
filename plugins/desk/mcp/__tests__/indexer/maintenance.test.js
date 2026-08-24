@@ -703,6 +703,326 @@ test("non-force reindex rejects alias retarget after cancellation before full en
   await assertRetargetedReindexFailsClosed({ force: false })
 })
 
+test("successful explicit reindex replaces prior failed repair status on its retained canonical root", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const fixture = createModeledCaseCollisionRootIdentity()
+  const scheduler = createManualScheduler()
+  let explicitEnsureCalls = 0
+  const maintenance = createMaintenanceCoordinator({
+    resolveIdentity: fixture.resolveIdentity,
+    validateIdentity: fixture.validateIdentity,
+    ensureIndex: async (deskRoot, options) => {
+      if (options.skipEmbed) {
+        return {
+          built: false,
+          reason: "fresh",
+          semantic: {
+            chunks_total: 1,
+            vectors_indexed: 0,
+            missing_vectors: 1,
+            repairable_missing_vectors: 1,
+          },
+        }
+      }
+      explicitEnsureCalls += 1
+      assert.equal(deskRoot, fixture.rootA)
+      fixture.retargetAlias(fixture.rootB)
+      return {
+        built: true,
+        reason: "semantic_missing",
+        semantic: {
+          chunks_total: 1,
+          vectors_indexed: 1,
+          missing_vectors: 0,
+          repairable_missing_vectors: 0,
+        },
+      }
+    },
+    repairBatch: async () => {
+      const error = new Error("private failed repair detail")
+      error.code = "embedding_service_unavailable"
+      throw error
+    },
+    createRepairCoordinator: (options) =>
+      createSemanticRepairCoordinator({
+        ...options,
+        schedule: scheduler.schedule,
+        clearScheduled: scheduler.clear,
+      }),
+  })
+
+  const freshness = await maintenance.ensureSearchFreshness({
+    deskRoot: fixture.aliasA,
+  })
+  assert.deepEqual(
+    maintenance.semanticRepairSnapshot({ deskRoot: fixture.rootA }).status,
+    { state: "running", last_error: null },
+  )
+  await scheduler.runNext()
+  assert.deepEqual(await freshness.repair, {
+    state: "failed",
+    last_error: {
+      reason: "embedding_service_unavailable",
+      message: "embedding endpoint unavailable",
+    },
+  })
+
+  const result = await maintenance.runExplicitReindex({
+    deskRoot: fixture.aliasA,
+  })
+
+  assert.equal(explicitEnsureCalls, 1)
+  assert.deepEqual(result, {
+    built: true,
+    reason: "semantic_missing",
+    semantic: {
+      chunks_total: 1,
+      vectors_indexed: 1,
+      missing_vectors: 0,
+      repairable_missing_vectors: 0,
+    },
+  })
+  assert.deepEqual(
+    maintenance.semanticRepairSnapshot({ deskRoot: fixture.rootA }).status,
+    { state: "complete", last_error: null },
+  )
+  assert.deepEqual(
+    maintenance.semanticRepairSnapshot({ deskRoot: fixture.rootB }).status,
+    { state: "idle", last_error: null },
+  )
+})
+
+test("successful explicit reindex completes repair status after cancelling an active repair", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const root = await makeRoot("desk-maintenance-reindex-status-")
+  const scheduler = createManualScheduler()
+  const repairEntered = deferred()
+  let scheduledRepair
+  let maintenance
+
+  try {
+    maintenance = createMaintenanceCoordinator({
+      ensureIndex: async (_deskRoot, options) => {
+        if (options.skipEmbed) {
+          return {
+            built: false,
+            reason: "fresh",
+            semantic: {
+              chunks_total: 1,
+              vectors_indexed: 0,
+              missing_vectors: 1,
+              repairable_missing_vectors: 1,
+            },
+          }
+        }
+        return {
+          built: true,
+          reason: "semantic_missing",
+          semantic: {
+            chunks_total: 1,
+            vectors_indexed: 1,
+            missing_vectors: 0,
+            repairable_missing_vectors: 0,
+          },
+        }
+      },
+      repairBatch: async ({ signal }) => {
+        repairEntered.resolve()
+        await new Promise((resolve) => {
+          const onAbort = () => resolve()
+          if (signal.aborted) onAbort()
+          else signal.addEventListener("abort", onAbort, { once: true })
+        })
+        return {
+          processed_chunks: 0,
+          vectors_indexed: 0,
+          remaining_chunks: 1,
+          stopped_by: "cancelled",
+          cancelled: true,
+        }
+      },
+      createRepairCoordinator: (options) =>
+        createSemanticRepairCoordinator({
+          ...options,
+          schedule: scheduler.schedule,
+          clearScheduled: scheduler.clear,
+        }),
+    })
+
+    const freshness = await maintenance.ensureSearchFreshness({
+      deskRoot: root,
+    })
+    scheduledRepair = scheduler.runNext()
+    await awaitBounded(
+      repairEntered.promise,
+      "active semantic repair did not enter before explicit reindex",
+    )
+    assert.deepEqual(
+      maintenance.semanticRepairSnapshot({ deskRoot: root }).status,
+      { state: "running", last_error: null },
+    )
+
+    const result = await maintenance.runExplicitReindex({ deskRoot: root })
+
+    assert.equal(result.reason, "semantic_missing")
+    assert.equal(result.semantic.repairable_missing_vectors, 0)
+    assert.deepEqual(await freshness.repair, {
+      state: "idle",
+      last_error: null,
+    })
+    await awaitBounded(
+      scheduledRepair,
+      "cancelled semantic repair callback did not settle",
+    )
+    assert.deepEqual(
+      maintenance.semanticRepairSnapshot({ deskRoot: root }).status,
+      { state: "complete", last_error: null },
+    )
+  } finally {
+    if (maintenance) {
+      await maintenance.cancelBackgroundRepair(root).catch(() => {})
+    }
+    await Promise.allSettled([scheduledRepair].filter(Boolean))
+    await removeRoots(root)
+  }
+})
+
+test("explicit reindex failure preserves prior failed repair status and redaction", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const root = await makeRoot("desk-maintenance-reindex-failure-")
+  const scheduler = createManualScheduler()
+  const maintenance = createMaintenanceCoordinator({
+    ensureIndex: async (_deskRoot, options) => {
+      if (options.skipEmbed) {
+        return {
+          built: false,
+          reason: "fresh",
+          semantic: {
+            chunks_total: 1,
+            vectors_indexed: 0,
+            missing_vectors: 1,
+            repairable_missing_vectors: 1,
+          },
+        }
+      }
+      throw new Error("private explicit reindex failure detail")
+    },
+    repairBatch: async () => {
+      const error = new Error("private background repair failure detail")
+      error.code = "embedding_service_unavailable"
+      throw error
+    },
+    createRepairCoordinator: (options) =>
+      createSemanticRepairCoordinator({
+        ...options,
+        schedule: scheduler.schedule,
+        clearScheduled: scheduler.clear,
+      }),
+  })
+
+  try {
+    const freshness = await maintenance.ensureSearchFreshness({
+      deskRoot: root,
+    })
+    await scheduler.runNext()
+    const failedStatus = {
+      state: "failed",
+      last_error: {
+        reason: "embedding_service_unavailable",
+        message: "embedding endpoint unavailable",
+      },
+    }
+    assert.deepEqual(await freshness.repair, failedStatus)
+
+    await assert.rejects(
+      maintenance.runExplicitReindex({ deskRoot: root }),
+      /private explicit reindex failure detail/u,
+    )
+    assert.deepEqual(
+      maintenance.semanticRepairSnapshot({ deskRoot: root }).status,
+      failedStatus,
+    )
+  } finally {
+    await maintenance.cancelBackgroundRepair(root).catch(() => {})
+    await removeRoots(root)
+  }
+})
+
+test("explicit reindex cancellation cleanup failure preserves running repair status", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const root = await makeRoot("desk-maintenance-reindex-cancel-failure-")
+  let ensureCalls = 0
+  let cancelCalls = 0
+  const maintenance = createMaintenanceCoordinator({
+    ensureIndex: async () => {
+      ensureCalls += 1
+      return {
+        built: true,
+        reason: "semantic_missing",
+        semantic: {
+          chunks_total: 1,
+          vectors_indexed: 1,
+          missing_vectors: 0,
+          repairable_missing_vectors: 0,
+        },
+      }
+    },
+    createRepairCoordinator: () => ({
+      start: () => new Promise(() => {}),
+      async cancel() {
+        cancelCalls += 1
+        throw new Error("repair cancellation cleanup failed")
+      },
+      status: () => ({ state: "running", last_error: null }),
+    }),
+  })
+
+  try {
+    await assert.rejects(
+      maintenance.runExplicitReindex({ deskRoot: root }),
+      /repair cancellation cleanup failed/u,
+    )
+    assert.equal(cancelCalls, 1)
+    assert.equal(ensureCalls, 0)
+    assert.deepEqual(
+      maintenance.semanticRepairSnapshot({ deskRoot: root }).status,
+      { state: "running", last_error: null },
+    )
+  } finally {
+    await removeRoots(root)
+  }
+})
+
+test("explicit reindex with a repairable vector gap preserves idle repair status", async () => {
+  const { createMaintenanceCoordinator } = await loadMaintenance()
+  const root = await makeRoot("desk-maintenance-reindex-gap-")
+  const maintenance = createMaintenanceCoordinator({
+    ensureIndex: async () => ({
+      built: true,
+      reason: "semantic_missing",
+      semantic: {
+        chunks_total: 2,
+        vectors_indexed: 1,
+        missing_vectors: 1,
+        repairable_missing_vectors: 1,
+      },
+    }),
+  })
+
+  try {
+    const result = await maintenance.runExplicitReindex({ deskRoot: root })
+
+    assert.equal(result.semantic.repairable_missing_vectors, 1)
+    assert.deepEqual(
+      maintenance.semanticRepairSnapshot({ deskRoot: root }).status,
+      { state: "idle", last_error: null },
+    )
+  } finally {
+    await maintenance.cancelBackgroundRepair(root).catch(() => {})
+    await removeRoots(root)
+  }
+})
+
 test("fresh read rejects alias retarget after freshness ensure before database open or query", async () => {
   const { createMaintenanceCoordinator } = await loadMaintenance()
   const fixture = createModeledCaseCollisionRootIdentity()
