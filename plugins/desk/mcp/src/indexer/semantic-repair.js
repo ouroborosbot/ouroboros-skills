@@ -238,13 +238,57 @@ export function createSemanticRepairCoordinator({
   }
 
   function markComplete(deskRootOrIdentity, retainedIdentity) {
-    const rootIdentity = retainedIdentity ?? identityFor(deskRootOrIdentity)
-    const complete = repairStatus("complete")
-    statuses.set(rootIdentity.key, complete)
-    return repairStatusSnapshot(complete)
+    return setRootStatus(
+      deskRootOrIdentity,
+      repairStatus("complete"),
+      retainedIdentity,
+    )
   }
 
-  return { cancel, markComplete, start, status }
+  function beginExplicitReindex(deskRootOrIdentity, retainedIdentity) {
+    return setRootStatus(
+      deskRootOrIdentity,
+      repairStatus("running"),
+      retainedIdentity,
+    )
+  }
+
+  function finishExplicitReindex(
+    deskRootOrIdentity,
+    repairableMissing,
+    retainedIdentity,
+  ) {
+    return setRootStatus(
+      deskRootOrIdentity,
+      repairStatus(repairableMissing === 0 ? "complete" : "idle"),
+      retainedIdentity,
+    )
+  }
+
+  function failExplicitReindex(deskRootOrIdentity, error, retainedIdentity) {
+    return setRootStatus(
+      deskRootOrIdentity,
+      repairStatus("failed", compactError(error)),
+      retainedIdentity,
+    )
+  }
+
+  function setRootStatus(deskRootOrIdentity, nextStatus, retainedIdentity) {
+    const rootIdentity = retainedIdentity ?? identityFor(deskRootOrIdentity)
+    const storedStatus = repairStatusSnapshot(nextStatus)
+    statuses.set(rootIdentity.key, storedStatus)
+    return repairStatusSnapshot(storedStatus)
+  }
+
+  return {
+    beginExplicitReindex,
+    cancel,
+    failExplicitReindex,
+    finishExplicitReindex,
+    markComplete,
+    start,
+    status,
+  }
 }
 
 export async function repairMissingVectorBatch({

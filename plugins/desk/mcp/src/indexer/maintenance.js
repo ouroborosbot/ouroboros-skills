@@ -207,16 +207,24 @@ export function createMaintenanceCoordinator({
     return rootQueue.run(rootIdentity, async () => {
       await initialCancellation
       await repairCoordinator.cancel(root, rootIdentity)
-      validateIdentity(rootIdentity)
-      if (force) {
-        await resetIndex({ deskRoot: root })
+      repairCoordinator.beginExplicitReindex?.(root, rootIdentity)
+      try {
         validateIdentity(rootIdentity)
+        if (force) {
+          await resetIndex({ deskRoot: root })
+          validateIdentity(rootIdentity)
+        }
+        const index = await ensureIndex(root, ensureOptions, rootIdentity)
+        repairCoordinator.finishExplicitReindex?.(
+          root,
+          repairableMissingVectors(index),
+          rootIdentity,
+        )
+        return index
+      } catch (error) {
+        repairCoordinator.failExplicitReindex?.(root, error, rootIdentity)
+        throw error
       }
-      const index = await ensureIndex(root, ensureOptions, rootIdentity)
-      if (repairableMissingVectors(index) === 0) {
-        repairCoordinator.markComplete?.(root, rootIdentity)
-      }
-      return index
     })
   }
 
