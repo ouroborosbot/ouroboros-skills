@@ -1,0 +1,3 @@
+# Synthetic nested planning reference
+
+SYNTHETIC_ALLOWED_PLANNING_REFERENCE_BODY
