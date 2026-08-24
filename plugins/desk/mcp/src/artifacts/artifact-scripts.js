@@ -723,14 +723,14 @@ async function readSanitizedSnapshotBytes({
     path.dirname(indexDbPath(deskRoot)),
     `.desk-snapshot-sanitized-${makeId()}.sqlite`,
   )
+  let bytes
   let failure
   try {
     throwIfAborted(signal)
     vacuumInto(db, sanitizedDbPath)
     throwIfAborted(signal)
-    const bytes = await readFile(sanitizedDbPath)
+    bytes = await readFile(sanitizedDbPath)
     throwIfAborted(signal)
-    return bytes
   } catch (error) {
     if (error?.name === "AbortError") {
       failure = error
@@ -738,17 +738,17 @@ async function readSanitizedSnapshotBytes({
       failure = new Error("snapshot sanitized logical copy failed")
       failure.code = "snapshot_sanitization_failed"
     }
-    throw failure
-  } finally {
-    try {
-      await removeFile(sanitizedDbPath, { force: true })
-    } catch {
-      const cleanupError = new Error("snapshot sanitized database cleanup failed")
-      cleanupError.code = "snapshot_sanitization_cleanup_failed"
-      if (failure?.name === "AbortError") cleanupError.name = "AbortError"
-      throw cleanupError
-    }
   }
+  try {
+    await removeFile(sanitizedDbPath, { force: true })
+  } catch {
+    const cleanupError = new Error("snapshot sanitized database cleanup failed")
+    cleanupError.code = "snapshot_sanitization_cleanup_failed"
+    if (failure?.name === "AbortError") cleanupError.name = "AbortError"
+    throw cleanupError
+  }
+  if (failure) throw failure
+  return bytes
 }
 
 function vacuumDbInto(db, destinationPath) {

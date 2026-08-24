@@ -47,24 +47,29 @@ test("sanitized snapshot copies clean up on success without exposing their path"
 })
 
 test("sanitized snapshot copies clean up after errors and redact diagnostics", async () => {
-  let removed = false
-  await assert.rejects(
-    () => readSanitizedSnapshotBytes(helperOptions({
-      readFile: async () => {
-        throw new Error("private path and body must not escape")
+  for (const readFailure of [
+    new Error("private path and body must not escape"),
+    null,
+  ]) {
+    let removed = false
+    await assert.rejects(
+      () => readSanitizedSnapshotBytes(helperOptions({
+        readFile: async () => {
+          throw readFailure
+        },
+        removeFile: async () => {
+          removed = true
+        },
+      })),
+      (error) => {
+        assert.equal(error.code, "snapshot_sanitization_failed")
+        assert.equal(error.message, "snapshot sanitized logical copy failed")
+        assert.doesNotMatch(error.message, /private path|body/u)
+        return true
       },
-      removeFile: async () => {
-        removed = true
-      },
-    })),
-    (error) => {
-      assert.equal(error.code, "snapshot_sanitization_failed")
-      assert.equal(error.message, "snapshot sanitized logical copy failed")
-      assert.doesNotMatch(error.message, /private path|body/u)
-      return true
-    },
-  )
-  assert.equal(removed, true)
+    )
+    assert.equal(removed, true)
+  }
 })
 
 test("sanitized snapshot copies clean up after cancellation", async () => {
@@ -89,10 +94,18 @@ test("sanitized snapshot copies clean up after cancellation", async () => {
 })
 
 test("sanitized snapshot cleanup failures redact diagnostics, including cancellation", async () => {
-  for (const signal of [undefined, AbortSignal.abort()]) {
+  for (const scenario of [
+    {},
+    {
+      readFile: async () => {
+        throw new Error("private read path must not escape")
+      },
+    },
+    { signal: AbortSignal.abort() },
+  ]) {
     await assert.rejects(
       () => readSanitizedSnapshotBytes(helperOptions({
-        signal,
+        ...scenario,
         removeFile: async () => {
           throw new Error("private cleanup path must not escape")
         },
@@ -100,8 +113,8 @@ test("sanitized snapshot cleanup failures redact diagnostics, including cancella
       (error) => {
         assert.equal(error.code, "snapshot_sanitization_cleanup_failed")
         assert.equal(error.message, "snapshot sanitized database cleanup failed")
-        assert.equal(error.name, signal ? "AbortError" : "Error")
-        assert.doesNotMatch(error.message, /private cleanup path/u)
+        assert.equal(error.name, scenario.signal ? "AbortError" : "Error")
+        assert.doesNotMatch(error.message, /private (?:read|cleanup) path/u)
         return true
       },
     )
