@@ -435,6 +435,46 @@ test("semantic repair status accepts retained leases and rejects malformed ident
   }
 })
 
+test("semantic repair status projection allowlists state and error fields", async () => {
+  const { projectSemanticRepairStatus } = await loadSemanticRepair()
+
+  assert.deepEqual(projectSemanticRepairStatus(), {
+    state: "idle",
+    last_error: null,
+  })
+  assert.deepEqual(projectSemanticRepairStatus({
+    state: "unknown",
+    last_error: {
+      reason: "private-reason",
+      message: "private-message",
+    },
+  }), {
+    state: "idle",
+    last_error: null,
+  })
+  assert.deepEqual(projectSemanticRepairStatus({
+    state: "failed",
+    last_error: null,
+  }), {
+    state: "failed",
+    last_error: null,
+  })
+  assert.deepEqual(projectSemanticRepairStatus({
+    state: "failed",
+    last_error: {
+      reason: 42,
+      message: {},
+      path: "private-path",
+    },
+  }), {
+    state: "failed",
+    last_error: {
+      reason: "semantic_repair_failed",
+      message: "semantic repair failed",
+    },
+  })
+})
+
 test("semantic repair reuses state and cancellation across symlink aliases", async (t) => {
   const root = await makeRoot("desk-semantic-repair-alias-root-")
   let aliasFixture
