@@ -10,6 +10,7 @@ import {
   isMaintenanceCoordinator,
   maintenanceCoordinator as defaultMaintenanceCoordinator,
 } from "../../src/indexer/maintenance.js"
+import { physicalRootKey } from "../../src/indexer/root-identity.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 
 function parseResult(res) {
@@ -292,7 +293,7 @@ test("server.startServer binds one runtime coordinator through dispatch without 
   assert.equal(body.reason, "fresh")
   assert.deepEqual(maintenanceCalls, [
     {
-      deskRoot: path.resolve(root),
+      deskRoot: physicalRootKey(root),
       ensureOptions: {},
     },
   ])

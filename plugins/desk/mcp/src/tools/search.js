@@ -447,6 +447,7 @@ export async function desk_search(args) {
   const filters = input?.filters ?? null
   const scope = input?.scope
   const now = opts?.now ?? Date.now()
+  const rootLease = maintenance.acquireRootLease(deskRoot)
 
   const {
     vector: queryVec,
@@ -457,9 +458,9 @@ export async function desk_search(args) {
     opts?.embed ?? {},
   )
   return maintenance.runFreshRead({
-    deskRoot: path.resolve(deskRoot),
+    rootLease,
     ensureOptions: { embed: opts?.embed ?? {} },
-    async read(db) {
+    async read(db, _index, { deskRoot: canonicalDeskRoot }) {
       const { matchExpr, terms } = buildFtsQuery(query)
       const filter = buildDocsFilter(filters)
       // desk_search default: active. Day-to-day signal; archive on opt-in.
@@ -499,7 +500,7 @@ export async function desk_search(args) {
       }
 
       // Active-iteration pin.
-      const featuredTrack = await readFeaturedTrack(deskRoot)
+      const featuredTrack = await readFeaturedTrack(canonicalDeskRoot)
       const pinPrefixes = computePinPrefixes(db, featuredTrack)
 
       // Score every candidate and pick top-N. We dedupe by doc_id so a single
@@ -581,6 +582,7 @@ export async function desk_recall(args) {
   }
   const limit = clampLimit(input?.limit)
   const scope = input?.scope
+  const rootLease = maintenance.acquireRootLease(deskRoot)
 
   const {
     vector: queryVec,
@@ -588,7 +590,7 @@ export async function desk_recall(args) {
     diagnostic: semanticDiagnostic,
   } = await embedQuery(topic, opts?.embed ?? {})
   return maintenance.runFreshRead({
-    deskRoot: path.resolve(deskRoot),
+    rootLease,
     ensureOptions: { embed: opts?.embed ?? {} },
     read(db) {
       if (!available) {
@@ -786,6 +788,7 @@ export async function desk_timeline(args) {
   const limit = clampLimit(input?.limit)
   const scope = input?.scope
   const now = opts?.now ?? Date.now()
+  const rootLease = maintenance.acquireRootLease(deskRoot)
 
   let semanticAvailable = false
   let semanticDiagnostic = null
@@ -798,7 +801,7 @@ export async function desk_timeline(args) {
   }
 
   return maintenance.runFreshRead({
-    deskRoot: path.resolve(deskRoot),
+    rootLease,
     ensureOptions: { embed: opts?.embed ?? {} },
     read(db) {
       // Window filter clauses for the docs table + scope filter.

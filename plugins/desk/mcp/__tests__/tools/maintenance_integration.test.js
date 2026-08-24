@@ -4,8 +4,8 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
 import { closeDb, openDb } from "../../src/db/init.js"
-import { createModeledCaseCollisionRootIdentity } from "../fixtures/root_identity_fixture.js"
 import { createMaintenanceRuntimeBinding } from "../../src/indexer/maintenance.js"
+import { physicalRootKey } from "../../src/indexer/root-identity.js"
 import { createSemanticRepairCoordinator } from "../../src/indexer/semantic-repair.js"
 import { ensureIndex } from "../../src/server-helpers.js"
 import { TOOL_NAMES } from "../../src/tool-names.js"
@@ -17,6 +17,7 @@ import {
   desk_timeline,
 } from "../../src/tools/search.js"
 import { desk_thread } from "../../src/tools/thread.js"
+import { createModeledCaseCollisionRootIdentity } from "../fixtures/root_identity_fixture.js"
 import {
   buildFixtureIndex,
   makeEmbedFetch,
@@ -538,7 +539,7 @@ test("desk_search returns fresh lexical and retained semantic hits before gated 
     ])
     assert.equal(findFtsRow(root, queryToken), undefined)
     assert.equal(ensureCalls.length, 1)
-    assert.equal(ensureCalls[0].deskRoot, path.resolve(root))
+    assert.equal(ensureCalls[0].deskRoot, physicalRootKey(root))
     assert.equal(ensureCalls[0].options.embed, embed)
     assert.deepEqual(
       Object.keys(ensureCalls[0].options).sort(),
@@ -614,7 +615,7 @@ test("desk_search returns fresh lexical and retained semantic hits before gated 
       },
     ])
     assert.equal(repairCalls.length, 1)
-    assert.equal(repairCalls[0].deskRoot, path.resolve(root))
+    assert.equal(repairCalls[0].deskRoot, physicalRootKey(root))
     assert.equal(repairCalls[0].embed, embed)
     assert.equal(repairCalls[0].signal instanceof AbortSignal, true)
     events.push("search:return")
@@ -756,7 +757,7 @@ test("all five writable read tools share one complete lifecycle through omitted 
     )
     assert.equal(maxActiveEnsures, 1)
     for (const call of ensureCalls) {
-      assert.equal(call.deskRoot, path.resolve(root))
+      assert.equal(call.deskRoot, physicalRootKey(root))
       assert.deepEqual(call.options, {
         embed,
         skipEmbed: true,
@@ -1045,7 +1046,7 @@ test("desk_thread honors an explicitly shared maintenance injection", async () =
     assert.equal(result.start.path, "trackA/thread-explicit/task.md")
     assert.equal(legacyEnsureCalls, 0)
     assert.deepEqual(calls, [{
-      deskRoot: path.resolve(root),
+      deskRoot: physicalRootKey(root),
       ensureOptions: {
         embed: { model: "explicit-shared-maintenance" },
         skipEmbed: true,
@@ -1541,7 +1542,7 @@ test("default-wired same-root searches share one replaceable coordinator and roo
 
     assert.equal(ensureCalls.length, 2)
     for (const call of ensureCalls) {
-      assert.equal(call.deskRoot, path.resolve(root))
+      assert.equal(call.deskRoot, physicalRootKey(root))
       assert.equal(call.options.embed, embed)
       assert.equal(call.options.skipEmbed, true)
       assert.equal("maintenance" in call.options, false)
@@ -1645,15 +1646,15 @@ test("default-wired desk_reindex coordinates exact non-force and force requests 
 
     assert.deepEqual(ensureCalls, [
       {
-        deskRoot: path.resolve(root),
+        deskRoot: physicalRootKey(root),
         options: ensureOptions,
       },
       {
-        deskRoot: path.resolve(root),
+        deskRoot: physicalRootKey(root),
         options: ensureOptions,
       },
     ])
-    assert.deepEqual(resetCalls, [{ deskRoot: path.resolve(root) }])
+    assert.deepEqual(resetCalls, [{ deskRoot: physicalRootKey(root) }])
     assert.equal("maintenance" in ensureOptions, false)
     assert.equal(nonForce.built, false)
     assert.equal(nonForce.reason, "fresh")
@@ -1929,21 +1930,21 @@ test("non-force desk_reindex cancels active repair before one locked full repair
     )
 
     assert.deepEqual(cancelCalls, [
-      path.resolve(root),
-      path.resolve(root),
+      physicalRootKey(root),
+      physicalRootKey(root),
     ])
     assert.deepEqual(resetCalls, [])
     assert.deepEqual(ensureCalls, [
       {
-        deskRoot: path.resolve(root),
+        deskRoot: physicalRootKey(root),
         options: { embed: initialEmbed, skipEmbed: true },
       },
       {
-        deskRoot: path.resolve(root),
+        deskRoot: physicalRootKey(root),
         options: explicitEnsureOptions,
       },
       {
-        deskRoot: path.resolve(root),
+        deskRoot: physicalRootKey(root),
         options: {
           embed: competingEmbed,
           marker: "after-non-force",
@@ -1960,7 +1961,7 @@ test("non-force desk_reindex cancels active repair before one locked full repair
       "rootIdentity",
       "signal",
     ])
-    assert.equal(repairCalls[0].deskRoot, path.resolve(root))
+    assert.equal(repairCalls[0].deskRoot, physicalRootKey(root))
     assert.deepEqual(repairCalls[0].rootIdentity, {
       path: path.resolve(root),
       key: await fs.realpath(root),
@@ -2140,18 +2141,18 @@ test("shared maintenance prevents SQLITE_BUSY overlap from leaking to search or 
     assert.equal(busyThrows, 0)
     assert.equal(maxSameRootWriters, 1)
     assert.equal(ensureCalls.length, 2)
-    assert.equal(ensureCalls[0].deskRoot, path.resolve(root))
+    assert.equal(ensureCalls[0].deskRoot, physicalRootKey(root))
     assert.equal(ensureCalls[0].options.embed, searchEmbed)
     assert.equal(ensureCalls[0].options.skipEmbed, true)
     assert.equal("maintenance" in ensureCalls[0].options, false)
-    assert.equal(ensureCalls[1].deskRoot, path.resolve(root))
+    assert.equal(ensureCalls[1].deskRoot, physicalRootKey(root))
     assert.equal(ensureCalls[1].options.embed, reindexEmbed)
     assert.equal("skipEmbed" in ensureCalls[1].options, false)
     assert.equal("maintenance" in ensureCalls[1].options, false)
     assert.equal(repairCalls.length, 1)
-    assert.equal(repairCalls[0].deskRoot, path.resolve(root))
+    assert.equal(repairCalls[0].deskRoot, physicalRootKey(root))
     assert.equal(repairCalls[0].embed, searchEmbed)
-    assert.deepEqual(resetCalls, [{ deskRoot: path.resolve(root) }])
+    assert.deepEqual(resetCalls, [{ deskRoot: physicalRootKey(root) }])
     assert.deepEqual(events, [
       "search-freshness:start",
       "search-freshness:end",

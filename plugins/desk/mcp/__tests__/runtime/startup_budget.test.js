@@ -19,6 +19,7 @@ import {
   createMaintenanceCoordinator,
   isMaintenanceCoordinator,
 } from "../../src/indexer/maintenance.js"
+import { physicalRootKey } from "../../src/indexer/root-identity.js"
 import { startServer as registerRuntimeServer } from "../../src/server.js"
 
 function makeRoot(prefix) {
@@ -166,7 +167,7 @@ test("startup runs bounded ensureIndex before registering the server and forward
     })
 
     assert.equal(ensureCalls.length, 1)
-    assert.equal(ensureCalls[0].deskRoot, root)
+    assert.equal(ensureCalls[0].deskRoot, physicalRootKey(root))
     assert.equal(ensureCalls[0].opts.startup, true)
     assert.equal(ensureCalls[0].opts.budgetMs, 250)
     assert.equal(runtimeServer.startCalls.length, 1)
@@ -686,7 +687,7 @@ test("timed-out startup retains same-root maintenance until aborted cleanup clos
       readEnsureEntered.resolve()
       await readEnsureRelease.promise
     } else if (opts.marker === "other-root") {
-      assert.equal(deskRoot, path.resolve(otherRoot))
+      assert.equal(deskRoot, physicalRootKey(otherRoot))
       events.push("other-root-ensure")
     }
     return { built: false, reason: "fresh" }

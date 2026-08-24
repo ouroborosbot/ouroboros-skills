@@ -5,7 +5,10 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 
 import { createSemanticRepairCoordinator } from "../../src/indexer/semantic-repair.js"
-import { resolveRootIdentity } from "../../src/indexer/root-identity.js"
+import {
+  physicalRootKey,
+  resolveRootIdentity,
+} from "../../src/indexer/root-identity.js"
 import { createModeledCaseCollisionRootIdentity } from "../fixtures/root_identity_fixture.js"
 
 const maintenanceModuleUrl = new URL(
@@ -1130,8 +1133,8 @@ async function assertAliasSerializesReadAndReindex({
       events.indexOf("read:close") <
         events.findIndex((event) => event.startsWith("reindex:")),
     )
-    assert.ok(events.includes(`read:ensure:${path.resolve(root)}`))
-    assert.ok(events.includes(`reindex:ensure:${path.resolve(root)}`))
+    assert.ok(events.includes(`read:ensure:${physicalRootKey(root)}`))
+    assert.ok(events.includes(`reindex:ensure:${physicalRootKey(root)}`))
   } finally {
     readRelease.resolve()
     await Promise.allSettled([read, reindex].filter(Boolean))
@@ -1221,7 +1224,7 @@ test("aliased repair waits for the physical-root read while a distinct root rema
     maintenance = createMaintenanceCoordinator({
       ensureIndex: async (deskRoot, options) => {
         if (options.marker === "other-root") {
-          assert.equal(deskRoot, path.resolve(rootB))
+          assert.equal(deskRoot, physicalRootKey(rootB))
           otherRootEntered.resolve()
           return { built: true, reason: "fresh" }
         }
@@ -1240,7 +1243,7 @@ test("aliased repair waits for the physical-root read while a distinct root rema
         db.open = false
       },
       repairBatch: async ({ deskRoot }) => {
-        assert.equal(deskRoot, path.resolve(rootA))
+        assert.equal(deskRoot, physicalRootKey(rootA))
         repairEntered.resolve()
         await repairRelease.promise
         return {
@@ -1411,7 +1414,7 @@ test("search freshness finishes before scheduling one reused same-root repair jo
 
     assert.equal(ensureCalls.length, 2)
     for (const call of ensureCalls) {
-      assert.equal(call.deskRoot, path.resolve(root))
+      assert.equal(call.deskRoot, physicalRootKey(root))
       assert.equal(call.options.embed, embed)
       assert.equal(
         call.options.skipEmbed,
@@ -1437,7 +1440,7 @@ test("search freshness finishes before scheduling one reused same-root repair jo
     )
 
     assert.equal(repairCalls.length, 1)
-    assert.equal(repairCalls[0].deskRoot, path.resolve(root))
+    assert.equal(repairCalls[0].deskRoot, physicalRootKey(root))
     assert.equal(repairCalls[0].embed, embed)
     assert.equal("skipEmbed" in repairCalls[0], false)
     assert.equal("marker" in repairCalls[0], false)
@@ -1741,7 +1744,7 @@ test("fresh read handles missing semantic metadata, default repair options, and 
     assert.equal(second, "default-embed")
     assert.deepEqual(repairOptions, [
       {
-        deskRoot: path.resolve(root),
+        deskRoot: physicalRootKey(root),
         rootIdentity: {
           path: path.resolve(root),
           key: await fs.realpath(root),
@@ -1966,7 +1969,7 @@ test("active background repair holds the same-root lock while other roots stay i
     maintenance = createMaintenanceCoordinator({
       ensureIndex: async (deskRoot, options) => {
         ensureCalls.push({ deskRoot, options })
-        if (deskRoot === path.resolve(rootA)) {
+        if (deskRoot === physicalRootKey(rootA)) {
           rootAEnsureCount += 1
           if (rootAEnsureCount === 1) {
             return guardedWriter(deskRoot, "a:initial-freshness", async () => ({
@@ -1993,7 +1996,7 @@ test("active background repair holds the same-root lock while other roots stay i
           })
         }
 
-        assert.equal(deskRoot, path.resolve(rootB))
+        assert.equal(deskRoot, physicalRootKey(rootB))
         return guardedWriter(deskRoot, "b:freshness", async () => {
           rootBFreshnessEntered.resolve()
           return {
@@ -2091,11 +2094,11 @@ test("active background repair holds the same-root lock while other roots stay i
     ])
     assert.deepEqual(ensureCalls, [
       {
-        deskRoot: path.resolve(rootA),
+        deskRoot: physicalRootKey(rootA),
         options: { embed: initialEmbed, skipEmbed: true },
       },
       {
-        deskRoot: path.resolve(rootB),
+        deskRoot: physicalRootKey(rootB),
         options: { embed: rootBEmbed, skipEmbed: true },
       },
     ])
@@ -2108,7 +2111,7 @@ test("active background repair holds the same-root lock while other roots stay i
       "rootIdentity",
       "signal",
     ])
-    assert.equal(repairCalls[0].deskRoot, path.resolve(rootA))
+    assert.equal(repairCalls[0].deskRoot, physicalRootKey(rootA))
     assert.deepEqual(repairCalls[0].rootIdentity, {
       path: path.resolve(rootA),
       key: await fs.realpath(rootA),
@@ -2146,7 +2149,7 @@ test("active background repair holds the same-root lock while other roots stay i
     assert.equal(activeByRoot.size, 0)
     assert.equal(scheduler.size, 0)
     assert.deepEqual(ensureCalls[2], {
-      deskRoot: path.resolve(rootA),
+      deskRoot: physicalRootKey(rootA),
       options: { embed: queuedEmbed, skipEmbed: true },
     })
     assert.deepEqual(events, [
@@ -2504,7 +2507,7 @@ test("coordinator lets root B complete while root A search freshness holds its l
     maintenance = createMaintenanceCoordinator({
       ensureIndex: async (deskRoot, options) => {
         ensureCalls.push({ deskRoot, options })
-        if (deskRoot === path.resolve(rootA)) {
+        if (deskRoot === physicalRootKey(rootA)) {
           events.push("a:freshness:start")
           rootAEntered.resolve()
           await awaitBounded(
@@ -2522,7 +2525,7 @@ test("coordinator lets root B complete while root A search freshness holds its l
             },
           }
         }
-        assert.equal(deskRoot, path.resolve(rootB))
+        assert.equal(deskRoot, physicalRootKey(rootB))
         events.push("b:reindex:start")
         rootBEntered.resolve()
         events.push("b:reindex:end")
@@ -2590,11 +2593,11 @@ test("coordinator lets root B complete while root A search freshness holds its l
     ])
     assert.deepEqual(ensureCalls, [
       {
-        deskRoot: path.resolve(rootA),
+        deskRoot: physicalRootKey(rootA),
         options: { embed: embedA, skipEmbed: true },
       },
       {
-        deskRoot: path.resolve(rootB),
+        deskRoot: physicalRootKey(rootB),
         options: { embed: embedB },
       },
     ])
@@ -2678,7 +2681,7 @@ test("force reindex holds one continuous lock across reset and full repair befor
       },
       async cancel(deskRoot) {
         events.push("cancel:start")
-        assert.equal(deskRoot, path.resolve(root))
+        assert.equal(deskRoot, physicalRootKey(root))
         controller?.abort()
         if (active) {
           await awaitBounded(
@@ -2865,9 +2868,9 @@ test("force reindex holds one continuous lock across reset and full repair befor
       "separate reset and repair mutex acquisitions let the queued writer interleave",
     )
     assert.equal(competingWriterStarted.settled, false)
-    assert.deepEqual(resetCalls, [{ deskRoot: path.resolve(root) }])
+    assert.deepEqual(resetCalls, [{ deskRoot: physicalRootKey(root) }])
     assert.equal(ensureCalls.length, 2)
-    assert.equal(ensureCalls[1].deskRoot, path.resolve(root))
+    assert.equal(ensureCalls[1].deskRoot, physicalRootKey(root))
     assert.equal(ensureCalls[1].options.embed, embed)
     assert.equal(
       "skipEmbed" in ensureCalls[1].options,

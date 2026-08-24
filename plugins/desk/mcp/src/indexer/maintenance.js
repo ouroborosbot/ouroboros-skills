@@ -72,6 +72,7 @@ export function createMaintenanceCoordinator({
   closeIndex = defaultCloseDb,
 } = {}) {
   const reindexGenerations = new Map()
+  const rootLeases = new WeakMap()
   const repairCoordinator = createRepairCoordinator({
     repairBatch: (options) =>
       rootQueue.run(options.rootIdentity, () =>
@@ -85,6 +86,26 @@ export function createMaintenanceCoordinator({
 
   function currentReindexGeneration(rootKey) {
     return reindexGenerations.get(rootKey) ?? 0
+  }
+
+  function acquireRootLease(deskRoot) {
+    const rootLease = Object.freeze({})
+    rootLeases.set(rootLease, resolveIdentity(deskRoot))
+    return rootLease
+  }
+
+  function resolveFreshReadIdentity(deskRoot, rootLease) {
+    if (rootLease === undefined) {
+      return resolveIdentity(deskRoot)
+    }
+    const rootIdentity = rootLeases.get(rootLease)
+    if (rootIdentity === undefined) {
+      throw Object.assign(
+        new Error("maintenance root lease is unavailable"),
+        { code: "maintenance_root_lease_unavailable" },
+      )
+    }
+    return rootIdentity
   }
 
   function registerBackgroundRepair({
@@ -142,10 +163,11 @@ export function createMaintenanceCoordinator({
 
   function runFreshRead({
     deskRoot,
+    rootLease,
     ensureOptions = {},
     read,
   } = {}) {
-    const rootIdentity = resolveIdentity(deskRoot)
+    const rootIdentity = resolveFreshReadIdentity(deskRoot, rootLease)
     const readGeneration = currentReindexGeneration(rootIdentity.key)
     return rootQueue.run(rootIdentity, async () => {
       const root = rootIdentity.key
@@ -157,7 +179,7 @@ export function createMaintenanceCoordinator({
       const db = openIndex(root)
       let result
       try {
-        result = await read(db, index)
+        result = await read(db, index, { deskRoot: root })
       } finally {
         closeIndex(db)
       }
@@ -202,6 +224,7 @@ export function createMaintenanceCoordinator({
   }
 
   const coordinator = Object.freeze({
+    acquireRootLease,
     cancelBackgroundRepair,
     ensureSearchFreshness,
     runExplicitReindex,

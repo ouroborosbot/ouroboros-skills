@@ -39,6 +39,7 @@ import {
   createMaintenanceCoordinator,
   isMaintenanceCoordinator,
 } from "../../src/indexer/maintenance.js"
+import { physicalRootKey } from "../../src/indexer/root-identity.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
@@ -1096,7 +1097,7 @@ test("MCP startup reads ensure-index budget from plugin performance config", asy
     })
 
     assert.equal(runtimeServer.ensureCalls.length, 1)
-    assert.equal(runtimeServer.ensureCalls[0].deskRoot, deskRoot)
+    assert.equal(runtimeServer.ensureCalls[0].deskRoot, physicalRootKey(deskRoot))
     assert.equal(runtimeServer.ensureCalls[0].opts.startup, true)
     assert.equal(runtimeServer.ensureCalls[0].opts.budgetMs, 37)
     assert.equal(runtimeServer.startCalls.length, 1)

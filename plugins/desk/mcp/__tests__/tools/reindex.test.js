@@ -14,6 +14,7 @@ import {
   createMaintenanceCoordinator,
   createMaintenanceRuntimeBinding,
 } from "../../src/indexer/maintenance.js"
+import { physicalRootKey } from "../../src/indexer/root-identity.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 
@@ -312,7 +313,7 @@ test("desk_reindex — omitted input defaults to non-force maintenance", async (
 
   assert.deepEqual(calls, [
     {
-      deskRoot: path.resolve(root),
+      deskRoot: physicalRootKey(root),
       ensureOptions: {},
     },
   ])
