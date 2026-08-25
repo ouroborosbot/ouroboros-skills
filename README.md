@@ -15,13 +15,13 @@ ouroboros-skills/
       SKILL.md
     autopilot/               # Full-delivery execution doctrine
       SKILL.md
-    work-ideator/            # Ambiguous-idea exploration before planning
+    work-ideator/            # Resolve material ambiguity only when needed
       SKILL.md
-    work-planner/            # Reviewer-gated task planner
+    work-planner/            # Risk-scaled planner for coordinated work
       SKILL.md
-    work-doer/               # Task executor with strict TDD
+    work-doer/               # Smallest complete implementation with proportionate proof
       SKILL.md
-    work-merger/             # Sync-and-merge after execution
+    work-merger/             # PR through release/install, smoke, and cleanup
       SKILL.md
     inch-worm/               # Open-ended improvement loop
       SKILL.md
@@ -68,12 +68,12 @@ See the **Contribute** section in [`skills/skill-management/SKILL.md`](skills/sk
 | Skill | Description |
 |-------|-------------|
 | **skill-management** | Browse, install, update, and contribute skills from this repo. |
-| **autopilot** | Full-delivery doctrine: no human gates, harsh sub-agent reviewer gates, explicit terminal validation, Arc/resume continuity. |
+| **autopilot** | Keep authorized long-horizon work moving through terminal delivery and the continuation scan. |
 | **stay-in-turn** | Keep long-running work in the same turn with monitor-style waiting instead of background wakeup deferral. |
-| **work-ideator** | Explore ambiguous product, architecture, workflow, or coding ideas before planning. |
-| **work-planner** | Reviewer-gated task planner. Generates planning docs and converts to doing docs after the correct gate clears. |
-| **work-doer** | Executes doing.md units sequentially with strict TDD. |
-| **work-merger** | Sync-and-merge agent. Creates PRs, waits for CI, merges to main. |
+| **work-ideator** | Resolve material ambiguity and choose the smallest viable shape; skip when the task is clear. |
+| **work-planner** | Plan coordinated or risky work; skip when the task description is sufficient. |
+| **work-doer** | Implement the smallest complete vertical change with proof proportional to risk. |
+| **work-merger** | Drive a branch through PR, merge, release/install, smoke, cleanup, and continuation. |
 | **visual-qa-dogfood** | Screenshot-backed dogfooding for UI/rendering work so visual absurdity cannot hide behind passing metrics. |
 | **workbench-operator** | Use Ouro Workbench as the native control room for terminal/TUI agents, Desk mirrors, and boss-agent check-ins. |
 | **inch-worm** | Open-ended codebase improvement loop. Seed → fix → log side discoveries → pick next. Each fix is its own PR. |
@@ -108,6 +108,16 @@ node scripts/audit-work-suite-runtime.cjs --repo-root . \
 ```
 
 The audit always hard-fails source-of-truth problems: missing manifest entries, missing canonical skill files, or plugin copies that drift from `skills/`. Installed roots and active-menu visibility are reported separately because a host session can lag behind disk installs. With `--strict-installed`, installed roots must also have `_registry.json` provenance whose shared work-suite skill commits match the latest source commits; run from a real git checkout so commit provenance can be proven. Under autopilot, a missing active-menu skill is still actionable evidence: re-read the installed `SKILL.md` directly, record the mismatch in durable state, and refresh or restart the host before relying on menu discovery.
+
+### Upstream Source Steward
+
+Run the read-only steward to compare every selected public source against `upstream-sources.lock.json`:
+
+```bash
+node scripts/check-upstream-sources.cjs
+```
+
+The report records repository identity, license, candidate ref and SHA, forward ancestry, selected-file hashes, an aggregate payload digest, changed paths, and one classification per source. `current` and `candidate-no-selected-payload-change` exit successfully. A selected instruction or executable change exits with `needs-human-approval`; repository, auth, network, rate-limit, missing evidence, license, or ancestry failures exit as `blocked`. The command never updates the lock or vendored files.
 
 ### Autopilot State Audit
 

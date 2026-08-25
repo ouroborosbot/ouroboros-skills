@@ -34,5 +34,8 @@ jobs:
       - name: Validate Work Suite
         run: node scripts/test-work-suite-contracts.cjs
 
+      - name: Validate upstream source steward
+        run: node scripts/test-upstream-sources.cjs
+
       - name: Validate Desk healthy-path docs
         run: node scripts/test-desk-docs.cjs
