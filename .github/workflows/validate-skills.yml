@@ -28,5 +28,8 @@ jobs:
       - name: Validate skill repository
         run: node scripts/validate-skills.cjs
 
+      - name: Validate Plain Language
+        run: node scripts/test-plain-language-plugin.cjs && node scripts/test-plain-language-hook.cjs
+
       - name: Validate Desk healthy-path docs
         run: node scripts/test-desk-docs.cjs
