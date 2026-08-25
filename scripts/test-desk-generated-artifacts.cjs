@@ -890,7 +890,7 @@ function normalizedRelativeDocPath(value) {
 }
 
 function artifactSourceScopeHash(mcpRoot) {
-  return loadManifestContracts(mcpRoot).artifactSourceScopeHash(mcpRoot);
+  return loadManifestContracts(defaultMcpRoot).artifactSourceScopeHash(mcpRoot);
 }
 
 function documentTreeHash(docs) {

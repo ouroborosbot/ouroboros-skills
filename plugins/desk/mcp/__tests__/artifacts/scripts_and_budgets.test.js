@@ -1489,12 +1489,12 @@ test("artifact script CLIs cover help, usage errors, repeated args, and targeted
         argv: ["--plugin-root", pluginRoot, "--snapshot-id", snapshotTarget.id],
         io: missingDocsVerify.io,
       }),
-      0,
-      missingDocsVerify.stderr.join(""),
+      1,
     )
-    const missingDocsVerifyBody = JSON.parse(missingDocsVerify.stdout.join(""))
-    assert.equal(missingDocsVerifyBody.snapshot_id, snapshotTarget.id)
-    assert.equal(missingDocsVerifyBody.freshness.document_tree, "stale")
+    assert.match(
+      missingDocsVerify.stderr.join(""),
+      /manifest missing required field represented_documents/u,
+    )
 
     const missingDocsAllVerify = captureIo()
     assert.equal(
@@ -1502,14 +1502,11 @@ test("artifact script CLIs cover help, usage errors, repeated args, and targeted
         argv: ["--plugin-root", pluginRoot],
         io: missingDocsAllVerify.io,
       }),
-      0,
-      missingDocsAllVerify.stderr.join(""),
+      1,
     )
-    assert.ok(
-      JSON.parse(missingDocsAllVerify.stdout.join(""))
-        .snapshots.artifacts.every(
-          (artifact) => artifact.freshness.document_tree === "stale",
-        ),
+    assert.match(
+      missingDocsAllVerify.stderr.join(""),
+      /manifest missing required field represented_documents/u,
     )
 
     const directValidate = captureIo()
@@ -1523,17 +1520,11 @@ test("artifact script CLIs cover help, usage errors, repeated args, and targeted
         ],
         io: directValidate.io,
       }),
-      0,
-      directValidate.stderr.join(""),
+      1,
     )
-    const directValidateBody = JSON.parse(directValidate.stdout.join(""))
-    assert.equal(directValidateBody.vector_packs.count, 2)
-    assert.equal(directValidateBody.snapshots.count, 2)
-    assert.equal(
-      directValidateBody.vector_packs.artifacts.find(
-        (artifact) => artifact.pack_id === nextPackId,
-      ).freshness.document_tree,
-      "stale",
+    assert.match(
+      directValidate.stderr.join(""),
+      /manifest missing required field represented_documents/u,
     )
 
     const emptyPluginRoot = makeTempDir("desk-artifact-scripts-empty-plugin-")
