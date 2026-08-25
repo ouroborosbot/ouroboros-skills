@@ -7,5 +7,6 @@
     "url": "https://github.com/ourostack/ouroboros-skills"
   },
   "license": "MIT",
-  "skills": "./skills/"
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json"
 }

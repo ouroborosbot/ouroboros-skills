@@ -93,6 +93,9 @@ const hostManifestFixtureFiles = [
   "plugins/work-suite/.claude-plugin/plugin.json",
   "plugins/work-suite/.codex-plugin/plugin.json",
   "plugins/work-suite/plugin.json",
+  "plugins/plain-language/.claude-plugin/plugin.json",
+  "plugins/plain-language/.codex-plugin/plugin.json",
+  "plugins/plain-language/plugin.json",
   "scripts/validate-skills.cjs",
 ]
 

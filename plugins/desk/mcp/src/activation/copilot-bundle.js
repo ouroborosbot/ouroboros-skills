@@ -12,6 +12,7 @@ const defaultRepoRoot = path.resolve(moduleDir, "..", "..", "..", "..", "..")
 const activationManifestPath = "plugins/desk/activation/desk.activation.json"
 const deskPluginPath = "plugins/desk/plugin.json"
 const workSuitePluginPath = "plugins/work-suite/plugin.json"
+const plainLanguagePluginPath = "plugins/plain-language/plugin.json"
 const outputPath = "plugins/desk/activation/copilot-root.flattened-bundle.json"
 const generatorCommand =
   "npm --prefix plugins/desk/mcp run activation:copilot-bundle:generate"
@@ -22,6 +23,9 @@ export function buildCopilotBundle({ activation }) {
   const workSuiteDependency = activation.dependencies.find((dependency) => (
     dependency.id === "work-suite"
   ))
+  const plainLanguageDependency = activation.dependencies.find((dependency) => (
+    dependency.id === "plain-language"
+  ))
 
   return {
     schema_version: COPILOT_BUNDLE_SCHEMA_VERSION,
@@ -31,6 +35,7 @@ export function buildCopilotBundle({ activation }) {
       activation_manifest: activationManifestPath,
       desk_plugin: deskPluginPath,
       work_suite_plugin: workSuitePluginPath,
+      plain_language_plugin: plainLanguagePluginPath,
     },
     launch: {
       agent: `plugins/desk/${copilotWorkerSource}`,
@@ -51,6 +56,12 @@ export function buildCopilotBundle({ activation }) {
         plugin: workSuitePluginPath,
         skills: "plugins/work-suite/skills/",
       },
+      {
+        id: "plain-language",
+        version: plainLanguageDependency.lock.version,
+        plugin: plainLanguagePluginPath,
+        skills: "plugins/plain-language/skills/",
+      },
     ],
     manual_steps: [],
   }
@@ -62,6 +73,7 @@ export function validateCopilotPackagingContract(input) {
   const bundle = asObject(input?.bundle)
   const deskPlugin = asObject(input?.deskPlugin)
   const workSuitePlugin = asObject(input?.workSuitePlugin)
+  const plainLanguagePlugin = asObject(input?.plainLanguagePlugin)
   const activationDependencies = Array.isArray(activation.dependencies)
     ? activation.dependencies
     : []
@@ -69,6 +81,10 @@ export function validateCopilotPackagingContract(input) {
     dependency?.id === "work-suite"
   ))
   const lockedWorkSuiteVersion = workSuiteDependency?.lock?.version
+  const plainLanguageDependency = activationDependencies.find((dependency) => (
+    dependency?.id === "plain-language"
+  ))
+  const lockedPlainLanguageVersion = plainLanguageDependency?.lock?.version
 
   if (deskPlugin.agents !== "./agents/") {
     errors.push("Copilot root plugin metadata must expose ./agents/")
@@ -90,11 +106,25 @@ export function validateCopilotPackagingContract(input) {
   if (!hasBundleDependency(bundle, "work-suite")) {
     errors.push("Copilot flattened bundle must include work-suite dependency closure")
   }
+  if (lockedPlainLanguageVersion === undefined) {
+    errors.push("Copilot activation must lock Plain Language dependency")
+  } else if (plainLanguagePlugin.version !== lockedPlainLanguageVersion) {
+    errors.push(`Copilot root Plain Language version must match activation lock ${lockedPlainLanguageVersion}`)
+  }
+  if (!hasBundleDependency(bundle, "plain-language")) {
+    errors.push("Copilot flattened bundle must include plain-language dependency closure")
+  }
   if (
     deskPlugin.activation?.copilot?.dependencies?.["work-suite"]?.bundleMetadata
       !== outputPath
   ) {
     errors.push("Copilot Work Suite dependency must point to generated flattened bundle metadata")
+  }
+  if (
+    deskPlugin.activation?.copilot?.dependencies?.["plain-language"]?.bundleMetadata
+      !== outputPath
+  ) {
+    errors.push("Copilot Plain Language dependency must point to generated flattened bundle metadata")
   }
   if (deskPlugin.activation?.copilot?.targets?.["desk:worker"]?.source !== copilotWorkerSource) {
     errors.push("Copilot desk:worker target must use agents/worker.agent.md")
