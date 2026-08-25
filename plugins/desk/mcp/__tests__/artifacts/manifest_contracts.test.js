@@ -42,6 +42,10 @@ test("manifest contract rejects unsupported types and malformed root objects", a
     () => validateArtifactManifest({ artifactType: "other", manifest: vector }),
     /type must be snapshot or vector-pack/u,
   )
+  assert.throws(
+    () => validateArtifactManifest({ manifest: vector }),
+    /type must be snapshot or vector-pack/u,
+  )
   for (const manifest of [null, [], "manifest"]) {
     assert.throws(
       () => validate("vector-pack", manifest),
@@ -138,6 +142,7 @@ test("manifest contract rejects private and unsafe scalar values", async () => {
     "portable\0private",
     ".state/private.json",
     "/private/absolute.json",
+    "C:\\private\\absolute.json",
     "../private/traversal.json",
   ]) {
     assert.throws(

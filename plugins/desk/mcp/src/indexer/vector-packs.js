@@ -363,11 +363,8 @@ function representedDocumentsAreCurrent(
     canonicalFilesystemDocumentPath(doc.path),
     canonicalDocumentHash(doc.hash),
   ]))
-  const seen = new Set()
   return representedDocuments.every((doc) => {
     const documentPath = canonicalFilesystemDocumentPath(doc.path)
-    if (seen.has(documentPath)) return false
-    seen.add(documentPath)
     return expectedByPath.get(documentPath) === canonicalDocumentHash(doc.hash)
   })
 }
