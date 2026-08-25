@@ -234,19 +234,30 @@ function assertPublicationInputs({ artifactId, files, validateStaged }) {
   if (typeof validateStaged !== "function") {
     throw new Error("artifact staged-generation validator is required")
   }
+  if (files.some((file) =>
+    typeof file.name !== "string" ||
+    typeof file.path !== "string" ||
+    file.bytes === undefined
+  )) {
+    throw new Error("artifact publication files must be unique named siblings")
+  }
   const directories = new Set(files.map((file) => path.dirname(file.path)))
   const names = new Set(files.map((file) => file.name))
   const targets = new Set(files.map((file) => file.path))
   if (
     directories.size !== 1 ||
     names.size !== files.length ||
-    targets.size !== files.length ||
-    files.some((file) =>
-      typeof file.name !== "string" ||
-      typeof file.path !== "string" ||
-      file.bytes === undefined
-    )
+    targets.size !== files.length
   ) {
     throw new Error("artifact publication files must be unique named siblings")
   }
+}
+
+export const __artifactPublicationInternalsForTests = {
+  acquirePublicationLock,
+  assertPublicationInputs,
+  delay,
+  fileExists,
+  rollbackPublication,
+  throwIfAborted,
 }

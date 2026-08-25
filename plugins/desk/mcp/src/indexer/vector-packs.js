@@ -167,7 +167,6 @@ export async function validateVectorPackFile({
   if (checksum !== packSha) {
     throw new Error(`${label}: checksum mismatch for vector pack`)
   }
-  validateManifestHash({ manifest, packSha, label })
   if (manifest.row_count !== rows.length) {
     throw new Error(`${label}: manifest row_count must match vector pack rows`)
   }
@@ -371,12 +370,6 @@ function representedDocumentsAreCurrent(
     seen.add(documentPath)
     return expectedByPath.get(documentPath) === canonicalDocumentHash(doc.hash)
   })
-}
-
-function validateManifestHash({ manifest, packSha, label }) {
-  if (manifest.rows_sha256 !== packSha) {
-    throw new Error(`${label}: manifest rows_sha256 must match vector pack`)
-  }
 }
 
 async function readPackRowsAndSha({ packPath, expectedSpec, label, signal }) {

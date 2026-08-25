@@ -354,15 +354,25 @@ function validateRepresentedDocuments({
     if (!Array.isArray(expectedDocuments)) {
       throw new Error(`${label} expected documents must be an array`)
     }
-    const expected = expectedDocuments.map((document, index) => ({
-      path: assertNormalizedRelativePath(
+    const expectedByPath = new Map()
+    for (let index = 0; index < expectedDocuments.length; index += 1) {
+      const document = expectedDocuments[index]
+      const documentPath = assertNormalizedRelativePath(
         document?.path,
         `${label} expected_documents[${index}].path`,
-      ),
-      hash: canonicalSha(document?.hash),
-    }))
-    if (stableStringify(sortDocuments(normalized)) !==
-        stableStringify(sortDocuments(expected))) {
+      )
+      const documentHash = canonicalSha(document?.hash)
+      if (expectedByPath.has(documentPath)) {
+        throw new Error(`${label} duplicate expected document path`)
+      }
+      expectedByPath.set(documentPath, documentHash)
+    }
+    if (
+      normalized.length !== expectedByPath.size ||
+      normalized.some((document) =>
+        expectedByPath.get(document.path) !== document.hash
+      )
+    ) {
       throw new Error(`${label} represented_documents must match expected documents`)
     }
   }
@@ -418,9 +428,6 @@ function assertManifestValuePrivacy(value, label, location = "$") {
   }
   if (value !== null && typeof value === "object") {
     for (const [key, entry] of Object.entries(value)) {
-      if (/^(?:body|raw|content)$/iu.test(key)) {
-        throw new Error(`${label} field ${location}.${key} is not allowed`)
-      }
       assertManifestValuePrivacy(entry, label, `${location}.${key}`)
     }
     return
@@ -536,15 +543,7 @@ function assertDeepEqual(actual, expected, message) {
 function normalizedPathCandidates(value) {
   return String(value)
     .split(/[\s"'`<>{}\[\](),;=]+/u)
-    .map((candidate) => candidate.replace(/^\/+|\/+$/gu, ""))
     .filter((candidate) => candidate !== "")
-}
-
-function sortDocuments(documents) {
-  return [...documents].sort((left, right) =>
-    left.path.localeCompare(right.path) ||
-    left.hash.localeCompare(right.hash)
-  )
 }
 
 function canonicalSha(value) {

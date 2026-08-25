@@ -10,9 +10,14 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises"
+import { promises as fsPromises } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
+import {
+  __artifactPublicationInternalsForTests,
+  publishArtifactSet,
+} from "../../src/artifacts/publication.js"
 import {
   buildSnapshotFromLocalDb,
 } from "../../src/artifacts/artifact-scripts.js"
@@ -28,6 +33,13 @@ import {
 } from "../../src/snapshots/manifest.js"
 
 const { ARTIFACT_SOURCE_PATHS } = manifestContracts
+const {
+  acquirePublicationLock,
+  assertPublicationInputs,
+  delay,
+  fileExists,
+  rollbackPublication,
+} = __artifactPublicationInternalsForTests
 const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
 const repoRoot = path.resolve(mcpRoot, "..", "..", "..")
 const sourcePluginRoot = path.join(repoRoot, "plugins", "desk")
@@ -410,5 +422,297 @@ test("snapshot build checks cancellation after sanitization and immediately befo
     }
   } finally {
     await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("artifact writers reject malformed staged manifests before consumer paths change", async () => {
+  const root = await scratchRoot("artifact-malformed-manifest")
+  const deskRoot = path.join(root, "desk")
+  const pluginRoot = await preparePluginRoot(root)
+  try {
+    await mkdir(deskRoot, { recursive: true })
+    const vector = await generation({
+      artifactType: "vector-pack",
+      artifactId: "malformed-pack",
+      marker: "old",
+    })
+    await assert.rejects(
+      () => writeVectorPackArtifact({
+        pluginRoot,
+        packId: "malformed-pack",
+        packBytes: vector.primaryBytes,
+        manifestBytes: "{",
+        checksumBytes: vector.checksumBytes,
+        policy: approvedPolicy(),
+        deskRoot,
+        sourceDocs: vector.sourceDocs,
+      }),
+      /manifest must be valid JSON/u,
+    )
+    const snapshot = await generation({
+      artifactType: "snapshot",
+      artifactId: "malformed-snapshot",
+      marker: "old",
+    })
+    await assert.rejects(
+      () => writeSnapshotArtifact({
+        pluginRoot,
+        snapshotId: "malformed-snapshot",
+        snapshotBytes: snapshot.primaryBytes,
+        manifestBytes: "{",
+        checksumBytes: snapshot.checksumBytes,
+        policy: approvedPolicy(),
+        deskRoot,
+        sourceDocs: snapshot.sourceDocs,
+      }),
+      /manifest must be valid JSON/u,
+    )
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("publication internals fail closed for invalid inputs, lock faults, and filesystem errors", async () => {
+  for (const args of [
+    { artifactId: undefined, files: [], validateStaged() {} },
+    { artifactId: " ", files: [], validateStaged() {} },
+    { artifactId: "id", files: undefined, validateStaged() {} },
+    { artifactId: "id", files: [], validateStaged() {} },
+    {
+      artifactId: "id",
+      files: [{ name: "one", path: "/a/one", bytes: "" }],
+    },
+    {
+      artifactId: "id",
+      files: [
+        { name: "one", path: "/a/one", bytes: "" },
+        { name: "two", path: "/b/two", bytes: "" },
+      ],
+      validateStaged() {},
+    },
+    {
+      artifactId: "id",
+      files: [
+        { name: "one", path: "/a/one", bytes: "" },
+        { name: "one", path: "/a/two", bytes: "" },
+      ],
+      validateStaged() {},
+    },
+    {
+      artifactId: "id",
+      files: [
+        { name: "one", path: "/a/one", bytes: "" },
+        { name: "two", path: "/a/one", bytes: "" },
+      ],
+      validateStaged() {},
+    },
+    {
+      artifactId: "id",
+      files: [{ name: 1, path: "/a/one", bytes: "" }],
+      validateStaged() {},
+    },
+    {
+      artifactId: "id",
+      files: [{ name: "one", path: 1, bytes: "" }],
+      validateStaged() {},
+    },
+    {
+      artifactId: "id",
+      files: [{ name: "one", path: "/a/one" }],
+      validateStaged() {},
+    },
+  ]) {
+    assert.throws(() => assertPublicationInputs(args), /artifact publication|staged-generation/u)
+  }
+
+  await assert.rejects(
+    () => acquirePublicationLock({
+      lockPath: "/lock",
+      fileSystem: {
+        async open() {
+          const error = new Error("open failed")
+          error.code = "EACCES"
+          throw error
+        },
+      },
+      lockRetryMs: 0,
+      lockTimeoutMs: 0,
+    }),
+    /open failed/u,
+  )
+  await assert.rejects(
+    () => acquirePublicationLock({
+      lockPath: "/lock",
+      fileSystem: {
+        async open() {
+          const error = new Error("busy")
+          error.code = "EEXIST"
+          throw error
+        },
+      },
+      lockRetryMs: 0,
+      lockTimeoutMs: 0,
+    }),
+    (error) => error.code === "artifact_publication_lock_timeout",
+  )
+
+  for (const cleanupFails of [false, true]) {
+    await assert.rejects(
+      () => acquirePublicationLock({
+        lockPath: "/lock",
+        fileSystem: {
+          async open() {
+            return {
+              async writeFile() {
+                throw new Error("write lock failed")
+              },
+              async close() {
+                if (cleanupFails) throw new Error("close failed")
+              },
+            }
+          },
+          async rm() {
+            if (cleanupFails) throw new Error("remove failed")
+          },
+        },
+        lockRetryMs: 0,
+        lockTimeoutMs: 0,
+      }),
+      cleanupFails ? AggregateError : /write lock failed/u,
+    )
+  }
+
+  for (const failure of ["close", "remove"]) {
+    const release = await acquirePublicationLock({
+      lockPath: "/lock",
+      fileSystem: {
+        async open() {
+          return {
+            async writeFile() {},
+            async close() {
+              if (failure === "close") throw new Error("close failed")
+            },
+          }
+        },
+        async rm() {
+          if (failure === "remove") throw new Error("remove failed")
+        },
+      },
+      lockRetryMs: 0,
+      lockTimeoutMs: 0,
+    })
+    await assert.rejects(release, AggregateError)
+  }
+
+  assert.equal(await fileExists("/present", {
+    async access() {},
+  }), true)
+  assert.equal(await fileExists("/missing", {
+    async access() {
+      const error = new Error("missing")
+      error.code = "ENOENT"
+      throw error
+    },
+  }), false)
+  await assert.rejects(
+    () => fileExists("/denied", {
+      async access() {
+        const error = new Error("denied")
+        error.code = "EACCES"
+        throw error
+      },
+    }),
+    /denied/u,
+  )
+
+  const preAborted = new AbortController()
+  preAborted.abort()
+  await assert.rejects(
+    () => delay(0, preAborted.signal),
+    (error) => error.name === "AbortError",
+  )
+  const midDelay = new AbortController()
+  setTimeout(() => midDelay.abort(), 0)
+  await assert.rejects(
+    () => delay(10, midDelay.signal),
+    (error) => error.name === "AbortError",
+  )
+
+  const rollbackErrors = await rollbackPublication({
+    backedUp: [{ backupPath: "/backup", path: "/target" }],
+    published: [{ path: "/published" }],
+    fileSystem: {
+      async rm() {
+        throw new Error("rollback remove failed")
+      },
+      async rename() {
+        throw new Error("rollback restore failed")
+      },
+    },
+  })
+  assert.equal(rollbackErrors.length, 2)
+})
+
+test("publication reports cleanup and rollback failures without leaking work files", async () => {
+  for (const scenario of ["cleanup", "release", "operation-and-cleanup", "rollback"]) {
+    const root = await scratchRoot(`artifact-publication-fault-${scenario}`)
+    const primaryPath = path.join(root, "artifact.bin")
+    const manifestPath = path.join(root, "artifact.manifest.json")
+    const checksumPath = path.join(root, "artifact.sha256")
+    const targets = [primaryPath, manifestPath, checksumPath]
+    try {
+      if (scenario === "rollback") {
+        await Promise.all(targets.map((target, index) =>
+          writeFile(target, `old-${index}`, "utf8")
+        ))
+      }
+      let cleanupFailed = false
+      const fileSystem = {
+        ...fsPromises,
+        async rm(target, options) {
+          if (
+            (scenario === "cleanup" ||
+              scenario === "operation-and-cleanup") &&
+            target.includes(".stage") &&
+            !cleanupFailed
+          ) {
+            cleanupFailed = true
+            throw new Error("stage cleanup failed")
+          }
+          if (scenario === "release" && target.endsWith(".publish.lock")) {
+            throw new Error("lock cleanup failed")
+          }
+          if (scenario === "rollback" && target === primaryPath) {
+            throw new Error("rollback target cleanup failed")
+          }
+          return fsPromises.rm(target, options)
+        },
+      }
+      await assert.rejects(
+        () => publishArtifactSet({
+          artifactId: `fault-${scenario}`,
+          files: targets.map((target, index) => ({
+            name: String(index),
+            path: target,
+            bytes: Buffer.from(`new-${index}`, "utf8"),
+          })),
+          validateStaged: async () => {},
+          hooks: {
+            beforeCommitFile({ index }) {
+              if (
+                (scenario === "operation-and-cleanup" && index === 0) ||
+                (scenario === "rollback" && index === 1)
+              ) {
+                throw new Error("commit failed")
+              }
+            },
+          },
+          fileSystem,
+        }),
+        AggregateError,
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   }
 })

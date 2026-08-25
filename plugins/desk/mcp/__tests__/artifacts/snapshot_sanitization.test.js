@@ -168,3 +168,40 @@ test("sanitized snapshot cleanup failures redact diagnostics, including cancella
     )
   }
 })
+
+test("sanitized snapshot close failures are redacted and orphan purges delete every captured vector", async () => {
+  await assert.rejects(
+    () => readSanitizedSnapshotBytes(helperOptions({
+      closeSanitizedDb: () => {
+        throw new Error("private close path must not escape")
+      },
+    })),
+    (error) => {
+      assert.equal(error.code, "snapshot_sanitization_failed")
+      assert.doesNotMatch(error.message, /private close path/u)
+      return true
+    },
+  )
+
+  const deleted = []
+  const fakeDb = {
+    prepare(sql) {
+      if (sql.includes("SELECT v.chunk_id")) {
+        return { all: () => [{ chunk_id: 7 }, { chunk_id: 9 }] }
+      }
+      return {
+        run(chunkId) {
+          deleted.push(chunkId)
+        },
+      }
+    },
+    transaction(fn) {
+      return (chunkIds) => fn(chunkIds)
+    },
+  }
+  assert.equal(
+    __artifactScriptInternalsForTests.purgeOrphanChunkVectors(fakeDb),
+    2,
+  )
+  assert.deepEqual(deleted, [7n, 9n])
+})

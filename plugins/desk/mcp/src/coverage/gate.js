@@ -114,6 +114,8 @@ export function collectCoverageRequiredFiles({ repoRoot }) {
       .filter(isProductionJs),
     ...collectFiles(path.join(repoRoot, "plugins", "desk", "mcp", "src"), ".js")
       .filter(isProductionJs),
+    ...collectFiles(path.join(repoRoot, "plugins", "desk", "mcp", "src"), ".cjs")
+      .filter(isProductionCjs),
     ...collectFiles(path.join(repoRoot, "plugins", "desk", "mcp", "scripts"), ".js")
       .filter(isProductionJs),
     ...collectFiles(path.join(repoRoot, "scripts"), ".cjs")

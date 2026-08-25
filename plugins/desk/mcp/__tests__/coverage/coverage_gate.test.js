@@ -456,6 +456,7 @@ test("coverage runner discovers changed files from git state and falls back from
       "plugins/desk/mcp/index.js",
       "plugins/desk/mcp/src/coverage/gate.js",
       "plugins/desk/mcp/src/coverage/runner.js",
+      "plugins/desk/mcp/src/artifacts/manifest-contracts.cjs",
       "plugins/desk/mcp/scripts/run-coverage.js",
       "scripts/test-desk-docs.cjs",
       "scripts/test-desk-generated-artifacts.cjs",
@@ -476,6 +477,7 @@ test("coverage runner discovers changed files from git state and falls back from
           status: 0,
           stdout: [
             "plugins/desk/mcp/index.js",
+            "plugins/desk/mcp/src/artifacts/manifest-contracts.cjs",
             "plugins/desk/mcp/src/coverage/gate.js",
             "scripts/test-desk-docs.cjs",
             "scripts/test-desk-generated-artifacts.cjs",
@@ -500,6 +502,7 @@ test("coverage runner discovers changed files from git state and falls back from
       normalizePaths(changedSinceMergeBase({ repoRoot: fixtureRoot, spawn })),
       [
         "plugins/desk/mcp/index.js",
+        "plugins/desk/mcp/src/artifacts/manifest-contracts.cjs",
         "plugins/desk/mcp/src/coverage/gate.js",
         "scripts/test-desk-docs.cjs",
         "scripts/test-desk-generated-artifacts.cjs",
@@ -512,6 +515,7 @@ test("coverage runner discovers changed files from git state and falls back from
         "plugins/desk/mcp/__tests__/coverage/coverage_gate.test.js",
         "plugins/desk/mcp/index.js",
         "plugins/desk/mcp/scripts/run-coverage.js",
+        "plugins/desk/mcp/src/artifacts/manifest-contracts.cjs",
         "plugins/desk/mcp/src/coverage/gate.js",
         "plugins/desk/mcp/src/coverage/runner.js",
         "scripts/test-desk-docs.cjs",
@@ -945,6 +949,7 @@ test("coverage required-file discovery includes production targets and excludes 
     const included = [
       "plugins/desk/mcp/src/activation/schema.js",
       "plugins/desk/mcp/src/activation/validate.js",
+      "plugins/desk/mcp/src/artifacts/manifest-contracts.cjs",
       "plugins/desk/mcp/scripts/activation-support-matrix.js",
       "scripts/test-desk-docs.cjs",
       "scripts/test-desk-generated-artifacts.cjs",

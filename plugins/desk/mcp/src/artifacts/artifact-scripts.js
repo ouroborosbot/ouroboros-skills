@@ -737,17 +737,21 @@ async function readSanitizedSnapshotBytes({
   const compactedDbPath = `${sanitizedDbPath}.compacted.sqlite`
   let bytes
   let failure
-  let sanitizedDb
   try {
     throwIfAborted(signal)
     vacuumInto(db, sanitizedDbPath)
     throwIfAborted(signal)
-    sanitizedDb = openSanitizedDb({ deskRoot, filePath: sanitizedDbPath })
-    purgeOrphanVectors(sanitizedDb)
-    throwIfAborted(signal)
-    vacuumInto(sanitizedDb, compactedDbPath)
-    closeSanitizedDb(sanitizedDb)
-    sanitizedDb = undefined
+    const dbToClose = openSanitizedDb({
+      deskRoot,
+      filePath: sanitizedDbPath,
+    })
+    try {
+      purgeOrphanVectors(dbToClose)
+      throwIfAborted(signal)
+      vacuumInto(dbToClose, compactedDbPath)
+    } finally {
+      closeSanitizedDb(dbToClose)
+    }
     throwIfAborted(signal)
     bytes = await readFile(compactedDbPath)
     throwIfAborted(signal)
@@ -757,16 +761,6 @@ async function readSanitizedSnapshotBytes({
     } else {
       failure = new Error("snapshot sanitized logical copy failed")
       failure.code = "snapshot_sanitization_failed"
-    }
-  }
-  if (sanitizedDb !== undefined) {
-    try {
-      closeSanitizedDb(sanitizedDb)
-    } catch {
-      if (!failure) {
-        failure = new Error("snapshot sanitized logical copy failed")
-        failure.code = "snapshot_sanitization_failed"
-      }
     }
   }
   let cleanupFailed = false
