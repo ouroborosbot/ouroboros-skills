@@ -14,9 +14,7 @@ Apply this to human-readable replies, explanations, status, reviews, plans, and 
 3. **Understandable:** Use familiar words when they stay accurate. Keep required technical terms, define only unfamiliar ones, use one term per concept, name the actor, and state important relationships explicitly.
 4. **Usable:** State the action, decision, verification, or terminal evidence when it exists. Put a warning before the instruction it governs and say what remains open without inventing work or certainty.
 
-These are reader outcomes, not readability scores. Do not optimize for sentence length, grade level, or fewer words.
-
-## Never simplify away
+## Preserve meaning
 
 Preserve facts, quantities, evidence state, uncertainty, attribution, safety warnings, accessibility requirements, technical precision, required schemas, blockers, and completion state. If a clearer rewrite changes the claim, keep the precise wording and explain around it.
 
@@ -24,12 +22,6 @@ Do not restyle internal reasoning, code, commands, logs, stack traces, diffs, ex
 
 When correcting an earlier answer, name what changed, supersede the error, and retain prior context that is still true. In agent handoffs, preserve owners, evidence, blocked state, and next-action meaning while leaving structured fields to their schema.
 
-## Compose with installed owners
+## Keep the right voice and format
 
-When present, `interaction-style` owns live operator voice and decision cadence; Desk's prose invariant owns hard wrapping; `evidence-discipline` and `preflight-actions` own evidence and action safety; `status` and `autopilot` own progress and completion truth; `operator-voice-comments` owns approved wording, register, formatting, punctuation, and public vocabulary. Plain Language improves presentation without overriding them.
-
-## Source basis
-
-This is original Ourostack guidance informed by pinned public MIT sources from `GaZmagik/iso-24495` and `nikdumroese/plain-language-skill`. Exact source files, commits, hashes, and licenses are recorded in `upstream-sources.lock.json`.
-
-This skill does not claim ISO conformance and does not reproduce protected standard text. Evaluate whether readers can find, understand, and use the output through representative review and dogfood, not mechanical prose scores.
+Keep the voice, level of detail, and structure appropriate for the reader and destination. Improve clarity without flattening the speaker's style, changing the requested format, or weakening a more specific requirement.

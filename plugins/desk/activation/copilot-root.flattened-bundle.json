@@ -16,7 +16,7 @@
   "dependency_closure": [
     {
       "id": "desk",
-      "version": "2.1.0",
+      "version": "2.1.1",
       "plugin": "plugins/desk/plugin.json",
       "skills": "plugins/desk/skills/",
       "agents": "plugins/desk/agents/",
@@ -24,13 +24,13 @@
     },
     {
       "id": "work-suite",
-      "version": "2.1.0",
+      "version": "2.1.1",
       "plugin": "plugins/work-suite/plugin.json",
       "skills": "plugins/work-suite/skills/"
     },
     {
       "id": "plain-language",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "plugin": "plugins/plain-language/plugin.json",
       "skills": "plugins/plain-language/skills/"
     },

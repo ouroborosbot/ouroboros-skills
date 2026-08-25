@@ -1,6 +1,6 @@
 {
   "name": "work-suite",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "A lean workflow primitive for orchestrator agents: resolve material unknowns, plan only when needed, implement the smallest correct vertical slice, merge through terminal delivery, and keep authorized autopilot work moving.",
   "author": {
     "name": "ourostack",
@@ -19,7 +19,7 @@
   "dependencies": [
     {
       "name": "plain-language",
-      "version": "0.1.0"
+      "version": "0.1.1"
     },
     {
       "name": "ponytail-upstream",
@@ -30,7 +30,7 @@
     "copilot": {
       "dependencyProvider": {
         "id": "work-suite",
-        "version": "2.1.0",
+        "version": "2.1.1",
         "resolution": "flattened"
       }
     }
