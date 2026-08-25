@@ -6,26 +6,7 @@ These snapshots preserve provenance and attribution only. Their inclusion does n
 
 Each snapshot remains subject to its upstream license.
 
-## Sources
+- [GaZmagik/iso-24495](https://github.com/GaZmagik/iso-24495), MIT
+- [nikdumroese/plain-language-skill](https://github.com/nikdumroese/plain-language-skill), MIT
 
-### `gazmagik-iso-24495`
-
-- Repository: [GaZmagik/iso-24495](https://github.com/GaZmagik/iso-24495)
-- Commit: `58077fc4dd70daeedafc273f2abb9d341e6e5960`
-- License: MIT
-- Included files:
-  - `LICENSE` -> `plugins/plain-language/vendor/gazmagik/LICENSE` (inert-metadata)
-  - `output-styles/iso-24495.md` -> `plugins/plain-language/vendor/gazmagik/output-styles/iso-24495.md` (instruction)
-  - `skills/iso-24495-1/SKILL.md` -> `plugins/plain-language/vendor/gazmagik/skills/iso-24495-1/SKILL.upstream.md` (instruction)
-  - `skills/iso-24495-3/SKILL.md` -> `plugins/plain-language/vendor/gazmagik/skills/iso-24495-3/SKILL.upstream.md` (instruction)
-
-### `nikdumroese-plain-language-skill`
-
-- Repository: [nikdumroese/plain-language-skill](https://github.com/nikdumroese/plain-language-skill)
-- Commit: `6d6a69d91ff95b07073f65393e56e2a734b670b7`
-- License: MIT
-- Included files:
-  - `LICENSE` -> `plugins/plain-language/vendor/nikdumroese/LICENSE` (inert-metadata)
-  - `skills/plain-language-iso-24495/SKILL.md` -> `plugins/plain-language/vendor/nikdumroese/skills/plain-language-iso-24495/SKILL.upstream.md` (instruction)
-  - `skills/plain-language-iso-24495/references/checklist.md` -> `plugins/plain-language/vendor/nikdumroese/skills/plain-language-iso-24495/references/checklist.md` (instruction)
-  - `skills/plain-language-iso-24495/references/reader-test.md` -> `plugins/plain-language/vendor/nikdumroese/skills/plain-language-iso-24495/references/reader-test.md` (instruction)
+See `upstream-sources.lock.json` for the exact commits, files, generated paths, and hashes.

@@ -162,6 +162,17 @@
       ]
     },
     {
+      "name": "plain-language",
+      "path": "skills/plain-language/SKILL.md",
+      "description": "Apply reader-centered plain-language principles to human-readable agent output while preserving facts, uncertainty, attribution, safety, accessibility, technical precision, schemas, and source-preserved content.",
+      "tags": [
+        "writing",
+        "communication",
+        "quality",
+        "agent-output"
+      ]
+    },
+    {
       "name": "seo-titles",
       "path": "skills/seo-titles/SKILL.md",
       "description": "Write HTML title tags that rank AND get clicked. Marketing message first, SEO element second.",

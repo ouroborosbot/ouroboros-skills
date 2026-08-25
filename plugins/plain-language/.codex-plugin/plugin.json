@@ -1,0 +1,37 @@
+{
+  "name": "plain-language",
+  "version": "0.1.0",
+  "description": "Reader-centered guidance for clear human-readable agent output that preserves facts, evidence state, uncertainty, attribution, safety, accessibility, technical precision, schemas, and source-preserved content.",
+  "author": {
+    "name": "ourostack",
+    "url": "https://github.com/ourostack/ouroboros-skills"
+  },
+  "homepage": "https://github.com/ourostack/ouroboros-skills/tree/main/plugins/plain-language",
+  "repository": "https://github.com/ourostack/ouroboros-skills",
+  "license": "MIT",
+  "keywords": [
+    "writing",
+    "communication",
+    "quality",
+    "accessibility"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Plain Language",
+    "shortDescription": "Reader-centered output without loss of evidence or precision.",
+    "longDescription": "Plain Language applies reader-centered guidance to human-readable agent output while preserving facts, evidence state, uncertainty, attribution, safety, accessibility, technical precision, required schemas, exact quotations, code, commands, and approved operator-voice content.",
+    "developerName": "ourostack",
+    "category": "Productivity",
+    "capabilities": [
+      "Read"
+    ],
+    "websiteURL": "https://github.com/ourostack/ouroboros-skills/tree/main/plugins/plain-language",
+    "privacyPolicyURL": "https://github.com/ourostack/ouroboros-skills",
+    "termsOfServiceURL": "https://github.com/ourostack/ouroboros-skills",
+    "defaultPrompt": [
+      "Apply Plain Language while preserving evidence, precision, schemas, and approved voice."
+    ],
+    "brandColor": "#2563EB",
+    "screenshots": []
+  }
+}

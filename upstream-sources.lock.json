@@ -4,33 +4,27 @@
     {
       "id": "gazmagik-iso-24495",
       "repository": "GaZmagik/iso-24495",
-      "updateStrategy": "release-tag",
-      "tagPattern": "^v\\d+\\.\\d+\\.\\d+$",
       "commit": "58077fc4dd70daeedafc273f2abb9d341e6e5960",
       "license": "MIT",
       "files": [
         {
           "sourcePath": "LICENSE",
           "generatedPath": "plugins/plain-language/vendor/gazmagik/LICENSE",
-          "payload": "inert-metadata",
           "sha256": "615f0ec12aca663ad54b97cb8b2766fbdd386127a2d9066bf32bbdc07a41e230"
         },
         {
           "sourcePath": "output-styles/iso-24495.md",
           "generatedPath": "plugins/plain-language/vendor/gazmagik/output-styles/iso-24495.md",
-          "payload": "instruction",
           "sha256": "1505117b2527f0779e37d044a6960fc7dab6574b553aaf47fcc9c5487a8e5321"
         },
         {
           "sourcePath": "skills/iso-24495-1/SKILL.md",
           "generatedPath": "plugins/plain-language/vendor/gazmagik/skills/iso-24495-1/SKILL.upstream.md",
-          "payload": "instruction",
           "sha256": "048db14e4a8b0c26c6d16462cd423a2c005163c893a3dfc44d609c5a147c8993"
         },
         {
           "sourcePath": "skills/iso-24495-3/SKILL.md",
           "generatedPath": "plugins/plain-language/vendor/gazmagik/skills/iso-24495-3/SKILL.upstream.md",
-          "payload": "instruction",
           "sha256": "db15927f82c93e1d7ad011350e060cc31189478ef8da8a5d4ac246b00b4ba8d1"
         }
       ]
@@ -38,33 +32,27 @@
     {
       "id": "nikdumroese-plain-language-skill",
       "repository": "nikdumroese/plain-language-skill",
-      "updateStrategy": "default-branch-commit",
-      "defaultBranch": "main",
       "commit": "6d6a69d91ff95b07073f65393e56e2a734b670b7",
       "license": "MIT",
       "files": [
         {
           "sourcePath": "LICENSE",
           "generatedPath": "plugins/plain-language/vendor/nikdumroese/LICENSE",
-          "payload": "inert-metadata",
           "sha256": "5cf01040cbc29ce429402d1c584d7dc614e5a173a84238754dcc0c3698f9955e"
         },
         {
           "sourcePath": "skills/plain-language-iso-24495/SKILL.md",
           "generatedPath": "plugins/plain-language/vendor/nikdumroese/skills/plain-language-iso-24495/SKILL.upstream.md",
-          "payload": "instruction",
           "sha256": "771ea11fbb018988cb9985e18cdd565389fc68bba6cff97c7a44accab50965cc"
         },
         {
           "sourcePath": "skills/plain-language-iso-24495/references/checklist.md",
           "generatedPath": "plugins/plain-language/vendor/nikdumroese/skills/plain-language-iso-24495/references/checklist.md",
-          "payload": "instruction",
           "sha256": "f090a057de572b2781a682d0523f6a7eb0d964398cd380c0560519feaa4c3d4d"
         },
         {
           "sourcePath": "skills/plain-language-iso-24495/references/reader-test.md",
           "generatedPath": "plugins/plain-language/vendor/nikdumroese/skills/plain-language-iso-24495/references/reader-test.md",
-          "payload": "instruction",
           "sha256": "557c7a63901ba050ab396836500e846c705695ab6729a64385666f38e43fe788"
         }
       ]

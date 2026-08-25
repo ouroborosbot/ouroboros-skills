@@ -66,6 +66,12 @@ function createFixtureRepo(root) {
     writeText(root, `skills/${name}/SKILL.md`, skillBody(name))
     writeText(root, `plugins/work-suite/skills/${name}/SKILL.md`, skillBody(name))
   }
+  writeText(root, "skills/plain-language/SKILL.md", skillBody("plain-language"))
+  writeText(
+    root,
+    "plugins/plain-language/skills/plain-language/SKILL.md",
+    skillBody("plain-language"),
+  )
 
   writeText(root, "plugins/no-host-metadata/README.md", "fixture\n")
   writeJson(root, "plugins/desk/.claude-plugin/plugin.json", {
@@ -152,7 +158,6 @@ test("validate-skills exports a testable CLI contract and validates a healthy re
     "validateDeskMcpPackageScripts",
     "validateManifest",
     "validatePluginMetadata",
-    "validateWorkSuiteCopies",
   ]) {
     assert.equal(typeof validator[exportName], "function", `${exportName} must be exported`)
   }
@@ -268,84 +273,43 @@ test("validateManifest reports every schema and skill-copy failure mode", async 
   )
 })
 
-test("validateWorkSuiteCopies catches set, missing file, and drift errors", async () => {
+test("validateCanonicalPluginCopies catches set, missing file, and drift errors", async () => {
+  assert.deepEqual(validator.canonicalPluginCopies, {
+    "work-suite": expectedSkillNames,
+    "plain-language": ["plain-language"],
+  })
   await assertThrowsWith(
     (root) => {
       removePath(root, "plugins/work-suite/skills/autopilot")
       writeText(root, "plugins/work-suite/skills/extra/SKILL.md", skillBody("extra"))
     },
-    (root) => validator.validateWorkSuiteCopies({ repoRoot: root }),
+    (root) => validator.validateCanonicalPluginCopies({ repoRoot: root }),
     /work-suite skill set mismatch/u,
   )
   await assertThrowsWith(
     (root) => removePath(root, "skills/autopilot/SKILL.md"),
-    (root) => validator.validateWorkSuiteCopies({ repoRoot: root }),
+    (root) => validator.validateCanonicalPluginCopies({ repoRoot: root }),
     /missing canonical/u,
   )
   await assertThrowsWith(
     (root) => removePath(root, "plugins/work-suite/skills/autopilot/SKILL.md"),
-    (root) => validator.validateWorkSuiteCopies({ repoRoot: root }),
+    (root) => validator.validateCanonicalPluginCopies({ repoRoot: root }),
     /missing plugin copy/u,
   )
   await assertThrowsWith(
     (root) => writeText(root, "plugins/work-suite/skills/autopilot/SKILL.md", skillBody("autopilot").replace("# autopilot", "# changed")),
-    (root) => validator.validateWorkSuiteCopies({ repoRoot: root }),
+    (root) => validator.validateCanonicalPluginCopies({ repoRoot: root }),
     /out of sync/u,
   )
-})
-
-test("canonical plugin copy validation is declared and reusable without Plain Language", async () => {
-  assert.deepEqual(
-    validator.canonicalPluginCopyGroups.map((group) => ({
-      id: group.id,
-      pluginRoot: group.pluginRoot,
-      names: group.copies.map((copy) => copy.name),
-    })),
-    [{
-      id: "work-suite",
-      pluginRoot: "plugins/work-suite/skills",
-      names: expectedSkillNames,
-    }],
-  )
-
   await withFixtureRepo((fixtureRoot) => {
-    const copies = [
-      {
-        name: "alpha",
-        canonicalPath: "canonical/alpha.md",
-        pluginPath: "plugins/example/copies/alpha.md",
-      },
-      {
-        name: "beta",
-        canonicalPath: "canonical/beta.md",
-        pluginPath: "plugins/example/copies/beta.md",
-      },
-    ]
-    writeText(fixtureRoot, copies[0].canonicalPath, "alpha\n")
-    writeText(fixtureRoot, copies[0].pluginPath, "alpha\n")
-    writeText(fixtureRoot, copies[1].canonicalPath, "beta\n")
-    writeText(fixtureRoot, copies[1].pluginPath, "beta\n")
-
-    validator.validateCanonicalPluginCopies({
-      repoRoot: fixtureRoot,
-      copyGroups: [{
-        id: "example",
-        pluginRoot: "plugins/example/copies",
-        copies,
-      }],
-    })
-
-    writeText(fixtureRoot, copies[1].pluginPath, "drift\n")
+    writeText(
+      fixtureRoot,
+      "plugins/plain-language/skills/plain-language/SKILL.md",
+      skillBody("plain-language").replace("# plain-language", "# drift"),
+    )
     assert.throws(
-      () => validator.validateCanonicalPluginCopies({
-        repoRoot: fixtureRoot,
-        copyGroups: [{
-          id: "example",
-          pluginRoot: "plugins/example/copies",
-          copies,
-        }],
-      }),
-      /example copy beta: .* is out of sync with canonical\/beta\.md/u,
+      () => validator.validateCanonicalPluginCopies({ repoRoot: fixtureRoot }),
+      /plain-language skill plain-language: .* is out of sync/u,
     )
   })
 })

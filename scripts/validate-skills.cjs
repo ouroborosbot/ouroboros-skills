@@ -30,18 +30,10 @@ const workSuiteSkillNames = [
   "work-merger",
   "work-planner",
 ];
-const canonicalPluginCopyGroups = [
-  {
-    id: "work-suite",
-    pluginRoot: "plugins/work-suite/skills",
-    expectedPluginEntries: workSuiteSkillNames,
-    copies: workSuiteSkillNames.map((name) => ({
-      name,
-      canonicalPath: path.join("skills", name, "SKILL.md"),
-      pluginPath: path.join("plugins/work-suite/skills", name, "SKILL.md"),
-    })),
-  },
-];
+const canonicalPluginCopies = {
+  "work-suite": workSuiteSkillNames,
+  "plain-language": ["plain-language"],
+};
 
 function repoPath(filePath, { repoRoot = process.cwd() } = {}) {
   return path.isAbsolute(filePath) ? filePath : path.join(repoRoot, filePath);
@@ -160,47 +152,40 @@ function validateManifest(options = {}) {
 }
 
 function validateCanonicalPluginCopies(options = {}) {
-  const copyGroups = options.copyGroups ?? canonicalPluginCopyGroups;
+  const copyMap = options.copyMap ?? canonicalPluginCopies;
   let validatedCopies = 0;
 
-  for (const group of copyGroups) {
-    if (group.expectedPluginEntries) {
-      const pluginEntries = readDir(group.pluginRoot, options)
-        .filter((name) => stat(path.join(group.pluginRoot, name), options).isDirectory())
-        .sort();
-      const expectedEntries = [...group.expectedPluginEntries].sort();
-      const missing = expectedEntries.filter((name) => !pluginEntries.includes(name));
-      const extra = pluginEntries.filter((name) => !expectedEntries.includes(name));
-      if (missing.length > 0 || extra.length > 0) {
-        throw new Error(`${group.id} skill set mismatch: missing=[${missing.join(", ")}] extra=[${extra.join(", ")}]`);
-      }
+  for (const [plugin, skills] of Object.entries(copyMap)) {
+    const pluginRoot = path.join("plugins", plugin, "skills");
+    const pluginEntries = readDir(pluginRoot, options)
+      .filter((name) => stat(path.join(pluginRoot, name), options).isDirectory())
+      .sort();
+    const expectedEntries = [...skills].sort();
+    const missing = expectedEntries.filter((name) => !pluginEntries.includes(name));
+    const extra = pluginEntries.filter((name) => !expectedEntries.includes(name));
+    if (missing.length > 0 || extra.length > 0) {
+      throw new Error(`${plugin} skill set mismatch: missing=[${missing.join(", ")}] extra=[${extra.join(", ")}]`);
     }
 
-    for (const copy of group.copies) {
-      if (!exists(copy.canonicalPath, options)) {
-        throw new Error(`${group.id} copy ${copy.name}: missing canonical ${copy.canonicalPath}`);
+    for (const skill of skills) {
+      const canonicalPath = path.join("skills", skill, "SKILL.md");
+      const pluginPath = path.join(pluginRoot, skill, "SKILL.md");
+      if (!exists(canonicalPath, options)) {
+        throw new Error(`${plugin} skill ${skill}: missing canonical ${canonicalPath}`);
       }
-      if (!exists(copy.pluginPath, options)) {
-        throw new Error(`${group.id} copy ${copy.name}: missing plugin copy ${copy.pluginPath}`);
+      if (!exists(pluginPath, options)) {
+        throw new Error(`${plugin} skill ${skill}: missing plugin copy ${pluginPath}`);
       }
-      const canonical = readText(copy.canonicalPath, options);
-      const pluginCopy = readText(copy.pluginPath, options);
+      const canonical = readText(canonicalPath, options);
+      const pluginCopy = readText(pluginPath, options);
       if (canonical !== pluginCopy) {
-        throw new Error(`${group.id} copy ${copy.name}: ${copy.pluginPath} is out of sync with ${copy.canonicalPath}`);
+        throw new Error(`${plugin} skill ${skill}: ${pluginPath} is out of sync with ${canonicalPath}`);
       }
       validatedCopies += 1;
     }
   }
 
-  console.log(`Validated ${validatedCopies} canonical plugin copies across ${copyGroups.length} group(s).`);
-}
-
-function validateWorkSuiteCopies(options = {}) {
-  const workSuiteGroups = canonicalPluginCopyGroups.filter((group) => group.id === "work-suite");
-  return validateCanonicalPluginCopies({
-    ...options,
-    copyGroups: workSuiteGroups,
-  });
+  console.log(`Validated ${validatedCopies} canonical plugin copies across ${Object.keys(copyMap).length} plugin(s).`);
 }
 
 function validatePluginMetadata(options = {}) {
@@ -531,7 +516,7 @@ function startCli({
 }
 
 module.exports = {
-  canonicalPluginCopyGroups,
+  canonicalPluginCopies,
   readJson,
   run,
   runDeskFreshnessChecks,
@@ -544,7 +529,6 @@ module.exports = {
   validateManifest,
   validatePluginMetadata,
   validateSkillDescriptionLimits,
-  validateWorkSuiteCopies,
 };
 
 startCli();
