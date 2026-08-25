@@ -93,6 +93,9 @@ const hostManifestFixtureFiles = [
   "plugins/work-suite/.claude-plugin/plugin.json",
   "plugins/work-suite/.codex-plugin/plugin.json",
   "plugins/work-suite/plugin.json",
+  "plugins/plain-language/.claude-plugin/plugin.json",
+  "plugins/plain-language/.codex-plugin/plugin.json",
+  "plugins/plain-language/plugin.json",
   "scripts/validate-skills.cjs",
 ]
 
@@ -167,6 +170,13 @@ async function withValidateSkillsFixture({ hostStatus = 0, generatedStatus = 0 }
       writeText(fixtureRoot, `skills/${name}/SKILL.md`, body)
       writeText(fixtureRoot, `plugins/work-suite/skills/${name}/SKILL.md`, body)
     }
+    const plainLanguage = "---\nname: plain-language\ndescription: fixture skill\n---\n# plain-language\n"
+    writeText(fixtureRoot, "skills/plain-language/SKILL.md", plainLanguage)
+    writeText(
+      fixtureRoot,
+      "plugins/plain-language/skills/plain-language/SKILL.md",
+      plainLanguage,
+    )
     writeText(
       fixtureRoot,
       "skills/sign-apple-apps/SKILL.md",

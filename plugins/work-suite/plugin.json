@@ -1,6 +1,6 @@
 {
   "name": "work-suite",
-  "version": "1.5.4",
+  "version": "1.6.0",
   "description": "The workflow primitive for orchestrator agents: ideate, plan, execute, merge, visual-dogfood UI work, stay in turn while waiting, and run no-human-gates full-delivery autopilot loops.",
   "author": {
     "name": "ourostack",
@@ -16,11 +16,17 @@
     "merge"
   ],
   "skills": "./skills/",
+  "dependencies": [
+    {
+      "name": "plain-language",
+      "version": "0.1.0"
+    }
+  ],
   "activation": {
     "copilot": {
       "dependencyProvider": {
         "id": "work-suite",
-        "version": "1.5.4",
+        "version": "1.6.0",
         "resolution": "flattened"
       }
     }

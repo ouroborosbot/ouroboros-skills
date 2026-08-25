@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 1.8.0 — 2026-08-24
+
+**Human-readable worker output now carries a first-class Plain Language dependency.** The new `plain-language` 0.1.0 plugin supplies concise reader-centered guidance, a native Claude parent/subagent hook, and generated host fallbacks while preserving facts, evidence state, uncertainty, attribution, safety, accessibility, technical precision, schemas, exact source content, and existing Desk voice rules. Work Suite moves to 1.6.0 to consume the same dependency. `desk-mcp@1.3.3` remains unchanged.
+
 ## 1.7.19 — 2026-08-18
 
 **Windows Copilot hosts now receive a native Desk runtime pack.** The release includes the production dependency closure for Windows x64 on Node ABI 137, including loadable `better-sqlite3` and `sqlite-vec` binaries, and the generated support matrix advertises that exact target. Generated-artifact validation now requires the Windows pack alongside the existing macOS pack, preventing future releases from silently returning canonical Desk to diagnostic mode. `desk-mcp@1.3.3` remains unchanged.

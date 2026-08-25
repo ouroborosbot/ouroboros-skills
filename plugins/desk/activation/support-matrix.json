@@ -50,13 +50,14 @@
         "plugins/desk/agents/worker.agent.md",
         "plugins/desk/.mcp.copilot.json",
         "plugins/work-suite/plugin.json",
+        "plugins/plain-language/plugin.json",
         "plugins/desk/activation/copilot-root.flattened-bundle.json"
       ],
       "evidence_command_or_doc": "npm --prefix plugins/desk/mcp run activation:copilot-bundle:generate; node --test plugins/desk/mcp/__tests__/activation/copilot_packaging.test.js",
       "unsupported_primitives": [
         "transitive-dependency-resolution"
       ],
-      "fallback_behavior": "load the generated flattened Desk plus Work Suite bundle metadata"
+      "fallback_behavior": "load the generated flattened Desk, Work Suite, and Plain Language bundle metadata"
     },
     {
       "host_id": "ouroboros-autonomous-agent",

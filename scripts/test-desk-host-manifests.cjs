@@ -85,6 +85,7 @@ function expectedCopilotBundle(repoRoot) {
       activation_manifest: activationManifestPath,
       desk_plugin: "plugins/desk/plugin.json",
       work_suite_plugin: "plugins/work-suite/plugin.json",
+      plain_language_plugin: "plugins/plain-language/plugin.json",
     },
     launch: {
       agent: "plugins/desk/agents/worker.agent.md",
@@ -104,6 +105,12 @@ function expectedCopilotBundle(repoRoot) {
         version: workSuiteDependency?.lock?.version,
         plugin: "plugins/work-suite/plugin.json",
         skills: "plugins/work-suite/skills/",
+      },
+      {
+        id: "plain-language",
+        version: findActivationDependency(activation, "plain-language")?.lock?.version,
+        plugin: "plugins/plain-language/plugin.json",
+        skills: "plugins/plain-language/skills/",
       },
     ],
     manual_steps: [],
@@ -175,6 +182,7 @@ async function checkCopilotBundle({ repoRoot, mcpRoot, errors, checked }) {
     bundle,
     deskPlugin: readJson(repoRoot, "plugins/desk/plugin.json"),
     workSuitePlugin: readJson(repoRoot, "plugins/work-suite/plugin.json"),
+    plainLanguagePlugin: readJson(repoRoot, "plugins/plain-language/plugin.json"),
   });
   if (contractErrors.length > 0) {
     errors.push(`copilot-plugin-metadata drift: ${contractErrors.join("; ")}`);
@@ -186,7 +194,9 @@ function checkCodexPlugin({ repoRoot, errors, checked }) {
   const activation = readJson(repoRoot, activationManifestPath);
   const deskPlugin = readJson(repoRoot, "plugins/desk/.codex-plugin/plugin.json");
   const workSuitePlugin = readJson(repoRoot, "plugins/work-suite/.codex-plugin/plugin.json");
+  const plainLanguagePlugin = readJson(repoRoot, "plugins/plain-language/.codex-plugin/plugin.json");
   const workSuiteLock = findActivationDependency(activation, "work-suite")?.lock?.version;
+  const plainLanguageLock = findActivationDependency(activation, "plain-language")?.lock?.version;
   const codex = deskPlugin.activation?.codex;
 
   if (deskPlugin.version !== activation.version) {
@@ -219,6 +229,12 @@ function checkCodexPlugin({ repoRoot, errors, checked }) {
   if (workSuitePlugin.version !== workSuiteLock) {
     errors.push("codex-plugin Work Suite provider lock drift");
   }
+  if (codex?.dependencies?.["plain-language"]?.version !== plainLanguagePlugin.version) {
+    errors.push("codex-plugin Plain Language dependency version drift");
+  }
+  if (plainLanguagePlugin.version !== plainLanguageLock) {
+    errors.push("codex-plugin Plain Language provider lock drift");
+  }
 }
 
 function checkClaudePlugin({ repoRoot, errors, checked }) {
@@ -226,8 +242,10 @@ function checkClaudePlugin({ repoRoot, errors, checked }) {
   const activation = readJson(repoRoot, activationManifestPath);
   const deskPlugin = readJson(repoRoot, "plugins/desk/.claude-plugin/plugin.json");
   const workSuitePlugin = readJson(repoRoot, "plugins/work-suite/.claude-plugin/plugin.json");
+  const plainLanguagePlugin = readJson(repoRoot, "plugins/plain-language/.claude-plugin/plugin.json");
   const claudeActivation = activation.host_activation?.claude;
   const workSuiteLock = findActivationDependency(activation, "work-suite")?.lock?.version;
+  const plainLanguageLock = findActivationDependency(activation, "plain-language")?.lock?.version;
 
   if (deskPlugin.version !== activation.version) {
     errors.push("claude-plugin Desk version drift");
@@ -246,6 +264,15 @@ function checkClaudePlugin({ repoRoot, errors, checked }) {
   }
   if (workSuitePlugin.version !== workSuiteLock) {
     errors.push("claude-plugin Work Suite provider lock drift");
+  }
+  if (
+    deskPlugin.dependencies?.[1]?.name !== "plain-language" ||
+    deskPlugin.dependencies?.[1]?.version !== "0.1.0"
+  ) {
+    errors.push("claude-plugin Plain Language dependency drift");
+  }
+  if (plainLanguagePlugin.version !== plainLanguageLock) {
+    errors.push("claude-plugin Plain Language provider lock drift");
   }
   if (claudeActivation?.targets?.["desk:worker"]?.source !== "agents/worker.md") {
     errors.push("claude-plugin activation worker source drift");
@@ -315,6 +342,9 @@ function checkWorkerSources({ repoRoot, errors, checked }) {
   }
   if (!codexAdapter.includes("Never hard-wrap authored prose") || !codexAdapter.includes("authored/changed prose")) {
     errors.push("worker-sources codex activation no-hard-wrap invariant drift");
+  }
+  if (!codexAdapter.includes("Apply the \\`plain-language\\` skill to every human-readable response and artifact")) {
+    errors.push("worker-sources codex activation Plain Language invariant drift");
   }
 }
 

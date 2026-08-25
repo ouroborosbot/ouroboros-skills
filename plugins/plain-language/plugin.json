@@ -1,0 +1,12 @@
+{
+  "name": "plain-language",
+  "version": "0.1.0",
+  "description": "Reader-centered guidance for clear human-readable agent output that preserves facts, evidence state, uncertainty, attribution, safety, accessibility, technical precision, schemas, and source-preserved content.",
+  "author": {
+    "name": "ourostack",
+    "url": "https://github.com/ourostack/ouroboros-skills"
+  },
+  "license": "MIT",
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json"
+}
