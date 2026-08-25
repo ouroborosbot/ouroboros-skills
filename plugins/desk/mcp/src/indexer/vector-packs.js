@@ -360,7 +360,6 @@ function representedDocumentsAreCurrent(
   if (requireRepresentedDocument && representedDocuments.length === 0) {
     return false
   }
-  if (representedDocuments.length !== expectedDocuments.length) return false
   const expectedByPath = new Map(expectedDocuments.map((doc) => [
     canonicalFilesystemDocumentPath(doc.path),
     canonicalDocumentHash(doc.hash),
