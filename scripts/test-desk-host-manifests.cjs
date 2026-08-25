@@ -343,6 +343,9 @@ function checkWorkerSources({ repoRoot, errors, checked }) {
   if (!codexAdapter.includes("Never hard-wrap authored prose") || !codexAdapter.includes("authored/changed prose")) {
     errors.push("worker-sources codex activation no-hard-wrap invariant drift");
   }
+  if (!codexAdapter.includes("Apply the \\`plain-language\\` skill to every human-readable response and artifact")) {
+    errors.push("worker-sources codex activation Plain Language invariant drift");
+  }
 }
 
 async function expectedCodexFixtures({ repoRoot, mcpRoot }) {

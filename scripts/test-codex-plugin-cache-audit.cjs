@@ -54,6 +54,7 @@ function makeFixture({ namespace = "ourostack" } = {}) {
   mkdirp(repoRoot);
   writePlugin(repoRoot, "desk", "1.7.3");
   writePlugin(repoRoot, "work-suite", "1.4.9");
+  writePlugin(repoRoot, "plain-language", "0.1.0");
   writeJson(path.join(repoRoot, ".agents", "plugins", "marketplace.json"), {
     name: namespace,
     plugins: [
@@ -65,10 +66,15 @@ function makeFixture({ namespace = "ourostack" } = {}) {
         name: "work-suite",
         source: { source: "local", path: "./plugins/work-suite" },
       },
+      {
+        name: "plain-language",
+        source: { source: "local", path: "./plugins/plain-language" },
+      },
     ],
   });
   writeCache(codexHome, "desk", "1.7.3", manifest("desk", "1.7.3"), namespace);
   writeCache(codexHome, "work-suite", "1.4.9", manifest("work-suite", "1.4.9"), namespace);
+  writeCache(codexHome, "plain-language", "0.1.0", manifest("plain-language", "0.1.0"), namespace);
   return { root, repoRoot, codexHome };
 }
 
@@ -83,7 +89,7 @@ function testCurrentFixture() {
     assert.equal(report.marketplace_namespace, "ourostack");
     assert.equal(report.host_marketplace.provided, false);
     assert.equal(report.host_marketplace.current, true);
-    assert.equal(report.plugins.length, 2);
+    assert.equal(report.plugins.length, 3);
     for (const plugin of report.plugins) {
       assert.equal(plugin.marketplace_namespace, "ourostack");
       assert.equal(plugin.repo_source_current, true);
@@ -118,6 +124,7 @@ function testHostMarketplaceCurrentAndDrift() {
     writeHostMarketplace(fixture.root, [
       ["desk", "./repo/plugins/desk"],
       ["work-suite", "./repo/plugins/work-suite"],
+      ["plain-language", "./repo/plugins/plain-language"],
     ]);
     const current = auditCodexPluginCache({
       repoRoot: fixture.repoRoot,
@@ -130,9 +137,11 @@ function testHostMarketplaceCurrentAndDrift() {
 
     writePlugin(fixture.root, "desk", "1.7.2");
     writePlugin(fixture.root, "work-suite", "1.4.8");
+    writePlugin(fixture.root, "plain-language", "0.0.9");
     writeHostMarketplace(fixture.root, [
       ["desk", "./plugins/desk"],
       ["work-suite", "./plugins/work-suite"],
+      ["plain-language", "./plugins/plain-language"],
     ]);
     const stale = auditCodexPluginCache({
       repoRoot: fixture.repoRoot,

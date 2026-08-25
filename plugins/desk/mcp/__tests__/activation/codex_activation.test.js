@@ -493,6 +493,7 @@ test("Codex activation preserves user-authored config and instructions with owne
   assert.equal(result.generatedConfig.match(/# END desk activation/g).length, 1)
   assert.equal(result.generatedInstructions.startsWith(existingInstructions), true)
   assert.match(result.generatedInstructions, /# BEGIN desk activation: desk@1\.8\.0 mode=global-personal owner=desk-activation/)
+  assert.match(result.generatedInstructions, /Apply the `plain-language` skill to every human-readable response and artifact/u)
   assert.match(result.generatedInstructions, /# END desk activation/)
   assert.equal(result.generatedInstructions.match(/# BEGIN desk activation/g).length, 1)
   assert.equal(result.generatedInstructions.match(/# END desk activation/g).length, 1)
