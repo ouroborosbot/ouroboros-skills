@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 2.0.0 — 2026-08-25
+
+**Workers now load upstream Ponytail for coding and use a direct Work Suite 2 workflow.** Clear tasks skip ideation and planning, implementation proof follows risk instead of ritual, review runs once at the branch boundary, and merge remains responsible for release or install refresh, smoke, cleanup, and continuation. Plain Language remains authoritative for human-readable output. `desk-mcp@1.3.3` remains unchanged.
+
 ## 1.8.0 — 2026-08-24
 
 **Human-readable worker output now carries a first-class Plain Language dependency.** The new `plain-language` 0.1.0 plugin supplies concise reader-centered guidance, a native Claude parent/subagent hook, and generated host fallbacks while preserving facts, evidence state, uncertainty, attribution, safety, accessibility, technical precision, schemas, exact source content, and existing Desk voice rules. Work Suite moves to 1.6.0 to consume the same dependency. `desk-mcp@1.3.3` remains unchanged.

@@ -1,7 +1,7 @@
 {
   "name": "work-suite",
-  "version": "1.6.0",
-  "description": "The workflow primitive used by orchestrator agents: work-ideator (explore), work-planner (scope), work-doer (execute with TDD), work-merger (PR + merge), visual-qa-dogfood (screenshot-backed UI dogfooding), autopilot (no-human-gates full-delivery and continuation discipline), stay-in-turn (CI/deploy wait discipline), and inch-worm (open-ended improvement loop). Vendor-neutral, engine-agnostic plugin bundle that mirrors the canonical skills under ouroboros-skills/skills/.",
+  "version": "2.0.0",
+  "description": "A lean workflow primitive for orchestrator agents: resolve material unknowns, plan only when needed, implement the smallest correct vertical slice, merge through terminal delivery, and keep authorized autopilot work moving. Uses pinned upstream Ponytail for coding posture and Plain Language for human-readable output.",
   "author": {
     "name": "ourostack",
     "url": "https://github.com/ourostack/ouroboros-skills"
@@ -11,6 +11,10 @@
     {
       "name": "plain-language",
       "version": "0.1.0"
+    },
+    {
+      "name": "ponytail-upstream",
+      "version": "4.9.0"
     }
   ]
 }

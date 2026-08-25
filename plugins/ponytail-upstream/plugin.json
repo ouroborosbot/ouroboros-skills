@@ -1,0 +1,13 @@
+{
+  "name": "ponytail-upstream",
+  "version": "4.9.0",
+  "description": "Unmodified Ponytail v4.9.0 skills and hooks by Dietrich Gebert, packaged for Ourostack.",
+  "author": {
+    "name": "Dietrich Gebert",
+    "url": "https://github.com/DietrichGebert/ponytail"
+  },
+  "repository": "https://github.com/DietrichGebert/ponytail",
+  "license": "MIT",
+  "skills": "./skills/",
+  "hooks": "./hooks/copilot-hooks.json"
+}

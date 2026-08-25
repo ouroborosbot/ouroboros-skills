@@ -13,9 +13,11 @@
         "plugins/desk/.claude-plugin/plugin.json",
         "plugins/desk/.mcp.json",
         "plugins/desk/agents/worker.md",
-        "plugins/work-suite/.claude-plugin/plugin.json"
+        "plugins/work-suite/.claude-plugin/plugin.json",
+        "plugins/plain-language/.claude-plugin/plugin.json",
+        "plugins/ponytail-upstream/.claude-plugin/plugin.json"
       ],
-      "evidence_command_or_doc": "claude plugin validate plugins/desk --strict; claude plugin validate plugins/work-suite --strict; desk/tasks/2026-06-14-1335-doing-desk-dependency-activation/unit-4b-claude-help-evidence.log; node --test plugins/desk/mcp/__tests__/activation/claude_packaging.test.js",
+      "evidence_command_or_doc": "claude plugin validate plugins/desk --strict; claude plugin validate plugins/work-suite --strict; desk/tasks/2026-06-14-1335-doing-desk-dependency-activation/unit-4b-claude-help-evidence.log; node --test plugins/desk/mcp/__tests__/activation/claude_packaging.test.js; node scripts/test-work-suite-contracts.cjs",
       "unsupported_primitives": [
         "agent-view-dispatch",
         "background-session-inheritance"
@@ -33,9 +35,11 @@
         "plugins/desk/mcp/__tests__/activation/codex_smoke.test.js",
         "plugins/desk/agents/worker.toml",
         "plugins/work-suite/.codex-plugin/plugin.json",
+        "plugins/plain-language/.codex-plugin/plugin.json",
+        "plugins/ponytail-upstream/.codex-plugin/plugin.json",
         "desk/tasks/2026-06-14-1335-doing-desk-dependency-activation/codex-smoke-evidence.md"
       ],
-      "evidence_command_or_doc": "node --test plugins/desk/mcp/__tests__/activation/codex_activation.test.js; node --test plugins/desk/mcp/__tests__/activation/codex_smoke.test.js; desk/tasks/2026-06-14-1335-doing-desk-dependency-activation/codex-smoke-evidence.md",
+      "evidence_command_or_doc": "node --test plugins/desk/mcp/__tests__/activation/codex_activation.test.js; node --test plugins/desk/mcp/__tests__/activation/codex_smoke.test.js; node scripts/test-work-suite-contracts.cjs; desk/tasks/2026-06-14-1335-doing-desk-dependency-activation/codex-smoke-evidence.md",
       "unsupported_primitives": [
         "codex-desktop-scriptable-activation-smoke"
       ],
@@ -51,13 +55,14 @@
         "plugins/desk/.mcp.copilot.json",
         "plugins/work-suite/plugin.json",
         "plugins/plain-language/plugin.json",
+        "plugins/ponytail-upstream/plugin.json",
         "plugins/desk/activation/copilot-root.flattened-bundle.json"
       ],
       "evidence_command_or_doc": "npm --prefix plugins/desk/mcp run activation:copilot-bundle:generate; node --test plugins/desk/mcp/__tests__/activation/copilot_packaging.test.js",
       "unsupported_primitives": [
         "transitive-dependency-resolution"
       ],
-      "fallback_behavior": "load the generated flattened Desk, Work Suite, and Plain Language bundle metadata"
+      "fallback_behavior": "load the generated flattened Desk, Work Suite, Plain Language, and Ponytail bundle metadata"
     },
     {
       "host_id": "ouroboros-autonomous-agent",
@@ -68,13 +73,15 @@
         "plugins/desk/activation/README.md",
         "plugins/desk/.mcp.json",
         "plugins/desk/plugin.json",
-        "plugins/work-suite/plugin.json"
+        "plugins/work-suite/plugin.json",
+        "plugins/plain-language/plugin.json",
+        "plugins/ponytail-upstream/plugin.json"
       ],
       "evidence_command_or_doc": "node --test plugins/desk/mcp/__tests__/activation/ouroboros_stdio_packaging.test.js; plugins/desk/README.md#under-ouroboros; plugins/desk/activation/README.md#ouroboros-autonomous-agent",
       "unsupported_primitives": [
         "host-native-plugin-install"
       ],
-      "fallback_behavior": "bundle Desk + Work Suite into the agent bundle and bind $DESK to ~/AgentBundles/<agent>.ouro/desk/"
+      "fallback_behavior": "bundle Desk + Work Suite + Plain Language + Ponytail into the agent bundle and bind $DESK to ~/AgentBundles/<agent>.ouro/desk/"
     },
     {
       "host_id": "generic-stdio",

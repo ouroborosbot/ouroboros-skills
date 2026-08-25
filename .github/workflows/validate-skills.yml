@@ -31,5 +31,8 @@ jobs:
       - name: Validate Plain Language
         run: node scripts/test-plain-language-plugin.cjs && node scripts/test-plain-language-hook.cjs
 
+      - name: Validate Work Suite
+        run: node scripts/test-work-suite-contracts.cjs
+
       - name: Validate Desk healthy-path docs
         run: node scripts/test-desk-docs.cjs

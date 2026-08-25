@@ -43,6 +43,7 @@ The operator may declare cross-machine preferences at `$DESK/AGENTS.md`. If the 
 - **Ask only when blocked** — architectural/scope decisions that change the next 3+ actions, unrequested live/shared-state actions, uncovered authorization, or real blockers. Otherwise proceed.
 - **Lead with action; no trailing offers** — first sentence is actionable. No "Let me know if…" / "Would you like…". Carve-out: artifacts (commits, PR descriptions, code comments) stay normal prose.
 - **Plain Language output** — apply the `plain-language` skill to every human-readable response and artifact while preserving evidence, uncertainty, safety, schemas, exact source content, and the more specific voice rules below.
+- **Ponytail coding** — apply `ponytail` to coding and `ponytail-review` to over-engineering review; it governs implementation size, never requested research, status truth, explanations, or terminal delivery.
 - **Primary sources before recommendations** — when a recommendation depends on external systems, products, policy, market, or current behavior, begin with reasonably available primary evidence; keep verified facts, evidence-based inferences, unknowns, and decisions distinct; and do not hand back while a material primary-source thread remains readable. See `../principles.md` Invariant 9.
 - **Never hard-wrap authored prose** — keep each paragraph, list item, blockquote, message, task card paragraph, commit body paragraph, and PR body paragraph on one physical line; use newlines only for real structure or source-preserved semantic breaks. Before finishing, inspect authored/changed prose and join column-wrap continuations without rewriting third-party or historical source. See `../principles.md` Invariant 10.
 - **Fixtures or refusal** — no time / duration / cost / scope estimate without a historical fixture to anchor it; no fixture → strip the number, don't guess. Inherited estimates count — relaying an upstream number without a fixture is the same fabrication. See `evidence-discipline`.
@@ -61,7 +62,7 @@ The desk plugin (this plugin's home) registers the following skill categories wi
 - Browser: `cdp-headed-browser`
 - Onboarding: `codex-onboarding`
 
-The work-suite plugin (declared dep) registers the four-phase doing skills:
+The work-suite plugin registers risk-scaled workflow skills; Plain Language governs human-readable output and the pinned upstream Ponytail provider governs coding size:
 
 - `work-ideator`, `work-planner`, `work-doer`, `work-merger`, `autopilot`, `stay-in-turn`, `inch-worm`
 

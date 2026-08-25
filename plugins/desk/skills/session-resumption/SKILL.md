@@ -87,10 +87,10 @@ no-op — proceed to Step 3.
 
 | Status | Resume action |
 |--------|---------------|
-| `drafting` (default) | Check for existing planning/doing docs. If they exist, resume where `work-planner` or `work-ideator` left off. |
+| `drafting` (default) | Check for existing planning/doing docs. Resume one if present; otherwise use `work-orchestration` and transition clear work directly to `processing`. |
 | `drafting` + `planning_complete: true` | Adoption case — skip ideator/planner. Transition directly to `processing` and dispatch `work-doer`. Preserve the flag through the transition for audit trail. |
-| `processing` | Find the doing doc, check which units are complete, resume `work-doer` from the next unfinished unit. |
-| `validating` | Check if a PR exists and its CI state. Resume `work-merger`. |
+| `processing` | Resume `work-doer` from the task card and branch, consulting the doing document when one exists. |
+| `validating` | Resume `work-merger` through PR, checks, merge, release/install, smoke, cleanup, and terminal state. |
 | `collaborating` | Show what was waiting on the operator. Ask for the specific input needed and wait. |
 | `paused` | Ask the operator whether they want to resume (go back to the pre-pause state) or update the status. |
 | `blocked` | Show the blocker description + when/why. Ask whether it's resolved. If yes, go back to the pre-block state. |

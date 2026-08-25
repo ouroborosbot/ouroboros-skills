@@ -26,7 +26,7 @@ desk substrate -> desk:worker -> ms-desk:worker -> area overlay
 copilot plugin install ourostack/ouroboros-skills:plugins/desk
 ```
 
-The root package carries generated flattened Work Suite metadata for Copilot-compatible hosts, so the normal path activates Desk as the worker substrate and launches `worker`.
+The root package carries generated flattened Work Suite, Plain Language, and Ponytail metadata for Copilot-compatible hosts, so the normal path activates Desk as the worker substrate and launches `worker`.
 
 ### Under Ouroboros
 
@@ -36,13 +36,15 @@ ouro plugin install ourostack/ouroboros-skills:plugins/desk --agent <agent-name>
 
 The agent's `bundle.json` gains a `plugins[]` entry; the agent's preamble declares `Your desk: ~/AgentBundles/<agent>.ouro/desk/`.
 
-Ouroboros treats Desk as bundled substrate instead of a separate user setup step. The agent bundle carries Desk and Work Suite together:
+Ouroboros treats Desk as bundled substrate instead of a separate user setup step. The agent bundle carries Desk, Work Suite, Plain Language, and the pinned Ponytail provider together:
 
 ```json
 {
   "plugins": [
     "desk",
-    "work-suite"
+    "work-suite",
+    "plain-language",
+    "ponytail-upstream"
   ]
 }
 ```
@@ -56,9 +58,9 @@ Your desk: ~/AgentBundles/<agent>.ouro/desk/
 
 ### Under Claude Code
 
-The `ourostack/ouroboros-skills` repo ships Claude plugin metadata for Desk and Work Suite. Desk declares Work Suite as a dependency, so the healthy path is a host-native marketplace activation or flattened bundle that brings both surfaces together.
+The `ourostack/ouroboros-skills` repo ships Claude plugin metadata for Desk, Work Suite, Plain Language, and the pinned Ponytail provider. Desk declares all three companion plugins as dependencies, so the healthy path is a host-native marketplace activation or flattened bundle that brings the complete worker surface together.
 
-When transitive plugin dependencies are available, the host resolves that dependency from Desk's `.claude-plugin/plugin.json`. When a Claude-compatible host does not resolve dependencies, release packaging should ship a flattened Desk + Work Suite bundle instead of asking the operator to assemble the dependency chain by hand.
+When transitive plugin dependencies are available, the host resolves them from Desk's `.claude-plugin/plugin.json`. When a Claude-compatible host does not resolve dependencies, release packaging should ship a flattened Desk + Work Suite + Plain Language + Ponytail bundle instead of asking the operator to assemble the dependency chain by hand.
 
 Once the host has activated the plugin package, launch the default worker agent:
 
@@ -70,7 +72,7 @@ Or inside an existing Claude session: `@desk:worker say hi`. The agent's preambl
 
 ### Under Codex
 
-The plugin ships a `.codex-plugin/plugin.json` manifest and a companion `work-suite` plugin manifest. The healthy path is host-native activation: enable Desk and Work Suite through Codex's plugin loading surface, then let Desk's activation metadata materialize the owned config/instruction block for the selected mode.
+The plugin ships a `.codex-plugin/plugin.json` manifest plus companion Work Suite, Plain Language, and Ponytail provider manifests. The healthy path is host-native activation: enable the declared dependency closure through Codex's plugin loading surface, then let Desk's activation metadata materialize the owned config/instruction block for the selected mode.
 
 The default mode is `global-personal`: Desk and Work Suite are enabled together, Codex receives an activation-owned Desk MCP bridge plus an owned `AGENTS.md` worker-default block, and `desk_status` reports the selected worker/overlay activation. `project-local` and `manual-only` are opt-outs for repos or sessions that should not inherit the global worker default.
 
@@ -126,7 +128,7 @@ a furnished room, ready to settle into. the layout, the lifecycle, the small cer
 - `$DESK/<track>/<task>/<iteration>/` — drawers, folders inside drawers, pages laid open one per work session
 - `track.md` and `task.md` cards as canonical state (frontmatter + body)
 - `$DESK/_meta/`, `$DESK/_archive/`, `$DESK/_friction/`, `$DESK/_planning/` system directories
-- per-iteration `planning.md` + `doing.md` + `feedback.md` (work-suite native)
+- per-iteration planning, doing, and feedback documents when the work needs them
 
 ### lifecycle
 - 8-state machine: drafting → processing → validating → collaborating → paused → blocked → done → cancelled. every task moves; some pause along the way
@@ -134,7 +136,7 @@ a furnished room, ready to settle into. the layout, the lifecycle, the small cer
 - session start / resumption / archival workflow
 
 ### dispatch
-- `work-orchestration` routes tasks through work-suite's four phases (ideator → planner → doer → merger)
+- `work-orchestration` routes tasks through only the Work Suite phases they need
 - non-coding workflow paths supported (execution + completion alternatives for non-code work)
 
 ### engineering posture

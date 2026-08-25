@@ -9,7 +9,7 @@ The manifest is intentionally declarative. Host adapters flatten it into native 
 - `schema_version`: Activation contract version. Unknown versions are unsupported until the host adapter is upgraded.
 - `id` and `version`: The activation package identity and exact plugin version.
 - `dependencies`: Ordered substrate/plugin inputs. Each entry declares a stable `id`, `kind`, exact `version` or `version_range`, `provenance`, and resolved `lock` data. Exact versions must match their lock; ranges must be satisfied by their lock.
-- `provides.activation_targets`: Launchable activation targets. Desk provides `desk:worker` as the default target and declares the Desk/Work Suite dependencies and host entrypoint files it needs.
+- `provides.activation_targets`: Launchable activation targets. Desk provides `desk:worker` as the default target and declares the Desk, Work Suite, Plain Language, and Ponytail dependencies plus the host entrypoint files it needs.
 - `provides.overlay_agents`: Optional agent overlays that inherit Desk behavior without launching as `desk:worker`.
 - `mcp_servers`: Required MCP servers. Desk declares its MCP launch as host-native rather than as a manual `mcp add` step.
 - `desk_root`: Root binding policy, precedence, and opt-out modes. The default policy is global activation first, then `DESK`, then safe defaults, with project-local and manual-only opt-outs.
@@ -24,7 +24,7 @@ Host adapters may flatten this manifest into their native plugin/config surfaces
 
 The manifest is not a user-facing CLI contract. Healthy activation should be host-native: no manual MCP registration, copied worker files, or hand-edited JSON/TOML on the happy path.
 
-Host adapters must render plugin references with the active marketplace namespace rather than assuming `ourostack`. A local Codex marketplace named `ourostack-local` should produce `desk@ourostack-local`, `work-suite@ourostack-local`, and matching overlay plugin ids.
+Host adapters must render plugin references with the active marketplace namespace rather than assuming `ourostack`. A local Codex marketplace named `ourostack-local` should produce `desk@ourostack-local`, `work-suite@ourostack-local`, `plain-language@ourostack-local`, `ponytail-upstream@ourostack-local`, and matching overlay plugin ids.
 
 ## Overlay Ladder
 
@@ -46,14 +46,14 @@ Synthetic shape:
         "id": "desk:worker",
         "kind": "agent",
         "default": true,
-        "depends_on": ["desk", "work-suite"]
+        "depends_on": ["desk", "work-suite", "plain-language", "ponytail-upstream"]
       }
     ],
     "overlay_agents": [
       {
         "id": "ms-desk:worker",
         "kind": "agent-overlay",
-        "depends_on": ["desk", "work-suite", "ms-desk"],
+        "depends_on": ["desk", "work-suite", "plain-language", "ponytail-upstream", "ms-desk"],
         "inherits": ["desk:worker"],
         "launch_as": "ms-desk:worker"
       },
@@ -75,7 +75,7 @@ Use this ladder when deciding plugin dependencies: depend on `desk` when you onl
 
 Zero-setup support has three different evidence states:
 
-- `repo-source-current`: the repository manifests and `.agents` marketplace source point at the expected Desk and Work Suite plugin files.
+- `repo-source-current`: the repository manifests and `.agents` marketplace source point at the expected Desk, Work Suite, Plain Language, and Ponytail provider files.
 - `installed-cache-current`: the Codex plugin cache contains manifests matching the repository source.
 - `active-session-visible`: the currently running host session has reloaded those manifests and exposes the expected skills, MCP tools, selected activation, and `desk_status`.
 
@@ -91,7 +91,7 @@ Embeddings and snapshots are derivative data and may carry privacy risk. Activat
 
 Disposition: `supported-flattened`.
 
-Ouroboros/autonomous-agent bundles do not provide host-native-plugin-install for Desk as an independently installed substrate. The supported path is to bundle Desk + Work Suite into the agent bundle and bind `$DESK` to `~/AgentBundles/<agent>.ouro/desk/` in the agent preamble.
+Ouroboros/autonomous-agent bundles do not provide host-native-plugin-install for Desk as an independently installed substrate. The supported path is to bundle Desk + Work Suite + Plain Language + Ponytail into the agent bundle and bind `$DESK` to `~/AgentBundles/<agent>.ouro/desk/` in the agent preamble.
 
 The bundle owns the agent, skills, and MCP surfaces together. Desk still reads and writes durable workspace data only through the bound `$DESK` root.
 

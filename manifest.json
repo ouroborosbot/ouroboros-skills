@@ -16,7 +16,7 @@
     {
       "name": "autopilot",
       "path": "skills/autopilot/SKILL.md",
-      "description": "Operate as an engineer, not a journal-keeper. Removes human gates from full-delivery work: the agent ultrathinks, decides, ships, uses harsh sub-agent reviewer gates, keeps Arc/resume continuity current, validates the explicit terminal state, and keeps building through the durable continuation loop. Fires when the principal says next/go on/dogfood/build it, when the agent drafts action items, frames tractable failures as known quirks, overrides wrong defaults via flag, hot-patches without a source PR, stops a broken thing instead of investigating it, or tries to hand back an open PR as done. Only two narrow exceptions: human-only credential/capability, or unrecoverable destructive shared-production action.",
+      "description": "Keep control of an explicitly delegated long-horizon task through implementation, merge, release or install refresh, smoke, cleanup, and the next ready item. Use when the user says autopilot, keep going, do not return control, ship it, or equivalent.",
       "tags": [
         "meta",
         "workflow",
@@ -262,17 +262,17 @@
     {
       "name": "work-doer",
       "path": "skills/work-doer/SKILL.md",
-      "description": "Executes doing.md units sequentially with strict TDD. Reads the doing doc, resolves ordinary blockers with sub-agent reviewers/fixers under autopilot, updates continuity state, and commits after each unit.",
+      "description": "Execute an engineering task to a tested branch using the smallest complete implementation. Applies Ponytail to coding, uses proof proportional to risk, and hands the finished branch to work-merger.",
       "tags": [
         "workflow",
         "execution",
-        "tdd"
+        "ponytail"
       ]
     },
     {
       "name": "work-ideator",
       "path": "skills/work-ideator/SKILL.md",
-      "description": "Explore ambiguous product, architecture, workflow, or coding ideas before invoking work-planner. Use when the user asks to ideate, think through, investigate, flesh out, compare prior art, run Tinfoil Hat and Stranger With Candy scrutiny passes, or prepare a better planning handoff before $work-planner; especially for harness changes where naming, scope, mental model, or implementation shape is still unsettled.",
+      "description": "Explore an ambiguous engineering problem just far enough to expose the simplest viable shape. Use when the request has a real product, architecture, or scope fork; skip when the task is already clear.",
       "tags": [
         "workflow",
         "ideation",
@@ -282,7 +282,7 @@
     {
       "name": "work-merger",
       "path": "skills/work-merger/SKILL.md",
-      "description": "Sync-and-merge agent. Fetches origin/main, resolves conflicts using task docs, creates PRs, runs harsh reviewer gates, waits for CI, merges to main, verifies terminal deploy/install state when applicable, and cleans up stale PR/branch/worktree state.",
+      "description": "Drive a finished branch through sync, PR, required checks, merge, release or install refresh, consuming-surface smoke, cleanup, and continuation. Use after implementation; never report an open or merely merged PR as done.",
       "tags": [
         "workflow",
         "git",
@@ -292,7 +292,7 @@
     {
       "name": "work-planner",
       "path": "skills/work-planner/SKILL.md",
-      "description": "Task planner for coding tasks. Generates planning docs, runs reviewer-gated approval by default, converts to doing docs after the correct gate clears, and treats autopilot/no-human-gates mandates as sub-agent reviewer gates rather than human stops.",
+      "description": "Turn substantial or ambiguous engineering work into one executable plan and doing document. Skip for trivial or already-obvious changes; use the existing task description directly.",
       "tags": [
         "workflow",
         "planning"

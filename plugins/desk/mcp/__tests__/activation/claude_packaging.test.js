@@ -17,6 +17,8 @@ const expectedClaudeSourcePaths = [
   "plugins/desk/.mcp.json",
   `plugins/desk/${claudeNativeWorkerSource}`,
   "plugins/work-suite/.claude-plugin/plugin.json",
+  "plugins/plain-language/.claude-plugin/plugin.json",
+  "plugins/ponytail-upstream/.claude-plugin/plugin.json",
 ]
 const supportedDispositionStatuses = new Set([
   "supported",
@@ -224,15 +226,19 @@ test("Claude plugin metadata declares native Desk surfaces and Work Suite depend
   assert.deepEqual(deskPlugin.dependencies, [
     {
       name: "work-suite",
-      version: "^1.4.0",
+      version: "^2.0.0",
     },
     {
       name: "plain-language",
       version: "0.1.0",
     },
+    {
+      name: "ponytail-upstream",
+      version: "4.9.0",
+    },
   ])
   assert.equal(Object.hasOwn(deskPlugin, "activation"), false)
-  assert.equal(workSuitePlugin.version, "1.6.0")
+  assert.equal(workSuitePlugin.version, "2.0.0")
 })
 
 test("Work Suite Claude manifest stays a strict-loadable skill provider", () => {
@@ -409,17 +415,17 @@ test("Claude packaging validation rejects missing Work Suite dependency and stal
   )
 
   const staleDependencyRange = clone(currentClaudePackagingInput())
-  staleDependencyRange.deskPlugin.dependencies[0].version = "^2.0.0"
+  staleDependencyRange.deskPlugin.dependencies[0].version = "^1.4.0"
   assert.deepEqual(
     validateClaudePackagingContract(staleDependencyRange),
-    ["Claude Work Suite dependency range must be ^1.4.0"],
+    ["Claude Work Suite dependency range must be ^2.0.0"],
   )
 
   const staleProviderVersion = clone(currentClaudePackagingInput())
   staleProviderVersion.workSuitePlugin.version = "1.4.9"
   assert.deepEqual(
     validateClaudePackagingContract(staleProviderVersion),
-    ["Work Suite Claude version must match activation lock 1.6.0"],
+    ["Work Suite Claude version must match activation lock 2.0.0"],
   )
 })
 

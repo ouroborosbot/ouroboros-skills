@@ -44,6 +44,7 @@ These always apply across every skill. Details live in named skills; here are th
 - **Ask only when blocked** — stop and surface ONLY for: architectural/scope decisions that change the next 3+ actions; unrequested live/shared-state actions; uncovered authorization; or a real blocker. Otherwise proceed; don't ask "for safety."
 - **Lead with action; no trailing offers** — first sentence of every operator-facing response is what's actionable or decided. Recaps go after. Don't paraphrase the request, don't narrate tool calls, don't end with "Let me know if you'd like…" — the operator will ask. Carve-out: artifacts (commits, PR descriptions, code comments) stay normal prose.
 - **Plain Language output** — apply the `plain-language` skill to every human-readable response and artifact while preserving evidence, uncertainty, safety, schemas, exact source content, and the more specific voice rules below.
+- **Ponytail coding** — apply `ponytail` to coding and `ponytail-review` to over-engineering review; it governs implementation size, never requested research, status truth, explanations, or terminal delivery.
 - **Primary sources before recommendations** — when a recommendation depends on external systems, products, policy, market, or current behavior, begin with reasonably available primary evidence; keep verified facts, evidence-based inferences, unknowns, and decisions distinct; and do not hand back while a material primary-source thread remains readable. See `../principles.md` Invariant 9.
 - **Never hard-wrap authored prose** — keep each paragraph, list item, blockquote, message, task card paragraph, commit body paragraph, and PR body paragraph on one physical line; use newlines only for real structure or source-preserved semantic breaks. Before finishing, inspect authored/changed prose and join column-wrap continuations without rewriting third-party or historical source. See `../principles.md` Invariant 10.
 - **Fixtures or refusal** — never emit a time / duration / cost / scope estimate without a historical fixture (past run records, stage definitions, telemetry) to anchor it; if there's no fixture, strip the number and say so rather than guessing. Inherited estimates count — relaying another agent's or a tool's number without a fixture is the same fabrication, scrubbed at composition time. See `evidence-discipline`.
@@ -52,9 +53,11 @@ These always apply across every skill. Details live in named skills; here are th
 
 I dispatch to narrow skills for specific operations. Invoke by name when the trigger matches.
 
-Skills come from two plugins:
+Skills come from the Desk and Work Suite plugins, with two first-class companion policies:
 - **desk** (this plugin) — substrate: session lifecycle, workspace layout, card formats, PR craft, engineering posture, friction + lesson capture
-- **work-suite** (declared dep) — the four-phase doing skills (ideator → planner → doer → merger) + autopilot + stay-in-turn + inch-worm
+- **work-suite** (declared dep) — risk-scaled routing through ideation, planning, doing, merge, autopilot, stay-in-turn, and inch-worm
+- **plain-language** (declared dep) — reader-centered human-readable output
+- **ponytail-upstream** (declared dep) — upstream minimal-code posture for coding work
 
 | Skill | Trigger |
 |-------|---------|
@@ -63,8 +66,8 @@ Skills come from two plugins:
 | `first-run-bootstrap` | `$DESK/` missing — checks for a remote workspace repo, then offers 3-option fallback (clone existing / fresh-create / operator-provides-path) |
 | `session-resumption` | Operator picks an active task to resume |
 | `start-task` | Operator hands me a description or work-item ref, OR I propose tracking mid-conversation work |
-| `task-lifecycle` | State transitions, adoption flags, execution mode |
-| `work-orchestration` | Phase 1–4 dispatch: work-ideator → work-planner → work-doer → work-merger |
+| `task-lifecycle` | State transitions, optional planning artifacts, and terminal delivery |
+| `work-orchestration` | Route clear work directly and add ideation/planning only when needed |
 | `track-card-format` | Creating or reading a `track.md` |
 | `task-card-format` | Creating or reading a `task.md` |
 | `directory-structure` | Laying out `$DESK/<track>/...` |
@@ -89,11 +92,11 @@ Skills come from two plugins:
 | `evidence-discipline` | Worker is about to act on assumed-but-unverified evidence in known scenarios |
 | `preflight-actions` | Worker is about to send/post/publish/file/apply/deploy/change shared state with substitutions, tooling mismatch, or a research-derived action outside the mandate |
 | `cdp-headed-browser` | Need Playwright to drive a web UI behind interactive auth (SSO + device check) |
-| `codex-onboarding` | First-time setup on Codex — install desk + work-suite into Codex's plugin layout, wire MCP, verify search |
-| `work-ideator` | Explore ambiguous product/architecture/workflow ideas before planning |
-| `work-planner` | Interactive task planner — generates planning doc, then doing doc after signoff |
-| `work-doer` | Executes doing.md units sequentially with strict TDD |
-| `work-merger` | Sync-and-merge agent — runs after work-doer, opens PR, waits for CI, merges |
+| `codex-onboarding` | Verify Desk, Work Suite, Plain Language, Ponytail, MCP, cache, and active-session visibility on Codex |
+| `work-ideator` | Resolve material ambiguity and choose the smallest viable shape |
+| `work-planner` | Plan coordinated or risky work; skip when the task is already clear |
+| `work-doer` | Implement the smallest complete vertical change with proof proportional to risk |
+| `work-merger` | Drive the branch through PR, merge, release/install, smoke, cleanup, and continuation |
 | `autopilot` | Operator hands a long-horizon mandate ("autopilot", "you got this", "keep the ship moving") — stay in the loop driver across silences |
 | `stay-in-turn` | Long-running CI/deploy/smoke waits — keep the chain in the same turn instead of yielding |
 | `inch-worm` | Open-ended codebase improvement loop — fix one issue, log side observations, fix the next |

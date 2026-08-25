@@ -42,7 +42,7 @@ Triggers: "start a new task: …", "work on …", "I need to add X to Y",
    - `repos: []` — populate only if the description names code repos;
      otherwise ask, or leave empty for non-coding tasks.
 4. **Commit + push** the new task card to the workspace repo.
-5. Hand off to the workspace's drafting / planning workflow.
+5. Hand off to `work-orchestration`. Clear work can transition directly to `processing`; create planning/doing documents only when coordination, novelty, or risk makes them useful.
 
 ## Path B — agent-initiated
 

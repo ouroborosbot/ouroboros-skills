@@ -2,7 +2,7 @@
 model = "gpt-5.4"
 approval_policy = "on-request"
 
-# BEGIN desk activation: desk@1.8.0 mode=project-local owner=desk-activation
+# BEGIN desk activation: desk@2.0.0 mode=project-local owner=desk-activation
 [plugins."work-suite@ourostack"]
 enabled = true
 
@@ -10,6 +10,9 @@ enabled = true
 enabled = true
 
 [plugins."plain-language@ourostack"]
+enabled = true
+
+[plugins."ponytail-upstream@ourostack"]
 enabled = true
 
 [plugins."desk@ourostack".mcp_servers.desk]
