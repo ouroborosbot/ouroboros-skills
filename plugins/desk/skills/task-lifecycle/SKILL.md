@@ -11,13 +11,13 @@ Every task moves through a state machine with 8 states. The `status` field in `t
 
 | State | Description | Workflow phase |
 |-------|-------------|----------------|
-| `drafting` | Exploring the problem, scoping, creating planning + doing docs | `work-ideator` (exploration) → `work-planner` (scoping) |
+| `drafting` | Clarifying scope and choosing the route; a clear task can remain task-card-only | `work-orchestration` |
 | `processing` | Writing code, running tests, implementing | `work-doer` |
-| `validating` | Creating PR, waiting for CI, merging to main | `work-merger` |
+| `validating` | Driving PR, required checks, merge, release/install, smoke, and cleanup | `work-merger` |
 | `collaborating` | Human gate — waiting for operator input/review/approval | Paused for human |
 | `paused` | Temporarily suspended by operator | No active work |
 | `blocked` | External dependency, unclear requirement | No active work |
-| `done` | PR merged, archived | Terminal |
+| `done` | Terminal delivery verified and archived | Terminal |
 | `cancelled` | Abandoned by operator | Terminal |
 
 ## Checkpoint-type annotations on transitions (folded in from AIDLC 2026-05-18)
@@ -27,16 +27,16 @@ Each transition has a checkpoint type declaring how humans interact at that gate
 | Transition | Checkpoint type | What it means |
 |------------|-----------------|---------------|
 | → `drafting` | GATE | Entry point; operator must approve task creation OR worker creates autonomously per agent-initiated path |
-| `drafting` → `processing` | CHECKPOINT | Operator approves the planning doc + doing doc before implementation starts |
+| `drafting` → `processing` | AUTO | The request already authorizes implementation and the task card or optional plan gives enough direction. Use `collaborating` only when a real unresolved decision needs the operator. |
 | `processing` → `validating` | AUTO | Worker self-attests that implementation is complete; opens PR; no human gate |
-| `validating` → `done` | CONFIRM | Operator confirms merge — usually the PR-merge click; worker waits for CI green + operator approve |
+| `validating` → `done` | AUTO | Work Merger verifies the exact green merge plus applicable release/install, consuming-surface smoke, cleanup, and durable state. Explicit owner policies can still route a required approval through `collaborating`. |
 | Any → `collaborating` | NOTIFY | Worker pauses + tells operator what's needed; resumption is operator-initiated |
 | Any → `paused` | NOTIFY | Operator-requested pause; worker emits a clean handoff state |
 | Any → `blocked` | NOTIFY | External blocker; worker emits the blocker reason + escalation path |
 | Any → `cancelled` | CONFIRM | Operator confirms abandonment; rare; worker doesn't auto-cancel |
 | `done` / `cancelled` → (terminal) | (n/a) | Terminal states; no further transitions |
 
-**Why annotate:** the checkpoint-type makes the human-interaction expectations explicit at each transition. AUTO transitions don't need human attention; CHECKPOINT / CONFIRM transitions DO; NOTIFY transitions are informational. Worker uses these to decide when to surface status to operator vs proceed autonomously.
+**Why annotate:** the checkpoint type makes human interaction explicit. AUTO transitions proceed under the task's authorization; NOTIFY transitions explain a real pause. Do not manufacture a checkpoint because a planning document exists.
 
 ## Valid transitions
 
@@ -59,21 +59,21 @@ Each transition has a checkpoint type declaring how humans interact at that gate
 
 ## State-change protocol
 
-Every transition writes THREE places, in order. Commit-message-only is not sufficient — a new session picking up the task must be able to reconstruct what happened by reading the artifacts, not `git log`.
+Every transition writes the applicable durable surfaces in order. Commit-message-only is not sufficient—a new session must reconstruct what happened from the task and track, plus a doing document when one exists.
 
 ### 1. Task card (`task.md`)
 
 - Update `status` field.
 - Update `updated` timestamp to ISO 8601 UTC.
 - Body updates as transition dictates:
-  - Transitioning to `processing`: add a "Current work" line pointing at the active doing doc.
+  - Transitioning to `processing`: add a "Current work" line pointing at the active branch and either the doing document or task card.
   - Transitioning to `validating`: add a "PRs" section listing every PR URL that represents this task (one per repo in multi-repo tasks), with repo name + PR title + status.
-  - Transitioning to `done`: move the PR list to a "Landed" section with merge shas.
+  - Transitioning to `done`: move the PR list to a "Landed" section with merge shas and record applicable release/install, smoke, and cleanup evidence.
   - Transitioning to `blocked` / `collaborating`: a "Blocker" / "Waiting on" line with the specific reason.
 
-### 2. Doing doc (for `processing`, `validating`, `done` transitions)
+### 2. Doing doc, when present (for `processing`, `validating`, `done` transitions)
 
-Each repo's doing doc must be kept current. At minimum:
+Clear tasks can execute from the task card without a doing document. When a doing document exists, keep it current. At minimum:
 
 - Check off unit checkboxes (`- [ ]` → `- [x]`) for units completed.
 - If work-doer produced a "progress log" at the top, append the current transition.
@@ -101,9 +101,9 @@ Auth and push convention is consumer-specific: corporate-worker overlays push un
 - If transitioning to `done` or `cancelled` → invoke `archive-workflow`.
 - (Optional, overlay context) If the transition is shiproom-relevant (`processing`, `validating`, `done`, `blocked`) → invoke the consumer overlay's status-update skill to refresh the parent work-item's status note. Skip for non-coding / non-tracker contexts.
 
-### Why three writes
+### Why the applicable writes
 
-Commit messages are not a handoff format. A new session reading the task card must see: current state, active doing doc, open PRs, blockers — without shell-archaeology. Task-card-only updates fail the same way: without corresponding doing-doc + track-card refresh, downstream consumers (`status` skill, a resuming operator, any overlay's status-update skill) see stale state. Update all three or update none.
+Commit messages are not a handoff format. A new session reading the task card must see current state, active branch/artifact, open PRs, blockers, and terminal evidence without shell archaeology. Keep the track card aligned and update a doing document only when the task has one.
 
 ## Adopted tasks with completed planning
 
@@ -116,7 +116,7 @@ status: drafting
 planning_complete: true
 ```
 
-When resuming a task with `planning_complete: true` and `status: drafting`, transition straight to `processing` — skip `work-ideator` and `work-planner`. Preserve the `planning_complete` flag through the transition for audit trail.
+When resuming a task with `planning_complete: true` and `status: drafting`, transition straight to `processing`—skip `work-ideator` and `work-planner`. Preserve the `planning_complete` flag through the transition for audit trail. A clear task without planning documents follows the same direct transition without needing this adoption flag.
 
 ## Dispatch is work-doer's call
 

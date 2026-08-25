@@ -1,31 +1,31 @@
 # work-suite
 
-A portable plugin bundle of the core workflow skills from `ouroboros-skills`:
+Work Suite 2 is the portable Ourostack workflow bundle. It keeps the useful lifecycle—understand, plan when needed, implement, merge, and verify—without making ceremony the default.
 
 | Skill | Purpose |
 |-------|---------|
-| `work-ideator` | Explore ambiguous ideas before planning (Tinfoil Hat + Stranger With Candy scrutiny) |
-| `work-planner` | Planning doc → doing doc conversion with sub-agent reviewer gates by default |
-| `work-doer` | Execute doing-doc units sequentially with strict TDD and unit review |
-| `work-merger` | Fetch / merge / PR / wait for CI / merge-to-main cleanup |
-| `visual-qa-dogfood` | Screenshot-backed dogfooding for UI/rendering work before completion |
-| `autopilot` | Long-horizon full-delivery mode: no human gates, harsh reviewer gates, explicit terminal validation |
-| `stay-in-turn` | Keep CI, deploy, smoke, and multi-PR waits inside the same turn instead of yielding |
-| `inch-worm` | Open-ended improvement loop: seed → fix → log side discoveries → repeat |
+| `work-ideator` | Resolve the unknowns that would materially change implementation |
+| `work-planner` | Plan coordinated or risky work; skip planning when the change is already clear |
+| `work-doer` | Implement the smallest correct vertical slice and validate the changed behavior |
+| `work-merger` | Open, drive, merge, release or install, smoke, and clean up |
+| `visual-qa-dogfood` | Use screenshot-backed dogfooding for UI/rendering work |
+| `autopilot` | Keep authorized long-horizon work moving until terminal state |
+| `stay-in-turn` | Keep CI, deploy, smoke, and multi-PR waits inside the same turn |
+| `inch-worm` | Repeat an open-ended improvement loop while each next step remains justified |
+
+## Ponytail dependency
+
+Work Suite depends on the packaged upstream `ponytail-upstream` plugin, pinned to Ponytail v4.9.0. Coding work follows Ponytail's ladder: question whether code needs to exist, reuse the codebase, prefer standard-library/native/already-installed capabilities, choose the simplest viable approach, and write custom machinery only when necessary.
+
+Ponytail applies to coding work, including implementation, refactoring, debugging, tests, and code review. It does not truncate requested research, documentation, analysis, or operational work. Plain Language remains the authority for human-readable output.
+
+The upstream files are vendored unmodified and hash-locked in `upstream-sources.lock.json`; Ourostack owns only the provider manifests and integration.
 
 ## Autopilot mode
 
-When the principal says "do not return control until everything is done," "fully deployed and validated," "no human gates," or equivalent, `autopilot` defines the mode contract for the whole suite:
+When the principal delegates sustained autonomy, `autopilot` keeps selecting ready work until the requested outcome is terminal. It stops only for a true human-only access wall, an uncovered irreversible action, or `needs-human-approval`.
 
-- human gates are disabled except for true human-only credentials/capabilities or unrecoverable destructive shared-state actions;
-- sub-agent reviewer gates are mandatory and harsh;
-- planning/doer/merger "human-judgment categories" become reviewer lenses, not human stops;
-- terminal state must be explicit: merged, checks green, release/publish/deploy/install/smoke validation completed when applicable, and no stale PR/branch/worktree from the run;
-- CI/deploy/smoke waits stay in-turn via the `stay-in-turn` pattern instead of background wakeup handoffs;
-- after every terminal-state verification, the durable continuation scan re-reads state/backlogs/feedback, classifies remaining work, and starts the next ready item instead of returning a menu of suggestions;
-- before any final response, the autopilot exit preflight must prove that terminal verification is complete, durable state is fresh, the continuation scan has been written down, and no ready/reviewer-gated item remains unstarted;
-- skill/plugin changes must be runtime-refreshed and dogfooded on a live task before they count as done, even if the current host session has to read the installed file directly because its active skill menu will only refresh in a new session;
-- Arc / Flight Recorder / `AUTOPILOT-STATE.md` continuity must stay current so a fresh agent can resume after context loss.
+Terminal state includes merged changes, green required checks, applicable release/install/deploy and smoke evidence, current durable state, and no stale branch, PR, or worktree from the run. Reviews are risk-driven rather than a fixed ladder: use one cold review for cross-cutting or high-risk work, fix meaningful findings, and continue.
 
 ### Runtime visibility audit
 

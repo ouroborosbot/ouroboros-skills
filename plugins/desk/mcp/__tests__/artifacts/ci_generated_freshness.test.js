@@ -96,6 +96,9 @@ const hostManifestFixtureFiles = [
   "plugins/plain-language/.claude-plugin/plugin.json",
   "plugins/plain-language/.codex-plugin/plugin.json",
   "plugins/plain-language/plugin.json",
+  "plugins/ponytail-upstream/.claude-plugin/plugin.json",
+  "plugins/ponytail-upstream/.codex-plugin/plugin.json",
+  "plugins/ponytail-upstream/plugin.json",
   "scripts/validate-skills.cjs",
 ]
 

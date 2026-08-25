@@ -1,7 +1,7 @@
 {
   "name": "work-suite",
-  "version": "1.6.0",
-  "description": "The workflow primitive for orchestrator agents: ideate, plan, execute, merge, visual-dogfood UI work, stay in turn while waiting, and run no-human-gates full-delivery autopilot loops.",
+  "version": "2.0.0",
+  "description": "A lean workflow primitive for orchestrator agents: resolve material unknowns, plan only when needed, implement the smallest correct vertical slice, merge through terminal delivery, and keep authorized autopilot work moving.",
   "author": {
     "name": "ourostack",
     "url": "https://github.com/ourostack/ouroboros-skills"
@@ -20,13 +20,17 @@
     {
       "name": "plain-language",
       "version": "0.1.0"
+    },
+    {
+      "name": "ponytail-upstream",
+      "version": "4.9.0"
     }
   ],
   "activation": {
     "copilot": {
       "dependencyProvider": {
         "id": "work-suite",
-        "version": "1.6.0",
+        "version": "2.0.0",
         "resolution": "flattened"
       }
     }

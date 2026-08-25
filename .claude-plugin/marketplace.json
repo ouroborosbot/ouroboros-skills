@@ -6,7 +6,7 @@
     "url": "https://github.com/ourostack/ouroboros-skills"
   },
   "metadata": {
-    "description": "Cross-engine skills + agent substrate for long-running engineering agents. Ships `desk` (workspace substrate \u2014 tracks, tasks, friction, lessons, lifecycle skills, MCP server) and `work-suite` (ideate, plan, execute, merge, stay in turn while waiting, plus no-human-gates autopilot and inch-worm improvement loops). Engine-agnostic; works on Claude Code, Copilot CLI, and Codex.",
+    "description": "Cross-engine skills and agent substrate for long-running engineering agents. Desk supplies durable work state; Work Suite 2 routes only the workflow phases a task needs; Plain Language governs human-readable output; and the pinned upstream Ponytail provider keeps coding work minimal. Works on Claude Code, Copilot CLI, and Codex.",
     "version": "1.0.0"
   },
   "plugins": [
@@ -14,7 +14,7 @@
       "name": "desk",
       "source": "./plugins/desk",
       "description": "A quiet workspace substrate for long-running engineering agents: tracks, tasks, friction notes, lessons, lifecycle skills, and an MCP server for desk CRUD plus search. Ships a default 'worker' agent that makes the plugin standalone-functional; overlays (corporate, autonomous, personal-coding) layer their own agents on top.",
-      "version": "1.8.0",
+      "version": "2.0.0",
       "category": "agent-substrate",
       "tags": [
         "workspace",
@@ -27,11 +27,11 @@
     {
       "name": "work-suite",
       "source": "./plugins/work-suite",
-      "description": "The workflow primitive used by orchestrator agents: work-ideator (explore), work-planner (scope), work-doer (execute with TDD), work-merger (PR + merge) \u2014 plus autopilot (no-human-gates full-delivery and continuation discipline), stay-in-turn (CI/deploy wait discipline), inch-worm (open-ended improvement loop), and visual-qa-dogfood (screenshot-backed UI/layout review). Vendor-neutral; companion to desk.",
-      "version": "1.6.0",
+      "description": "A lean workflow primitive for orchestrator agents: resolve material unknowns, plan only when needed, implement the smallest correct vertical slice, merge through terminal delivery, and keep authorized autopilot work moving. Uses pinned upstream Ponytail for coding posture and Plain Language for human-readable output.",
+      "version": "2.0.0",
       "category": "workflow",
       "tags": [
-        "tdd",
+        "ponytail",
         "planning",
         "autopilot",
         "engineering"
@@ -61,6 +61,18 @@
         "communication",
         "quality",
         "accessibility"
+      ]
+    },
+    {
+      "name": "ponytail-upstream",
+      "source": "./plugins/ponytail-upstream",
+      "description": "Unmodified Ponytail v4.9.0 skills and hooks by Dietrich Gebert, packaged for Ourostack.",
+      "version": "4.9.0",
+      "category": "engineering",
+      "tags": [
+        "yagni",
+        "minimal",
+        "code-review"
       ]
     }
   ]

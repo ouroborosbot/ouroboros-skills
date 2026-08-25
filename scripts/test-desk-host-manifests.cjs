@@ -86,6 +86,7 @@ function expectedCopilotBundle(repoRoot) {
       desk_plugin: "plugins/desk/plugin.json",
       work_suite_plugin: "plugins/work-suite/plugin.json",
       plain_language_plugin: "plugins/plain-language/plugin.json",
+      ponytail_plugin: "plugins/ponytail-upstream/plugin.json",
     },
     launch: {
       agent: "plugins/desk/agents/worker.agent.md",
@@ -111,6 +112,12 @@ function expectedCopilotBundle(repoRoot) {
         version: findActivationDependency(activation, "plain-language")?.lock?.version,
         plugin: "plugins/plain-language/plugin.json",
         skills: "plugins/plain-language/skills/",
+      },
+      {
+        id: "ponytail-upstream",
+        version: findActivationDependency(activation, "ponytail-upstream")?.lock?.version,
+        plugin: "plugins/ponytail-upstream/plugin.json",
+        skills: "plugins/ponytail-upstream/skills/",
       },
     ],
     manual_steps: [],
@@ -183,6 +190,7 @@ async function checkCopilotBundle({ repoRoot, mcpRoot, errors, checked }) {
     deskPlugin: readJson(repoRoot, "plugins/desk/plugin.json"),
     workSuitePlugin: readJson(repoRoot, "plugins/work-suite/plugin.json"),
     plainLanguagePlugin: readJson(repoRoot, "plugins/plain-language/plugin.json"),
+    ponytailPlugin: readJson(repoRoot, "plugins/ponytail-upstream/plugin.json"),
   });
   if (contractErrors.length > 0) {
     errors.push(`copilot-plugin-metadata drift: ${contractErrors.join("; ")}`);
@@ -195,8 +203,10 @@ function checkCodexPlugin({ repoRoot, errors, checked }) {
   const deskPlugin = readJson(repoRoot, "plugins/desk/.codex-plugin/plugin.json");
   const workSuitePlugin = readJson(repoRoot, "plugins/work-suite/.codex-plugin/plugin.json");
   const plainLanguagePlugin = readJson(repoRoot, "plugins/plain-language/.codex-plugin/plugin.json");
+  const ponytailPlugin = readJson(repoRoot, "plugins/ponytail-upstream/.codex-plugin/plugin.json");
   const workSuiteLock = findActivationDependency(activation, "work-suite")?.lock?.version;
   const plainLanguageLock = findActivationDependency(activation, "plain-language")?.lock?.version;
+  const ponytailLock = findActivationDependency(activation, "ponytail-upstream")?.lock?.version;
   const codex = deskPlugin.activation?.codex;
 
   if (deskPlugin.version !== activation.version) {
@@ -235,6 +245,12 @@ function checkCodexPlugin({ repoRoot, errors, checked }) {
   if (plainLanguagePlugin.version !== plainLanguageLock) {
     errors.push("codex-plugin Plain Language provider lock drift");
   }
+  if (codex?.dependencies?.["ponytail-upstream"]?.version !== ponytailPlugin.version) {
+    errors.push("codex-plugin Ponytail dependency version drift");
+  }
+  if (ponytailPlugin.version !== ponytailLock) {
+    errors.push("codex-plugin Ponytail provider lock drift");
+  }
 }
 
 function checkClaudePlugin({ repoRoot, errors, checked }) {
@@ -243,9 +259,11 @@ function checkClaudePlugin({ repoRoot, errors, checked }) {
   const deskPlugin = readJson(repoRoot, "plugins/desk/.claude-plugin/plugin.json");
   const workSuitePlugin = readJson(repoRoot, "plugins/work-suite/.claude-plugin/plugin.json");
   const plainLanguagePlugin = readJson(repoRoot, "plugins/plain-language/.claude-plugin/plugin.json");
+  const ponytailPlugin = readJson(repoRoot, "plugins/ponytail-upstream/.claude-plugin/plugin.json");
   const claudeActivation = activation.host_activation?.claude;
   const workSuiteLock = findActivationDependency(activation, "work-suite")?.lock?.version;
   const plainLanguageLock = findActivationDependency(activation, "plain-language")?.lock?.version;
+  const ponytailLock = findActivationDependency(activation, "ponytail-upstream")?.lock?.version;
 
   if (deskPlugin.version !== activation.version) {
     errors.push("claude-plugin Desk version drift");
@@ -259,7 +277,7 @@ function checkClaudePlugin({ repoRoot, errors, checked }) {
   if (deskPlugin.outputStyles !== "./output-styles/") {
     errors.push("claude-plugin output style surface drift");
   }
-  if (deskPlugin.dependencies?.[0]?.name !== "work-suite" || deskPlugin.dependencies?.[0]?.version !== "^1.4.0") {
+  if (deskPlugin.dependencies?.[0]?.name !== "work-suite" || deskPlugin.dependencies?.[0]?.version !== "^2.0.0") {
     errors.push("claude-plugin Work Suite dependency drift");
   }
   if (workSuitePlugin.version !== workSuiteLock) {
@@ -273,6 +291,15 @@ function checkClaudePlugin({ repoRoot, errors, checked }) {
   }
   if (plainLanguagePlugin.version !== plainLanguageLock) {
     errors.push("claude-plugin Plain Language provider lock drift");
+  }
+  if (
+    deskPlugin.dependencies?.[2]?.name !== "ponytail-upstream" ||
+    deskPlugin.dependencies?.[2]?.version !== "4.9.0"
+  ) {
+    errors.push("claude-plugin Ponytail dependency drift");
+  }
+  if (ponytailPlugin.version !== ponytailLock) {
+    errors.push("claude-plugin Ponytail provider lock drift");
   }
   if (claudeActivation?.targets?.["desk:worker"]?.source !== "agents/worker.md") {
     errors.push("claude-plugin activation worker source drift");
@@ -345,6 +372,9 @@ function checkWorkerSources({ repoRoot, errors, checked }) {
   }
   if (!codexAdapter.includes("Apply the \\`plain-language\\` skill to every human-readable response and artifact")) {
     errors.push("worker-sources codex activation Plain Language invariant drift");
+  }
+  if (!codexAdapter.includes("Apply \\`ponytail\\` to coding and \\`ponytail-review\\`")) {
+    errors.push("worker-sources codex activation Ponytail invariant drift");
   }
 }
 

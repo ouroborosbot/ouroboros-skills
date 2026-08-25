@@ -1,31 +1,31 @@
 {
   "schema_version": 1,
   "id": "desk",
-  "version": "1.8.0",
+  "version": "2.0.0",
   "dependencies": [
     {
       "id": "desk",
       "kind": "substrate",
-      "version": "1.8.0",
+      "version": "2.0.0",
       "provenance": {
         "source": "plugins/desk/.codex-plugin/plugin.json",
         "package": "ourostack/desk"
       },
       "lock": {
-        "version": "1.8.0",
+        "version": "2.0.0",
         "integrity": "sha256-desk-activation-manifest-v1"
       }
     },
     {
       "id": "work-suite",
       "kind": "plugin",
-      "version_range": "^1.4.0",
+      "version_range": "^2.0.0",
       "provenance": {
         "source": "plugins/work-suite/.codex-plugin/plugin.json",
         "package": "ourostack/work-suite"
       },
       "lock": {
-        "version": "1.6.0",
+        "version": "2.0.0",
         "integrity": "sha256-work-suite-activation-manifest-v1"
       }
     },
@@ -41,6 +41,19 @@
         "version": "0.1.0",
         "integrity": "sha256-plain-language-activation-manifest-v1"
       }
+    },
+    {
+      "id": "ponytail-upstream",
+      "kind": "plugin",
+      "version_range": "4.9.0",
+      "provenance": {
+        "source": "plugins/ponytail-upstream/.codex-plugin/plugin.json",
+        "package": "ourostack/ponytail-upstream"
+      },
+      "lock": {
+        "version": "4.9.0",
+        "integrity": "sha256-ponytail-upstream-activation-manifest-v1"
+      }
     }
   ],
   "provides": {
@@ -52,7 +65,8 @@
         "depends_on": [
           "desk",
           "work-suite",
-          "plain-language"
+          "plain-language",
+          "ponytail-upstream"
         ],
         "entrypoints": {
           "claude": "agents/worker.md",
@@ -132,7 +146,7 @@
       "host": "ouroboros-autonomous-agent",
       "status": "supported",
       "dependency_resolution": "flattened",
-      "fallback_behavior": "bundle Desk + Work Suite into the agent bundle and bind $DESK to ~/AgentBundles/<agent>.ouro/desk/",
+      "fallback_behavior": "bundle Desk + Work Suite + Plain Language + Ponytail into the agent bundle and bind $DESK to ~/AgentBundles/<agent>.ouro/desk/",
       "capabilities": [
         "agents",
         "skills",
@@ -184,12 +198,17 @@
       "dependencies": {
         "work-suite": {
           "path": "../work-suite",
-          "version": "1.6.0",
+          "version": "2.0.0",
           "resolution": "native"
         },
         "plain-language": {
           "path": "../plain-language",
           "version": "0.1.0",
+          "resolution": "native"
+        },
+        "ponytail-upstream": {
+          "path": "../ponytail-upstream",
+          "version": "4.9.0",
           "resolution": "native"
         }
       },

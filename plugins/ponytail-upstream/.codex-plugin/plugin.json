@@ -1,0 +1,31 @@
+{
+  "name": "ponytail-upstream",
+  "version": "4.9.0",
+  "description": "Unmodified Ponytail v4.9.0 skills and hooks by Dietrich Gebert, packaged for Ourostack.",
+  "author": {
+    "name": "Dietrich Gebert",
+    "url": "https://github.com/DietrichGebert/ponytail"
+  },
+  "repository": "https://github.com/DietrichGebert/ponytail",
+  "license": "MIT",
+  "skills": "./skills/",
+  "hooks": "./hooks/claude-codex-hooks.json",
+  "interface": {
+    "displayName": "Ponytail",
+    "shortDescription": "Minimum code that works.",
+    "developerName": "Dietrich Gebert",
+    "category": "Engineering",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/DietrichGebert/ponytail",
+    "privacyPolicyURL": "https://github.com/DietrichGebert/ponytail",
+    "termsOfServiceURL": "https://github.com/DietrichGebert/ponytail",
+    "defaultPrompt": [
+      "Apply Ponytail to this coding task."
+    ],
+    "brandColor": "#111111",
+    "screenshots": []
+  }
+}

@@ -55,6 +55,7 @@ function makeFixture({ namespace = "ourostack" } = {}) {
   writePlugin(repoRoot, "desk", "1.7.3");
   writePlugin(repoRoot, "work-suite", "1.4.9");
   writePlugin(repoRoot, "plain-language", "0.1.0");
+  writePlugin(repoRoot, "ponytail-upstream", "4.9.0");
   writeJson(path.join(repoRoot, ".agents", "plugins", "marketplace.json"), {
     name: namespace,
     plugins: [
@@ -70,11 +71,16 @@ function makeFixture({ namespace = "ourostack" } = {}) {
         name: "plain-language",
         source: { source: "local", path: "./plugins/plain-language" },
       },
+      {
+        name: "ponytail-upstream",
+        source: { source: "local", path: "./plugins/ponytail-upstream" },
+      },
     ],
   });
   writeCache(codexHome, "desk", "1.7.3", manifest("desk", "1.7.3"), namespace);
   writeCache(codexHome, "work-suite", "1.4.9", manifest("work-suite", "1.4.9"), namespace);
   writeCache(codexHome, "plain-language", "0.1.0", manifest("plain-language", "0.1.0"), namespace);
+  writeCache(codexHome, "ponytail-upstream", "4.9.0", manifest("ponytail-upstream", "4.9.0"), namespace);
   return { root, repoRoot, codexHome };
 }
 
@@ -89,7 +95,7 @@ function testCurrentFixture() {
     assert.equal(report.marketplace_namespace, "ourostack");
     assert.equal(report.host_marketplace.provided, false);
     assert.equal(report.host_marketplace.current, true);
-    assert.equal(report.plugins.length, 3);
+    assert.equal(report.plugins.length, 4);
     for (const plugin of report.plugins) {
       assert.equal(plugin.marketplace_namespace, "ourostack");
       assert.equal(plugin.repo_source_current, true);
@@ -125,6 +131,7 @@ function testHostMarketplaceCurrentAndDrift() {
       ["desk", "./repo/plugins/desk"],
       ["work-suite", "./repo/plugins/work-suite"],
       ["plain-language", "./repo/plugins/plain-language"],
+      ["ponytail-upstream", "./repo/plugins/ponytail-upstream"],
     ]);
     const current = auditCodexPluginCache({
       repoRoot: fixture.repoRoot,
@@ -138,10 +145,12 @@ function testHostMarketplaceCurrentAndDrift() {
     writePlugin(fixture.root, "desk", "1.7.2");
     writePlugin(fixture.root, "work-suite", "1.4.8");
     writePlugin(fixture.root, "plain-language", "0.0.9");
+    writePlugin(fixture.root, "ponytail-upstream", "4.8.0");
     writeHostMarketplace(fixture.root, [
       ["desk", "./plugins/desk"],
       ["work-suite", "./plugins/work-suite"],
       ["plain-language", "./plugins/plain-language"],
+      ["ponytail-upstream", "./plugins/ponytail-upstream"],
     ]);
     const stale = auditCodexPluginCache({
       repoRoot: fixture.repoRoot,

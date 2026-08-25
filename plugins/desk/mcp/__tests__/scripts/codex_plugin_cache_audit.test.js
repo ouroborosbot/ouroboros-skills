@@ -77,6 +77,7 @@ function makeFixture({ namespace = "ourostack" } = {}) {
   writePlugin(fixtureRepo, "desk", "1.7.3")
   writePlugin(fixtureRepo, "work-suite", "1.4.9")
   writePlugin(fixtureRepo, "plain-language", "0.1.0")
+  writePlugin(fixtureRepo, "ponytail-upstream", "4.9.0")
   writeJson(path.join(fixtureRepo, ".agents", "plugins", "marketplace.json"), {
     name: namespace,
     plugins: [
@@ -92,11 +93,16 @@ function makeFixture({ namespace = "ourostack" } = {}) {
         name: "plain-language",
         source: { source: "local", path: "./plugins/plain-language" },
       },
+      {
+        name: "ponytail-upstream",
+        source: { source: "local", path: "./plugins/ponytail-upstream" },
+      },
     ],
   })
   writeCache(codexHome, namespace, "desk", "1.7.3", manifest("desk", "1.7.3"))
   writeCache(codexHome, namespace, "work-suite", "1.4.9", manifest("work-suite", "1.4.9"))
   writeCache(codexHome, namespace, "plain-language", "0.1.0", manifest("plain-language", "0.1.0"))
+  writeCache(codexHome, namespace, "ponytail-upstream", "4.9.0", manifest("ponytail-upstream", "4.9.0"))
   return { root, repoRoot: fixtureRepo, codexHome }
 }
 
@@ -129,6 +135,7 @@ test("Codex plugin cache audit checks host implicit marketplace source drift", (
         ["desk", "./repo/plugins/desk"],
         ["work-suite", "./repo/plugins/work-suite"],
         ["plain-language", "./repo/plugins/plain-language"],
+        ["ponytail-upstream", "./repo/plugins/ponytail-upstream"],
       ],
     })
     const current = auditCodexPluginCache({
@@ -145,11 +152,13 @@ test("Codex plugin cache audit checks host implicit marketplace source drift", (
     writePlugin(fixture.root, "desk", "1.7.2")
     writePlugin(fixture.root, "work-suite", "1.4.8")
     writePlugin(fixture.root, "plain-language", "0.0.9")
+    writePlugin(fixture.root, "ponytail-upstream", "4.8.0")
     writeHostMarketplace(fixture.root, {
       plugins: [
         ["desk", "./plugins/desk"],
         ["work-suite", "./plugins/work-suite"],
         ["plain-language", "./plugins/plain-language"],
+        ["ponytail-upstream", "./plugins/ponytail-upstream"],
       ],
     })
     const stale = auditCodexPluginCache({

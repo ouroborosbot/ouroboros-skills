@@ -13,6 +13,7 @@ const activationManifestPath = "plugins/desk/activation/desk.activation.json"
 const deskPluginPath = "plugins/desk/plugin.json"
 const workSuitePluginPath = "plugins/work-suite/plugin.json"
 const plainLanguagePluginPath = "plugins/plain-language/plugin.json"
+const ponytailPluginPath = "plugins/ponytail-upstream/plugin.json"
 const outputPath = "plugins/desk/activation/copilot-root.flattened-bundle.json"
 const generatorCommand =
   "npm --prefix plugins/desk/mcp run activation:copilot-bundle:generate"
@@ -26,6 +27,9 @@ export function buildCopilotBundle({ activation }) {
   const plainLanguageDependency = activation.dependencies.find((dependency) => (
     dependency.id === "plain-language"
   ))
+  const ponytailDependency = activation.dependencies.find((dependency) => (
+    dependency.id === "ponytail-upstream"
+  ))
 
   return {
     schema_version: COPILOT_BUNDLE_SCHEMA_VERSION,
@@ -36,6 +40,7 @@ export function buildCopilotBundle({ activation }) {
       desk_plugin: deskPluginPath,
       work_suite_plugin: workSuitePluginPath,
       plain_language_plugin: plainLanguagePluginPath,
+      ponytail_plugin: ponytailPluginPath,
     },
     launch: {
       agent: `plugins/desk/${copilotWorkerSource}`,
@@ -62,6 +67,12 @@ export function buildCopilotBundle({ activation }) {
         plugin: plainLanguagePluginPath,
         skills: "plugins/plain-language/skills/",
       },
+      {
+        id: "ponytail-upstream",
+        version: ponytailDependency.lock.version,
+        plugin: ponytailPluginPath,
+        skills: "plugins/ponytail-upstream/skills/",
+      },
     ],
     manual_steps: [],
   }
@@ -74,6 +85,7 @@ export function validateCopilotPackagingContract(input) {
   const deskPlugin = asObject(input?.deskPlugin)
   const workSuitePlugin = asObject(input?.workSuitePlugin)
   const plainLanguagePlugin = asObject(input?.plainLanguagePlugin)
+  const ponytailPlugin = asObject(input?.ponytailPlugin)
   const activationDependencies = Array.isArray(activation.dependencies)
     ? activation.dependencies
     : []
@@ -85,6 +97,10 @@ export function validateCopilotPackagingContract(input) {
     dependency?.id === "plain-language"
   ))
   const lockedPlainLanguageVersion = plainLanguageDependency?.lock?.version
+  const ponytailDependency = activationDependencies.find((dependency) => (
+    dependency?.id === "ponytail-upstream"
+  ))
+  const lockedPonytailVersion = ponytailDependency?.lock?.version
 
   if (deskPlugin.agents !== "./agents/") {
     errors.push("Copilot root plugin metadata must expose ./agents/")
@@ -114,6 +130,14 @@ export function validateCopilotPackagingContract(input) {
   if (!hasBundleDependency(bundle, "plain-language")) {
     errors.push("Copilot flattened bundle must include plain-language dependency closure")
   }
+  if (lockedPonytailVersion === undefined) {
+    errors.push("Copilot activation must lock Ponytail dependency")
+  } else if (ponytailPlugin.version !== lockedPonytailVersion) {
+    errors.push(`Copilot root Ponytail version must match activation lock ${lockedPonytailVersion}`)
+  }
+  if (!hasBundleDependency(bundle, "ponytail-upstream")) {
+    errors.push("Copilot flattened bundle must include ponytail-upstream dependency closure")
+  }
   if (
     deskPlugin.activation?.copilot?.dependencies?.["work-suite"]?.bundleMetadata
       !== outputPath
@@ -125,6 +149,12 @@ export function validateCopilotPackagingContract(input) {
       !== outputPath
   ) {
     errors.push("Copilot Plain Language dependency must point to generated flattened bundle metadata")
+  }
+  if (
+    deskPlugin.activation?.copilot?.dependencies?.["ponytail-upstream"]?.bundleMetadata
+      !== outputPath
+  ) {
+    errors.push("Copilot Ponytail dependency must point to generated flattened bundle metadata")
   }
   if (deskPlugin.activation?.copilot?.targets?.["desk:worker"]?.source !== copilotWorkerSource) {
     errors.push("Copilot desk:worker target must use agents/worker.agent.md")

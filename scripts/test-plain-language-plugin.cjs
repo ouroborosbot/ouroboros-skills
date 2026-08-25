@@ -17,8 +17,10 @@ for (const source of lock.sources) {
   assert.match(source.commit, /^[0-9a-f]{40}$/u);
   assert.equal(source.license, "MIT");
   for (const file of source.files) {
-    assert.match(file.generatedPath, /^plugins\/plain-language\/vendor\//u);
-    assert.notEqual(path.basename(file.generatedPath), "SKILL.md");
+    assert.match(file.generatedPath, /^plugins\/(?:plain-language\/vendor|ponytail-upstream)\//u);
+    if (file.generatedPath.startsWith("plugins/plain-language/vendor/")) {
+      assert.notEqual(path.basename(file.generatedPath), "SKILL.md");
+    }
     assert.equal(expected.has(file.generatedPath), false, `duplicate path: ${file.generatedPath}`);
     const generated = path.join(repoRoot, file.generatedPath);
     assert.equal(fs.statSync(generated).isFile(), true);
@@ -40,7 +42,25 @@ const actual = fs.readdirSync(vendorRoot, { recursive: true, withFileTypes: true
   })
   .filter(Boolean)
   .sort();
-assert.deepEqual(actual, [...expected].sort());
+assert.deepEqual(
+  actual,
+  [...expected].filter((file) => file.startsWith("plugins/plain-language/vendor/")).sort(),
+);
+
+const ponytailRoot = path.join(repoRoot, "plugins", "ponytail-upstream");
+const ponytailActual = fs.readdirSync(ponytailRoot, { recursive: true, withFileTypes: true })
+  .map((entry) => (
+    entry.isFile()
+      ? path.relative(repoRoot, path.join(entry.parentPath, entry.name)).split(path.sep).join("/")
+      : null
+  ))
+  .filter((file) => file && !file.includes("/.claude-plugin/") && !file.includes("/.codex-plugin/"))
+  .filter((file) => file !== "plugins/ponytail-upstream/plugin.json")
+  .sort();
+assert.deepEqual(
+  ponytailActual,
+  [...expected].filter((file) => file.startsWith("plugins/ponytail-upstream/")).sort(),
+);
 
 const notice = fs.readFileSync(path.join(vendorRoot, "NOTICE.md"), "utf8");
 assert.match(notice, /GaZmagik\/iso-24495/u);

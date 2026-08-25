@@ -161,6 +161,8 @@ test("Ouroboros/autonomous-agent packaging has a flattened bundle disposition", 
     "plugins/desk/.mcp.json",
     "plugins/desk/plugin.json",
     "plugins/work-suite/plugin.json",
+    "plugins/plain-language/plugin.json",
+    "plugins/ponytail-upstream/plugin.json",
   ], "Ouroboros evidence source_paths")
   assertIncludesAll(evidenceRow.evidence_command_or_doc, [
     unitTestCommand,
@@ -189,6 +191,8 @@ test("Ouroboros docs specify bundle.json plugin closure and $DESK preamble bindi
   assert.match(section, /"plugins"\s*:\s*\[/u)
   assert.match(section, /"desk"/u)
   assert.match(section, /"work-suite"/u)
+  assert.match(section, /"plain-language"/u)
+  assert.match(section, /"ponytail-upstream"/u)
   assert.match(section, /preamble/u)
   assert.match(section, /\$DESK\s*=\s*~\/AgentBundles\/<agent>\.ouro\/desk\//u)
   assert.doesNotMatch(section, /npm install/u)

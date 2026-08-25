@@ -1,7 +1,7 @@
 {
   "name": "work-suite",
-  "version": "1.6.0",
-  "description": "The workflow primitive for orchestrator agents: ideate, plan, execute, merge, visual-dogfood UI work, stay in turn while waiting, and run no-human-gates full-delivery autopilot loops.",
+  "version": "2.0.0",
+  "description": "A lean workflow primitive for orchestrator agents: resolve material unknowns, plan only when needed, implement the smallest correct vertical slice, merge through terminal delivery, and keep authorized autopilot work moving.",
   "author": {
     "name": "ourostack",
     "url": "https://github.com/ourostack/ouroboros-skills"
@@ -20,13 +20,18 @@
     "codex": {
       "dependencyProvider": {
         "id": "work-suite",
-        "version": "1.6.0",
+        "version": "2.0.0",
         "resolution": "flattened"
       },
       "dependencies": {
         "plain-language": {
           "path": "../plain-language",
           "version": "0.1.0",
+          "resolution": "flattened"
+        },
+        "ponytail-upstream": {
+          "path": "../ponytail-upstream",
+          "version": "4.9.0",
           "resolution": "flattened"
         }
       }
@@ -35,7 +40,7 @@
   "interface": {
     "displayName": "Work Suite",
     "shortDescription": "Ideation, planning, doing, merging, and autonomous execution skills.",
-    "longDescription": "Work Suite packages the canonical Ourostack workflow skills for Codex and other agent runtimes: work-ideator, work-planner, work-doer, work-merger, visual-qa-dogfood, autopilot, stay-in-turn, and inch-worm. Autopilot mode means no human gates, harsh sub-agent reviewer gates, screenshot-backed visual dogfooding for UI work, explicit terminal deployment/validation state, in-turn CI/deploy wait discipline, Arc/resume continuity for context loss, and an exit preflight that writes down the durable continuation scan and keeps selecting ready follow-up work until the queue is truly empty.",
+    "longDescription": "Work Suite packages the canonical Ourostack workflow skills for Codex and other agent runtimes: work-ideator, work-planner, work-doer, work-merger, visual-qa-dogfood, autopilot, stay-in-turn, and inch-worm. Work Suite 2 plans only when needed, uses pinned upstream Ponytail for the smallest correct coding change, preserves risk-driven review and validation, and keeps authorized autopilot work moving through terminal delivery.",
     "developerName": "ourostack",
     "category": "Engineering",
     "capabilities": [

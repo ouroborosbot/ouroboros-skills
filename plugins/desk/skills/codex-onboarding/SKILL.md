@@ -50,14 +50,18 @@ Do this before treating `session-start` as healthy:
     {
       "name": "plain-language",
       "source": { "source": "local", "path": "./Projects/ouroboros-skills/plugins/plain-language" }
+    },
+    {
+      "name": "ponytail-upstream",
+      "source": { "source": "local", "path": "./Projects/ouroboros-skills/plugins/ponytail-upstream" }
     }
   ]
 }
 ```
 
-Avoid keeping `~/plugins/desk`, `~/plugins/work-suite`, and `~/plugins/plain-language` as the steady-state source unless a separate sync job and audit prove they are fresh. Stale snapshots can keep Codex installing old plugin versions even after the repo and cache look healthy.
+Avoid keeping `~/plugins/desk`, `~/plugins/work-suite`, `~/plugins/plain-language`, and `~/plugins/ponytail-upstream` as the steady-state source unless a separate sync job and audit prove they are fresh. Stale snapshots can keep Codex installing old plugin versions even after the repo and cache look healthy.
 
-2. Ensure the plugin source/marketplace includes `desk`, `work-suite`, and `plain-language`. Use the marketplace `name` as the namespace in config (`desk@<marketplace-name>`), not a hard-coded `ourostack` value. Local development installs may use `ourostack`; older installs may still say `ourostack-local`, but the source path must still resolve to the canonical plugin files.
+2. Ensure the plugin source/marketplace includes `desk`, `work-suite`, `plain-language`, and `ponytail-upstream`. Use the marketplace `name` as the namespace in config (`desk@<marketplace-name>`), not a hard-coded `ourostack` value. Local development installs may use `ourostack`; older installs may still say `ourostack-local`, but the source path must still resolve to the canonical plugin files.
 
 Run the source/cache/implicit-marketplace audit after repairs:
 
@@ -81,6 +85,9 @@ enabled = true
 enabled = true
 
 [plugins."plain-language@ourostack-local"]
+enabled = true
+
+[plugins."ponytail-upstream@ourostack-local"]
 enabled = true
 
 [plugins."desk@ourostack-local".mcp_servers.desk]
@@ -164,7 +171,7 @@ child.kill("SIGTERM")
 EOF
 ```
 
-The active Codex session will not gain new plugin skills retroactively. Restart Codex or open a fresh session to confirm that `desk`, `work-suite`, and `plain-language` appear in the available plugins/skills list.
+The active Codex session will not gain new plugin skills retroactively. Restart Codex or open a fresh session to confirm that `desk`, `work-suite`, `plain-language`, and `ponytail-upstream` appear in the available plugins/skills list.
 
 6. If you can capture the active tool list, prove MCP visibility separately from cache freshness:
 
