@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url"
 import {
   buildSnapshotFromLocalDb,
 } from "../../src/artifacts/artifact-scripts.js"
+import manifestContracts from "../../src/artifacts/manifest-contracts.cjs"
 import { closeDb, openDb } from "../../src/db/init.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
@@ -26,6 +27,7 @@ import {
   writeSnapshotArtifact,
 } from "../../src/snapshots/manifest.js"
 
+const { ARTIFACT_SOURCE_PATHS } = manifestContracts
 const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
 const repoRoot = path.resolve(mcpRoot, "..", "..", "..")
 const sourcePluginRoot = path.join(repoRoot, "plugins", "desk")
@@ -40,6 +42,10 @@ const publicPackManifestPath = path.join(
   "vector-packs",
   ACTIVE_EMBEDDING_SPEC.id,
   "repo-public-bootstrap-2026-06-15.manifest.json",
+)
+const publicPackPath = publicPackManifestPath.replace(
+  /\.manifest\.json$/u,
+  ".jsonl",
 )
 const publicSnapshotManifestPath = path.join(
   sourcePluginRoot,
@@ -112,24 +118,34 @@ function pathsFor(pluginRoot, artifactType, artifactId) {
 }
 
 async function generation({ artifactType, artifactId, marker }) {
-  const primaryBytes = Buffer.from(`${artifactType}:${marker}\n`, "utf8")
-  const rawSha = sha256(primaryBytes)
   const template = JSON.parse(await readFile(
     artifactType === "vector-pack"
       ? publicPackManifestPath
       : publicSnapshotManifestPath,
     "utf8",
   ))
+  let primaryBytes
+  if (artifactType === "vector-pack") {
+    const row = JSON.parse(
+      (await readFile(publicPackPath, "utf8")).trim().split("\n")[0],
+    )
+    row.vector[0] = marker === "old" ? 0.125 : 0.875
+    primaryBytes = Buffer.from(`${JSON.stringify(row)}\n`, "utf8")
+  } else {
+    primaryBytes = Buffer.from(`${artifactType}:${marker}\n`, "utf8")
+  }
+  const rawSha = sha256(primaryBytes)
   const manifest = artifactType === "vector-pack"
     ? {
         ...template,
         pack_id: artifactId,
-        row_count: 0,
+        row_count: 1,
         rows_sha256: rawSha,
         created_at: marker === "old"
           ? "2026-08-24T00:00:00.000Z"
           : "2026-08-24T00:01:00.000Z",
-      }
+          source_paths: ARTIFACT_SOURCE_PATHS,
+        }
     : {
         ...template,
         snapshot_id: artifactId,
@@ -141,6 +157,7 @@ async function generation({ artifactType, artifactId, marker }) {
           file: `${artifactId}.sqlite.zst`,
           sha256: `sha256:${rawSha}`,
         },
+        source_paths: ARTIFACT_SOURCE_PATHS,
       }
   return {
     primaryBytes,

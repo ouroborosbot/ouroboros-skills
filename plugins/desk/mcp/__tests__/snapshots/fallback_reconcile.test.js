@@ -10,6 +10,7 @@ import * as path from "node:path"
 import { zstdCompressSync } from "node:zlib"
 import matter from "gray-matter"
 
+import manifestContracts from "../../src/artifacts/manifest-contracts.cjs"
 import { closeDb, getMeta, indexDbPath, openDb, setMeta } from "../../src/db/init.js"
 import { chunkBody } from "../../src/indexer/chunk.js"
 import {
@@ -30,6 +31,7 @@ import {
 import { desk_reindex } from "../../src/tools/reindex.js"
 
 const require = createRequire(import.meta.url)
+const { ARTIFACT_SOURCE_PATHS } = manifestContracts
 const packageLock = require("../../package-lock.json")
 const SOURCE_SCOPE_HASH = `sha256:${"a".repeat(64)}`
 const STALE_SOURCE_SCOPE_HASH = `sha256:${"d".repeat(64)}`
@@ -134,9 +136,11 @@ async function writePack({ deskRoot, pluginRoot, packId, rows }) {
       represented_documents: representedDocuments,
       created_at: "2026-06-15T00:00:00.000Z",
       provenance: {
-        builder: "artifact:vector-pack:build",
-        source: "unit-test",
+        builder: "plugins/desk/mcp/scripts/build-vector-pack.js",
+        source: "local-db",
+        commit: "0123456789abcdef0123456789abcdef01234567",
       },
+      source_paths: ARTIFACT_SOURCE_PATHS,
     }, null, 2)}\n`,
     "utf8",
   )
@@ -186,14 +190,10 @@ function validManifest({
     },
     provenance: {
       builder: "plugins/desk/mcp/scripts/build-snapshot.js",
-      source: "unit-test",
+      source: "local-db",
       commit: "0123456789abcdef0123456789abcdef01234567",
     },
-    source_paths: [
-      "plugins/desk/mcp/src/snapshots/restore.js",
-      "plugins/desk/mcp/src/db/schema.sql",
-      "plugins/desk/mcp/package-lock.json",
-    ],
+    source_paths: ARTIFACT_SOURCE_PATHS,
     ...overrides,
   }
 }

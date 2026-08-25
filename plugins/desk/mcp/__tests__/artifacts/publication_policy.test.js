@@ -8,10 +8,12 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
+import manifestContracts from "../../src/artifacts/manifest-contracts.cjs"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
 import { ensureIndex } from "../../src/server-helpers.js"
 
 const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
+const { ARTIFACT_SOURCE_PATHS } = manifestContracts
 const repoRoot = path.resolve(mcpRoot, "..", "..", "..")
 const deskPluginRoot = path.join(repoRoot, "plugins", "desk")
 const policyPath = path.join(deskPluginRoot, "artifacts", "publication-policy.json")
@@ -94,11 +96,93 @@ function repoApproval(artifactType, overrides = {}) {
 }
 
 function safeSourceDocs() {
-  return [{ path: "visible-track/task-1/task.md", body: "public body" }]
+  return [{
+    path: "visible-track/task-1/task.md",
+    hash: sha256("public body"),
+    body: "public body",
+  }]
 }
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex")
+}
+
+function documentTreeHash(documents) {
+  const hash = createHash("sha256")
+  for (const document of documents) {
+    hash.update(`${document.path}\0sha256:${document.hash}\0`)
+  }
+  return `sha256:${hash.digest("hex")}`
+}
+
+function artifactPayload(artifactType, artifactId) {
+  const sourceDocs = safeSourceDocs()
+  const primaryBytes = artifactType === "vector-pack"
+    ? Buffer.alloc(0)
+    : Buffer.from("sqlite bytes", "utf8")
+  const artifactHash = sha256(primaryBytes)
+  const common = {
+    schema_version: 1,
+    embedding_spec_id: ACTIVE_EMBEDDING_SPEC.id,
+    dimension: ACTIVE_EMBEDDING_SPEC.dimension,
+    artifact_source_scope_hash: `sha256:${"a".repeat(64)}`,
+    document_tree_hash: documentTreeHash(sourceDocs),
+    discovery_grammar_version: 2,
+    represented_documents: sourceDocs.map(({ path: documentPath, hash }) => ({
+      path: documentPath,
+      hash: `sha256:${hash}`,
+    })),
+    created_at: "2026-06-15T00:00:00.000Z",
+    source_paths: ARTIFACT_SOURCE_PATHS,
+  }
+  const manifest = artifactType === "vector-pack"
+    ? {
+        ...common,
+        pack_id: artifactId,
+        encoding: "float32-json",
+        row_count: 0,
+        rows_sha256: artifactHash,
+        provenance: {
+          builder: "plugins/desk/mcp/scripts/build-vector-pack.js",
+          source: "local-db",
+          commit: "0123456789abcdef0123456789abcdef01234567",
+        },
+      }
+    : {
+        ...common,
+        snapshot_id: artifactId,
+        chunker_id: ACTIVE_EMBEDDING_SPEC.chunker_id,
+        normalization_id: ACTIVE_EMBEDDING_SPEC.normalization_id,
+        db_schema: { id: "desk-index-sqlite-v1", version: 1 },
+        sqlite_vec: { package: "sqlite-vec", version: "0.1.6", table: "vec0" },
+        runtime: { platform: "portable", arch: "portable", node_abi: "portable" },
+        included_pack_ids: [],
+        artifact: {
+          file: `${artifactId}.sqlite.zst`,
+          format: "sqlite-zstd",
+          sha256: `sha256:${artifactHash}`,
+          compressed: true,
+        },
+        provenance: {
+          builder: "plugins/desk/mcp/scripts/build-snapshot.js",
+          source: "local-db",
+          commit: "0123456789abcdef0123456789abcdef01234567",
+        },
+      }
+  return {
+    primaryBytes,
+    manifestBytes: `${JSON.stringify(manifest, null, 2)}\n`,
+    checksumBytes: `${
+      artifactType === "vector-pack"
+        ? artifactHash
+        : `sha256:${artifactHash}`
+    }  ${
+      artifactType === "vector-pack"
+        ? `${artifactId}.jsonl`
+        : `${artifactId}.sqlite.zst`
+    }\n`,
+    sourceDocs,
+  }
 }
 
 async function fileHashes(root) {
@@ -142,11 +226,17 @@ async function seedCommittedArtifactFixture(artifactsRoot) {
       encoding: "float32-json",
       row_count: 0,
       rows_sha256: packSha,
+      artifact_source_scope_hash: `sha256:${"a".repeat(64)}`,
+      document_tree_hash: `sha256:${sha256("")}`,
+      discovery_grammar_version: 2,
+      represented_documents: [],
       created_at: "2026-06-15T00:00:00.000Z",
       provenance: {
-        builder: "artifact:vector-pack:build",
-        source: "unit-test",
+        builder: "plugins/desk/mcp/scripts/build-vector-pack.js",
+        source: "local-db",
+        commit: "0123456789abcdef0123456789abcdef01234567",
       },
+      source_paths: ARTIFACT_SOURCE_PATHS,
     }, null, 2)}\n`,
     "utf8",
   )
@@ -176,6 +266,8 @@ async function seedCommittedArtifactFixture(artifactsRoot) {
       },
       artifact_source_scope_hash: `sha256:${"a".repeat(64)}`,
       document_tree_hash: `sha256:${"b".repeat(64)}`,
+      discovery_grammar_version: 2,
+      represented_documents: [],
       included_pack_ids: [packId],
       created_at: "2026-06-15T00:00:00.000Z",
       artifact: {
@@ -186,14 +278,10 @@ async function seedCommittedArtifactFixture(artifactsRoot) {
       },
       provenance: {
         builder: "plugins/desk/mcp/scripts/build-snapshot.js",
-        source: "unit-test",
+        source: "local-db",
         commit: "0123456789abcdef0123456789abcdef01234567",
       },
-      source_paths: [
-        "plugins/desk/mcp/src/snapshots/restore.js",
-        "plugins/desk/mcp/src/db/schema.sql",
-        "plugins/desk/mcp/package-lock.json",
-      ],
+      source_paths: ARTIFACT_SOURCE_PATHS,
     }, null, 2)}\n`,
     "utf8",
   )
@@ -523,14 +611,15 @@ test("publication policy default allow is limited to private or internal nonsens
     approved_artifact_types: ["vector-pack"],
     approval_required: false,
   }))
+  const payload = artifactPayload("vector-pack", "default-allowed-pack")
   const paths = await writeVectorPackArtifact({
     pluginRoot,
     packId: "default-allowed-pack",
-    packBytes: "",
-    manifestBytes: "{}\n",
-    checksumBytes: "sha256:default  default-allowed-pack.jsonl\n",
+    packBytes: payload.primaryBytes,
+    manifestBytes: payload.manifestBytes,
+    checksumBytes: payload.checksumBytes,
     deskRoot: await safeDeskRoot(),
-    sourceDocs: safeSourceDocs(),
+    sourceDocs: payload.sourceDocs,
   })
   assert.equal(await fs.readFile(paths.packPath, "utf8"), "")
 })
@@ -630,26 +719,28 @@ test("publication policy accepts explicit repo and organization approvals for al
     "artifact_type_not_approved",
   )
 
+  const vectorPayload = artifactPayload("vector-pack", "approved-pack")
   const vectorPaths = await writeVectorPackArtifact({
     pluginRoot,
     packId: "approved-pack",
-    packBytes: "",
-    manifestBytes: "{}\n",
-    checksumBytes: "sha256:approved  approved-pack.jsonl\n",
+    packBytes: vectorPayload.primaryBytes,
+    manifestBytes: vectorPayload.manifestBytes,
+    checksumBytes: vectorPayload.checksumBytes,
     deskRoot: await safeDeskRoot(),
-    sourceDocs: safeSourceDocs(),
+    sourceDocs: vectorPayload.sourceDocs,
   })
   assert.equal(await fs.readFile(vectorPaths.packPath, "utf8"), "")
 
+  const snapshotPayload = artifactPayload("snapshot", "approved-snapshot")
   const snapshotPaths = await writeSnapshotArtifact({
     pluginRoot,
     snapshotId: "approved-snapshot",
-    snapshotBytes: "sqlite bytes",
-    manifestBytes: "{}\n",
-    checksumBytes: "sha256:approved  approved-snapshot.sqlite.zst\n",
+    snapshotBytes: snapshotPayload.primaryBytes,
+    manifestBytes: snapshotPayload.manifestBytes,
+    checksumBytes: snapshotPayload.checksumBytes,
     deskRoot: await safeDeskRoot(),
     policy,
-    sourceDocs: safeSourceDocs(),
+    sourceDocs: snapshotPayload.sourceDocs,
   })
   assert.equal(await fs.readFile(snapshotPaths.snapshotPath, "utf8"), "sqlite bytes")
 })

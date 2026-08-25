@@ -9,7 +9,9 @@ import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
+import manifestContracts from "../../src/artifacts/manifest-contracts.cjs"
 
+const { ARTIFACT_SOURCE_PATHS } = manifestContracts
 const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
 const repoRoot = path.resolve(mcpRoot, "..", "..", "..")
 const deskPluginRoot = path.join(repoRoot, "plugins", "desk")
@@ -62,6 +64,7 @@ function validManifest({ artifactSha, snapshotId = SNAPSHOT_ID } = {}) {
     runtime: RUNTIME,
     artifact_source_scope_hash: SOURCE_SCOPE_HASH,
     document_tree_hash: DOCUMENT_TREE_HASH,
+    discovery_grammar_version: DISCOVERY_GRAMMAR_VERSION,
     represented_documents: REPRESENTED_DOCUMENTS.map((doc) => ({ ...doc })),
     included_pack_ids: ["desk-base-pack"],
     created_at: "2026-06-15T00:00:00.000Z",
@@ -73,14 +76,10 @@ function validManifest({ artifactSha, snapshotId = SNAPSHOT_ID } = {}) {
     },
     provenance: {
       builder: "plugins/desk/mcp/scripts/build-snapshot.js",
-      source: "unit-test",
+      source: "local-db",
       commit: "0123456789abcdef0123456789abcdef01234567",
     },
-    source_paths: [
-      "plugins/desk/mcp/src/indexer/index.js",
-      "plugins/desk/mcp/src/db/schema.sql",
-      "plugins/desk/mcp/package-lock.json",
-    ],
+    source_paths: ARTIFACT_SOURCE_PATHS,
   }
 }
 
@@ -177,7 +176,7 @@ test("valid snapshot artifacts require manifest fields and checksum sidecars", a
   })
 })
 
-test("valid snapshot artifacts infer sidecars and compare nested manifest metadata", async () => {
+test("snapshot artifacts reject unknown nested DB schema metadata", async () => {
   const { validateSnapshotArtifact } = await loadManifestModule()
   const pluginRoot = await tmpPluginRoot()
   const nestedSchema = {
@@ -191,17 +190,18 @@ test("valid snapshot artifacts infer sidecars and compare nested manifest metada
     manifest: { db_schema: nestedSchema },
   })
 
-  const result = await validateSnapshotArtifact({
-    snapshotPath: written.snapshotPath,
-    expectedSpec: ACTIVE_EMBEDDING_SPEC,
-    expectedDbSchema: nestedSchema,
-    expectedSqliteVec: SQLITE_VEC,
-    expectedRuntime: RUNTIME,
-    expectedArtifactSourceScopeHash: SOURCE_SCOPE_HASH,
-    expectedDocumentTreeHash: DOCUMENT_TREE_HASH,
-  })
-
-  assert.equal(result.compatible, true)
+  await assert.rejects(
+    () => validateSnapshotArtifact({
+      snapshotPath: written.snapshotPath,
+      expectedSpec: ACTIVE_EMBEDDING_SPEC,
+      expectedDbSchema: nestedSchema,
+      expectedSqliteVec: SQLITE_VEC,
+      expectedRuntime: RUNTIME,
+      expectedArtifactSourceScopeHash: SOURCE_SCOPE_HASH,
+      expectedDocumentTreeHash: DOCUMENT_TREE_HASH,
+    }),
+    /db_schema unknown field tables/u,
+  )
 })
 
 test("valid snapshot artifacts accept raw checksum sidecars", async () => {
@@ -305,7 +305,7 @@ test("snapshot freshness hashes sorted represented documents", async () => {
   const { validateSnapshotManifest } = await loadManifestModule()
   const artifactSha = `sha256:${"d".repeat(64)}`
   const representedDocuments = [
-    { path: "z.md", hash: "a".repeat(64) },
+    { path: "z.md", hash: `sha256:${"a".repeat(64)}` },
     { path: "a.md", hash: `sha256:${"b".repeat(64)}` },
   ]
   const expectedDocumentTreeHash = documentTreeHash(representedDocuments)
@@ -329,7 +329,7 @@ test("snapshot freshness hashes sorted represented documents", async () => {
   assert.equal(result.freshness.document_tree, "fresh")
 })
 
-test("snapshot freshness treats malformed represented documents as stale", async () => {
+test("snapshot validation rejects malformed represented documents", async () => {
   const { validateSnapshotManifest } = await loadManifestModule()
   const artifactSha = `sha256:${"d".repeat(64)}`
   const malformedValues = [
@@ -342,21 +342,22 @@ test("snapshot freshness treats malformed represented documents as stale", async
   ]
 
   for (const represented_documents of malformedValues) {
-    const result = validateSnapshotManifest({
-      manifest: {
-        ...validManifest({ artifactSha }),
-        represented_documents,
-      },
-      artifactSha256: artifactSha,
-      expectedSpec: ACTIVE_EMBEDDING_SPEC,
-      expectedDbSchema: DB_SCHEMA,
-      expectedSqliteVec: SQLITE_VEC,
-      expectedRuntime: RUNTIME,
-      expectedArtifactSourceScopeHash: SOURCE_SCOPE_HASH,
-      expectedDocumentTreeHash: DOCUMENT_TREE_HASH,
-    })
-
-    assert.equal(result.freshness.document_tree, "stale")
+    assert.throws(
+      () => validateSnapshotManifest({
+        manifest: {
+          ...validManifest({ artifactSha }),
+          represented_documents,
+        },
+        artifactSha256: artifactSha,
+        expectedSpec: ACTIVE_EMBEDDING_SPEC,
+        expectedDbSchema: DB_SCHEMA,
+        expectedSqliteVec: SQLITE_VEC,
+        expectedRuntime: RUNTIME,
+        expectedArtifactSourceScopeHash: SOURCE_SCOPE_HASH,
+        expectedDocumentTreeHash: DOCUMENT_TREE_HASH,
+      }),
+      /represented_documents/u,
+    )
   }
 })
 
@@ -414,14 +415,14 @@ test("snapshot manifest rejects compatibility and provenance drift", async () =>
       ...base,
       artifact: { ...base.artifact, format: "raw-sqlite", compressed: false },
     }),
-    /artifact format/u,
+    /artifact (?:format|compressed)/u,
   )
   assert.throws(
     () => validate({
       ...base,
       artifact: { ...base.artifact, compressed: "true" },
     }),
-    /artifact format/u,
+    /artifact (?:format|compressed)/u,
   )
   assert.throws(
     () => validate({
@@ -519,20 +520,20 @@ test("snapshot manifests reject absolute, traversal, and unexpected source paths
     expectedDocumentTreeHash: DOCUMENT_TREE_HASH,
   })
 
-  assert.throws(() => validate(["/Users/ari/secret.md"]), /absolute source path/u)
-  assert.throws(() => validate(["plugins/desk/../secret.md"]), /source path traversal/u)
+  assert.throws(() => validate(["/Users/ari/secret.md"]), /normalized relative path/u)
+  assert.throws(() => validate(["plugins/desk/../secret.md"]), /normalized public relative path/u)
   assert.throws(
     () => validate(["plugins/desk/mcp/src/indexer/C:\\Users\\ari\\secret.md"]),
-    /normalized repo path/u,
+    /normalized relative path/u,
   )
   assert.throws(
     () => validate(["plugins/desk/mcp/src/indexer/C:/Users/ari/secret.md"]),
-    /normalized repo path/u,
+    /normalized public relative path/u,
   )
   assert.throws(
     () => validate(["private/customer-secrets.md"]),
     (error) => {
-      assert.match(error.message, /unexpected source path/u)
+      assert.match(error.message, /canonical source list/u)
       assert.doesNotMatch(error.message, /private|customer-secrets/u)
       return true
     },
@@ -698,8 +699,8 @@ test("snapshot manifest rejects missing expected compatibility context and defen
   assert.throws(() => validate(base, { expectedDbSchema: undefined }), /expected DB schema/u)
   assert.throws(() => validate(base, { expectedSqliteVec: undefined }), /expected sqlite-vec/u)
   assert.throws(() => validate(base, { expectedRuntime: undefined }), /expected runtime/u)
-  assert.throws(() => validate({ ...base, artifact: null }), /artifact is required/u)
-  assert.throws(() => validate({ ...base, artifact: [] }), /artifact is required/u)
+  assert.throws(() => validate({ ...base, artifact: null }), /artifact must be an object/u)
+  assert.throws(() => validate({ ...base, artifact: [] }), /artifact must be an object/u)
   assert.throws(
     () => validate({
       ...base,

@@ -1,12 +1,14 @@
-import { createHash, randomUUID } from "node:crypto"
+import { createHash } from "node:crypto"
 import { createReadStream } from "node:fs"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { StringDecoder } from "node:string_decoder"
+import manifestContracts from "../artifacts/manifest-contracts.cjs"
 import {
   assertArtifactPublicationAllowed,
   policyForArtifactWrite,
 } from "../artifacts/policy.js"
+import { publishArtifactSet } from "../artifacts/publication.js"
 import {
   assertArtifactDoesNotRepresentTombstones,
   assertArtifactInputsDoNotContainTombstones,
@@ -20,6 +22,7 @@ import {
 import { ACTIVE_EMBEDDING_SPEC } from "./spec.js"
 
 const VECTOR_ENCODING = "float32-json"
+const { validateArtifactManifest } = manifestContracts
 const ROW_FIELDS = new Set([
   "chunk_key",
   "text_hash",
@@ -65,6 +68,8 @@ export async function writeVectorPackArtifact({
   policy,
   deskRoot,
   sourceDocs,
+  signal,
+  publication,
 } = {}) {
   const paths = deriveVectorPackPaths({ pluginRoot, embeddingSpecId, packId })
   await assertArtifactInputsAllowed({
@@ -85,9 +90,33 @@ export async function writeVectorPackArtifact({
     relative_path: paths.relativePackPath,
   })
   await fs.mkdir(paths.packDir, { recursive: true })
-  await writeAtomic(paths.packPath, packBytes)
-  await writeAtomic(paths.manifestPath, manifestBytes)
-  await writeAtomic(paths.checksumPath, checksumBytes)
+  const manifest = parseManifestBytes(manifestBytes)
+  await publishArtifactSet({
+    ...publication,
+    artifactId: packId,
+    signal,
+    files: [
+      { name: "primary", path: paths.packPath, bytes: packBytes },
+      { name: "manifest", path: paths.manifestPath, bytes: manifestBytes },
+      { name: "checksum", path: paths.checksumPath, bytes: checksumBytes },
+    ],
+    validateStaged: async (stagedPaths) => {
+      await validateVectorPackFile({
+        pluginRoot,
+        packPath: stagedPaths.primary,
+        manifestPath: stagedPaths.manifest,
+        checksumPath: stagedPaths.checksum,
+        expectedSpec: ACTIVE_EMBEDDING_SPEC,
+        expectedArtifactSourceScopeHash:
+          manifest.artifact_source_scope_hash,
+        expectedDocumentTreeHash: manifest.document_tree_hash,
+        expectedDocuments: sourceDocs,
+        expectedDiscoveryGrammarVersion:
+          manifest.discovery_grammar_version,
+        signal,
+      })
+    },
+  })
   return paths
 }
 
@@ -111,11 +140,15 @@ export async function validateVectorPackFile({
   const resolvedManifestPath = manifestPath ?? sidecarPath(packPath, ".manifest.json")
   const resolvedChecksumPath = checksumPath ?? sidecarPath(packPath, ".sha256")
   const manifest = await readRequiredJson(resolvedManifestPath, `${label} manifest`, signal)
-  validateManifestShape({ manifest, expectedSpec, label })
   await assertArtifactDoesNotRepresentTombstones({
     pluginRoot,
     artifact_type: "vector-pack",
     represented_documents: manifest.represented_documents,
+  })
+  validateArtifactManifest({
+    artifactType: "vector-pack",
+    manifest,
+    expectedSpec,
   })
   const checksum = await readRequiredChecksum(resolvedChecksumPath, `${label} checksum`, signal)
   const { packSha, rows } = await readPackRowsAndSha({
@@ -123,6 +156,12 @@ export async function validateVectorPackFile({
     expectedSpec,
     label,
     signal,
+  })
+  validateArtifactManifest({
+    artifactType: "vector-pack",
+    manifest,
+    expectedSpec,
+    artifactSha256: packSha,
   })
 
   if (checksum !== packSha) {
@@ -321,33 +360,18 @@ function representedDocumentsAreCurrent(
   if (requireRepresentedDocument && representedDocuments.length === 0) {
     return false
   }
+  if (representedDocuments.length !== expectedDocuments.length) return false
   const expectedByPath = new Map(expectedDocuments.map((doc) => [
     canonicalFilesystemDocumentPath(doc.path),
     canonicalDocumentHash(doc.hash),
   ]))
-  return representedDocuments.every((doc) =>
-    expectedByPath.get(canonicalFilesystemDocumentPath(doc.path)) ===
-      canonicalDocumentHash(doc.hash)
-  )
-}
-
-function validateManifestShape({ manifest, expectedSpec, label }) {
-  if (manifest.schema_version !== 1) {
-    throw new Error(`${label}: manifest schema_version must be 1`)
-  }
-  assertPathSafeId(manifest.pack_id, "pack_id")
-  if (manifest.embedding_spec_id !== expectedSpec.id) {
-    throw new Error(`${label}: manifest embedding_spec_id must match active spec`)
-  }
-  if (manifest.dimension !== expectedSpec.dimension) {
-    throw new Error(`${label}: manifest dimension must match active spec`)
-  }
-  if (manifest.encoding !== VECTOR_ENCODING) {
-    throw new Error(`${label}: manifest encoding must be ${VECTOR_ENCODING}`)
-  }
-  if (!Number.isInteger(manifest.row_count) || manifest.row_count < 0) {
-    throw new Error(`${label}: manifest row_count must be a non-negative integer`)
-  }
+  const seen = new Set()
+  return representedDocuments.every((doc) => {
+    const documentPath = canonicalFilesystemDocumentPath(doc.path)
+    if (seen.has(documentPath)) return false
+    seen.add(documentPath)
+    return expectedByPath.get(documentPath) === canonicalDocumentHash(doc.hash)
+  })
 }
 
 function validateManifestHash({ manifest, packSha, label }) {
@@ -492,16 +516,6 @@ async function readRequiredChecksum(filePath, label, signal) {
   return match[1]
 }
 
-async function writeAtomic(filePath, bytes) {
-  const temporaryPath = `${filePath}.${randomUUID()}.tmp`
-  try {
-    await fs.writeFile(temporaryPath, bytes)
-    await fs.rename(temporaryPath, filePath)
-  } finally {
-    await fs.rm(temporaryPath, { force: true })
-  }
-}
-
 function sidecarPath(packPath, suffix) {
   return packPath.replace(/\.jsonl$/u, suffix)
 }
@@ -535,4 +549,12 @@ function assertPathSafeId(value, label) {
 
 function normalizePath(value) {
   return value.split(path.sep).join("/")
+}
+
+function parseManifestBytes(bytes) {
+  try {
+    return JSON.parse(Buffer.from(bytes).toString("utf8"))
+  } catch {
+    throw new Error("vector-pack manifest must be valid JSON")
+  }
 }

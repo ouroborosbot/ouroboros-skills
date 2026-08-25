@@ -15,6 +15,9 @@ function helperOptions(overrides = {}) {
     readFile: async () => Buffer.from("sanitized sqlite", "utf8"),
     removeFile: async () => {},
     vacuumInto: () => {},
+    openSanitizedDb: () => ({}),
+    closeSanitizedDb: () => {},
+    purgeOrphanVectors: () => 0,
     ...overrides,
   }
 }
@@ -32,15 +35,60 @@ test("sanitized snapshot copies clean up on success without exposing their path"
     vacuumInto: (_db, filePath) => {
       calls.push(["vacuum", filePath])
     },
+    openSanitizedDb: ({ filePath }) => {
+      calls.push(["open", filePath])
+      return { copy: true }
+    },
+    purgeOrphanVectors: (db) => {
+      calls.push(["purge", db])
+    },
+    closeSanitizedDb: (db) => {
+      calls.push(["close", db])
+    },
   }))
 
   assert.equal(bytes.toString("utf8"), "sanitized sqlite")
   assert.deepEqual(calls, [
     ["vacuum", "/synthetic/private/desk/.state/.desk-snapshot-sanitized-opaque-id.sqlite"],
-    ["read", "/synthetic/private/desk/.state/.desk-snapshot-sanitized-opaque-id.sqlite"],
+    ["open", "/synthetic/private/desk/.state/.desk-snapshot-sanitized-opaque-id.sqlite"],
+    ["purge", { copy: true }],
+    [
+      "vacuum",
+      "/synthetic/private/desk/.state/.desk-snapshot-sanitized-opaque-id.sqlite.compacted.sqlite",
+    ],
+    ["close", { copy: true }],
+    [
+      "read",
+      "/synthetic/private/desk/.state/.desk-snapshot-sanitized-opaque-id.sqlite.compacted.sqlite",
+    ],
     [
       "remove",
       "/synthetic/private/desk/.state/.desk-snapshot-sanitized-opaque-id.sqlite",
+      { force: true },
+    ],
+    [
+      "remove",
+      "/synthetic/private/desk/.state/.desk-snapshot-sanitized-opaque-id.sqlite-wal",
+      { force: true },
+    ],
+    [
+      "remove",
+      "/synthetic/private/desk/.state/.desk-snapshot-sanitized-opaque-id.sqlite-shm",
+      { force: true },
+    ],
+    [
+      "remove",
+      "/synthetic/private/desk/.state/.desk-snapshot-sanitized-opaque-id.sqlite.compacted.sqlite",
+      { force: true },
+    ],
+    [
+      "remove",
+      "/synthetic/private/desk/.state/.desk-snapshot-sanitized-opaque-id.sqlite.compacted.sqlite-wal",
+      { force: true },
+    ],
+    [
+      "remove",
+      "/synthetic/private/desk/.state/.desk-snapshot-sanitized-opaque-id.sqlite.compacted.sqlite-shm",
       { force: true },
     ],
   ])

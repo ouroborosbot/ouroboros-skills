@@ -439,10 +439,25 @@ test("discovery grammar participates in every artifact source-scope hash", () =>
   const serverHelpersSource = readFileSync(path.join(mcpRoot, "src", "server-helpers.js"), "utf8")
   const artifactScriptsSource = readFileSync(path.join(mcpRoot, "src", "artifacts", "artifact-scripts.js"), "utf8")
   const generatedVerifierSource = readFileSync(path.join(repoRoot, generatedArtifactsScript), "utf8")
+  const manifestContractsPath = path.join(
+    mcpRoot,
+    "src",
+    "artifacts",
+    "manifest-contracts.cjs",
+  )
+  const manifestContractsSource = readFileSync(manifestContractsPath, "utf8")
 
-  assert.match(serverHelpersSource, /const ARTIFACT_SOURCE_SCOPE_PATHS = Object\.freeze\(\[[\s\S]*?"plugins\/desk\/mcp\/src\/indexer\/discover\.js"[\s\S]*?\]\)/u)
-  assert.match(artifactScriptsSource, /const DEFAULT_SOURCE_PATHS = Object\.freeze\(\[[\s\S]*?"plugins\/desk\/mcp\/src\/indexer\/discover\.js"[\s\S]*?\]\)/u)
-  assert.match(generatedVerifierSource, /const snapshotSourceScopePaths = Object\.freeze\(\[[\s\S]*?"plugins\/desk\/mcp\/src\/indexer\/discover\.js"[\s\S]*?\]\)/u)
+  assert.match(
+    manifestContractsSource,
+    /const ARTIFACT_SOURCE_PATHS = Object\.freeze\(\[[\s\S]*?"plugins\/desk\/mcp\/src\/indexer\/discover\.js"[\s\S]*?\]\)/u,
+  )
+  for (const consumerSource of [
+    serverHelpersSource,
+    artifactScriptsSource,
+    generatedVerifierSource,
+  ]) {
+    assert.match(consumerSource, /manifest-contracts\.cjs/u)
+  }
   for (const sourcePath of [
     "plugins/desk/mcp/src/artifacts/tombstones.js",
     "plugins/desk/mcp/src/indexer/chunk.js",
@@ -450,15 +465,21 @@ test("discovery grammar participates in every artifact source-scope hash", () =>
     "plugins/desk/mcp/src/indexer/exclusions.js",
     "plugins/desk/mcp/src/indexer/refs.js",
   ]) {
-    assert.ok(serverHelpersSource.includes(`"${sourcePath}"`))
-    assert.ok(artifactScriptsSource.includes(`"${sourcePath}"`))
-    assert.ok(generatedVerifierSource.includes(`"${sourcePath}"`))
+    assert.ok(manifestContractsSource.includes(`"${sourcePath}"`))
   }
 
   const tempMcpRoot = mkdtempSync(path.join(tmpdir(), "desk-discovery-source-scope-"))
   try {
     const discoverPath = path.join(tempMcpRoot, discoverRepoPath.replace(/^plugins\/desk\/mcp\//u, ""))
+    const contractPath = path.join(
+      tempMcpRoot,
+      "src",
+      "artifacts",
+      "manifest-contracts.cjs",
+    )
     mkdirSync(path.dirname(discoverPath), { recursive: true })
+    mkdirSync(path.dirname(contractPath), { recursive: true })
+    writeFileSync(contractPath, manifestContractsSource, "utf8")
     writeFileSync(discoverPath, "export const DISCOVERY_GRAMMAR_VERSION = 1\n", "utf8")
     const before = generatedArtifacts.artifactSourceScopeHash(tempMcpRoot)
     writeFileSync(discoverPath, "export const DISCOVERY_GRAMMAR_VERSION = 2\n", "utf8")

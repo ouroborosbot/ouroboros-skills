@@ -11,6 +11,7 @@ import {
   assertArtifactInputsDoNotContainTombstones,
   filterTombstonedDocuments,
 } from "./tombstones.js"
+import manifestContracts from "./manifest-contracts.cjs"
 import {
   DISCOVERY_GRAMMAR_VERSION,
   discover,
@@ -50,28 +51,11 @@ const SNAPSHOT_PORTABLE_RUNTIME = Object.freeze({
   node_abi: "portable",
 })
 const VECTOR_ENCODING = "float32-json"
-const DEFAULT_SOURCE_PATHS = Object.freeze([
-  "plugins/desk/mcp/src/artifacts/tombstones.js",
-  "plugins/desk/mcp/src/indexer/chunk.js",
-  "plugins/desk/mcp/src/indexer/discover.js",
-  "plugins/desk/mcp/src/indexer/document-tree.js",
-  "plugins/desk/mcp/src/indexer/exclusions.js",
-  "plugins/desk/mcp/src/indexer/index.js",
-  "plugins/desk/mcp/src/indexer/refs.js",
-  "plugins/desk/mcp/src/indexer/vector-packs.js",
-  "plugins/desk/mcp/src/snapshots/manifest.js",
-  "plugins/desk/mcp/src/snapshots/restore.js",
-  "plugins/desk/mcp/src/artifacts/artifact-scripts.js",
-  "plugins/desk/mcp/src/artifacts/policy.js",
-  "plugins/desk/mcp/src/server-helpers.js",
-  "plugins/desk/mcp/scripts/build-vector-pack.js",
-  "plugins/desk/mcp/scripts/build-snapshot.js",
-  "plugins/desk/mcp/scripts/verify-snapshot.js",
-  "plugins/desk/mcp/scripts/validate-artifacts.js",
-  "plugins/desk/mcp/src/db/schema.sql",
-  "plugins/desk/mcp/package.json",
-  "plugins/desk/mcp/package-lock.json",
-])
+const {
+  ARTIFACT_SOURCE_PATHS,
+  artifactSourceScopeHash,
+  validateArtifactManifest,
+} = manifestContracts
 
 export async function runVectorPackBuildCli(options = {}) {
   return runCli({
@@ -139,6 +123,9 @@ export async function buildVectorPackFromLocalDb({
   budgetConfig,
   now = Date.now,
   provenanceCommit,
+  policy,
+  publication,
+  signal,
 } = {}) {
   const budgets = await loadPerformanceBudgets({ configPath: budgetConfig, mcpRoot })
   const budgetMs = budgetValue(budgets, "rebuild", "vector_pack_rebuild_ms")
@@ -146,6 +133,7 @@ export async function buildVectorPackFromLocalDb({
   const startedAt = now()
   const db = openDb(requiredPath(deskRoot, "deskRoot"))
   try {
+    throwIfAborted(signal)
     const sourceDocs = representedDocuments(db)
     await assertCurrentArtifactIndex({
       db,
@@ -176,8 +164,18 @@ export async function buildVectorPackFromLocalDb({
         source: "local-db",
         commit: provenanceCommit ?? gitCommit(),
       },
-      source_paths: DEFAULT_SOURCE_PATHS,
+      source_paths: ARTIFACT_SOURCE_PATHS,
     }
+    validateArtifactManifest({
+      artifactType: "vector-pack",
+      manifest,
+      expectedSpec: ACTIVE_EMBEDDING_SPEC,
+      expectedArtifactSourceScopeHash: context.expectedArtifactSourceScopeHash,
+      expectedDocumentTreeHash: context.expectedDocumentTreeHash,
+      expectedDiscoveryGrammarVersion: DISCOVERY_GRAMMAR_VERSION,
+      expectedDocuments: sourceDocs,
+      artifactSha256: packSha,
+    })
     const paths = await writeVectorPackArtifact({
       pluginRoot,
       embeddingSpecId: ACTIVE_EMBEDDING_SPEC.id,
@@ -187,6 +185,9 @@ export async function buildVectorPackFromLocalDb({
       checksumBytes: Buffer.from(`${packSha}  ${packId}.jsonl\n`, "utf8"),
       deskRoot,
       sourceDocs,
+      policy,
+      publication,
+      signal,
     })
     const elapsedMs = assertWithinBudget({
       startedAt,
@@ -217,6 +218,8 @@ export async function buildSnapshotFromLocalDb({
   now = Date.now,
   provenanceCommit,
   signal,
+  policy,
+  publication,
 } = {}) {
   const budgets = await loadPerformanceBudgets({ configPath: budgetConfig, mcpRoot })
   const budgetMs = budgetValue(budgets, "rebuild", "snapshot_build_ms")
@@ -268,8 +271,21 @@ export async function buildSnapshotFromLocalDb({
         source: "local-db",
         commit: provenanceCommit ?? gitCommit(),
       },
-      source_paths: DEFAULT_SOURCE_PATHS,
+      source_paths: ARTIFACT_SOURCE_PATHS,
     }
+    validateArtifactManifest({
+      artifactType: "snapshot",
+      manifest,
+      expectedSpec: ACTIVE_EMBEDDING_SPEC,
+      expectedDbSchema: SNAPSHOT_DB_SCHEMA,
+      expectedSqliteVec: context.expectedSqliteVec,
+      expectedRuntime: context.expectedRuntime,
+      expectedArtifactSourceScopeHash: context.expectedArtifactSourceScopeHash,
+      expectedDocumentTreeHash: context.expectedDocumentTreeHash,
+      expectedDiscoveryGrammarVersion: DISCOVERY_GRAMMAR_VERSION,
+      expectedDocuments: sourceDocs,
+      artifactSha256: artifactSha,
+    })
     const paths = await writeSnapshotArtifact({
       pluginRoot,
       embeddingSpecId: ACTIVE_EMBEDDING_SPEC.id,
@@ -279,6 +295,9 @@ export async function buildSnapshotFromLocalDb({
       checksumBytes: Buffer.from(`${artifactSha}  ${snapshotId}.sqlite.zst\n`, "utf8"),
       deskRoot,
       sourceDocs,
+      policy,
+      publication,
+      signal,
     })
     const elapsedMs = assertWithinBudget({
       startedAt,
@@ -559,17 +578,6 @@ async function assertCurrentArtifactIndex({
   }
 }
 
-function artifactSourceScopeHash(mcpRoot) {
-  const hash = createHash("sha256")
-  for (const repoPath of DEFAULT_SOURCE_PATHS) {
-    const relFromMcp = repoPath.replace(/^plugins\/desk\/mcp\//u, "")
-    hash.update(`${repoPath}\0`)
-    hash.update(readFileOrEmpty(path.join(mcpRoot, relFromMcp)))
-    hash.update("\0")
-  }
-  return `sha256:${hash.digest("hex")}`
-}
-
 function sqliteVecVersion(mcpRoot) {
   const packageLock = JSON.parse(readFileSync(path.join(mcpRoot, "package-lock.json"), "utf8"))
   return packageLock.packages?.["node_modules/sqlite-vec"]?.version
@@ -718,18 +726,30 @@ async function readSanitizedSnapshotBytes({
   readFile = fs.readFile,
   removeFile = fs.rm,
   vacuumInto = vacuumDbInto,
+  openSanitizedDb = openSanitizedSnapshotDb,
+  closeSanitizedDb = closeDb,
+  purgeOrphanVectors = purgeOrphanChunkVectors,
 } = {}) {
   const sanitizedDbPath = path.join(
     path.dirname(indexDbPath(deskRoot)),
     `.desk-snapshot-sanitized-${makeId()}.sqlite`,
   )
+  const compactedDbPath = `${sanitizedDbPath}.compacted.sqlite`
   let bytes
   let failure
+  let sanitizedDb
   try {
     throwIfAborted(signal)
     vacuumInto(db, sanitizedDbPath)
     throwIfAborted(signal)
-    bytes = await readFile(sanitizedDbPath)
+    sanitizedDb = openSanitizedDb({ deskRoot, filePath: sanitizedDbPath })
+    purgeOrphanVectors(sanitizedDb)
+    throwIfAborted(signal)
+    vacuumInto(sanitizedDb, compactedDbPath)
+    closeSanitizedDb(sanitizedDb)
+    sanitizedDb = undefined
+    throwIfAborted(signal)
+    bytes = await readFile(compactedDbPath)
     throwIfAborted(signal)
   } catch (error) {
     if (error?.name === "AbortError") {
@@ -739,9 +759,32 @@ async function readSanitizedSnapshotBytes({
       failure.code = "snapshot_sanitization_failed"
     }
   }
-  try {
-    await removeFile(sanitizedDbPath, { force: true })
-  } catch {
+  if (sanitizedDb !== undefined) {
+    try {
+      closeSanitizedDb(sanitizedDb)
+    } catch {
+      if (!failure) {
+        failure = new Error("snapshot sanitized logical copy failed")
+        failure.code = "snapshot_sanitization_failed"
+      }
+    }
+  }
+  let cleanupFailed = false
+  for (const cleanupPath of [
+    sanitizedDbPath,
+    `${sanitizedDbPath}-wal`,
+    `${sanitizedDbPath}-shm`,
+    compactedDbPath,
+    `${compactedDbPath}-wal`,
+    `${compactedDbPath}-shm`,
+  ]) {
+    try {
+      await removeFile(cleanupPath, { force: true })
+    } catch {
+      cleanupFailed = true
+    }
+  }
+  if (cleanupFailed) {
     const cleanupError = new Error("snapshot sanitized database cleanup failed")
     cleanupError.code = "snapshot_sanitization_cleanup_failed"
     if (failure?.name === "AbortError") cleanupError.name = "AbortError"
@@ -749,6 +792,30 @@ async function readSanitizedSnapshotBytes({
   }
   if (failure) throw failure
   return bytes
+}
+
+function openSanitizedSnapshotDb({ deskRoot, filePath }) {
+  return openDb(deskRoot, { dbPath: filePath })
+}
+
+function purgeOrphanChunkVectors(db) {
+  const orphanIds = db.prepare(
+    `SELECT v.chunk_id
+     FROM chunk_vecs v
+     LEFT JOIN chunks c ON c.id = v.chunk_id
+     WHERE c.id IS NULL
+     ORDER BY v.chunk_id`,
+  ).all().map((row) => row.chunk_id)
+  const deleteVector = db.prepare(
+    "DELETE FROM chunk_vecs WHERE chunk_id = ?",
+  )
+  const transaction = db.transaction((chunkIds) => {
+    for (const chunkId of chunkIds) {
+      deleteVector.run(BigInt(chunkId))
+    }
+  })
+  transaction(orphanIds)
+  return orphanIds.length
 }
 
 function vacuumDbInto(db, destinationPath) {
@@ -861,6 +928,7 @@ function compressSnapshotBytes(sqliteBytes, codec = zlib) {
 }
 
 export const __artifactScriptInternalsForTests = {
+  ARTIFACT_SOURCE_PATHS,
   commonRoots,
   checkpointDb,
   compressSnapshotBytes,
@@ -870,8 +938,10 @@ export const __artifactScriptInternalsForTests = {
   gitCommit,
   optionalProvenanceCommit,
   optionalString,
+  purgeOrphanChunkVectors,
   readSanitizedSnapshotBytes,
   readFileOrEmpty,
   requiredPath,
+  validateArtifactManifest,
   valuesFor,
 }

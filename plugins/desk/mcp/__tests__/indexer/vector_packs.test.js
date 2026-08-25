@@ -9,11 +9,13 @@ import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { closeDb, openDb } from "../../src/db/init.js"
+import manifestContracts from "../../src/artifacts/manifest-contracts.cjs"
 import {
   ACTIVE_EMBEDDING_SPEC,
   chunkIdentity,
 } from "../../src/indexer/spec.js"
 
+const { ARTIFACT_SOURCE_PATHS } = manifestContracts
 const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
 const repoRoot = path.resolve(mcpRoot, "..", "..", "..")
 const deskPluginRoot = path.join(repoRoot, "plugins", "desk")
@@ -111,11 +113,17 @@ async function writePack({
     encoding: "float32-json",
     row_count: rows.length,
     rows_sha256: packSha,
+    artifact_source_scope_hash: SOURCE_SCOPE_HASH,
+    document_tree_hash: representedDocumentsHash([]),
+    discovery_grammar_version: DISCOVERY_GRAMMAR_VERSION,
+    represented_documents: [],
     created_at: "2026-06-15T00:00:00.000Z",
     provenance: {
-      builder: "artifact:vector-pack:build",
-      source: "unit-test",
+      builder: "plugins/desk/mcp/scripts/build-vector-pack.js",
+      source: "local-db",
+      commit: "0123456789abcdef0123456789abcdef01234567",
     },
+    source_paths: ARTIFACT_SOURCE_PATHS,
     ...manifest,
   }
   await fs.writeFile(packPath, jsonl, "utf8")
@@ -553,7 +561,7 @@ test("vector-pack freshness hashes sorted represented documents", async () => {
     chunk: { text: "sorted represented document tree chunk" },
   })
   const representedDocuments = [
-    { path: "z.md", hash: "a".repeat(64) },
+    { path: "z.md", hash: `sha256:${"a".repeat(64)}` },
     { path: "a.md", hash: `sha256:${"b".repeat(64)}` },
   ]
   const documentTreeHash = representedDocumentsHash(representedDocuments)
@@ -581,7 +589,7 @@ test("vector-pack freshness hashes sorted represented documents", async () => {
   })
 })
 
-test("vector-pack freshness treats malformed represented documents as stale", async () => {
+test("vector-pack validation rejects malformed represented documents", async () => {
   const { validateVectorPackFile } = await loadVectorPackModule()
   const root = await tmpRoot()
   const pluginRoot = path.join(root, "plugins", "desk")
@@ -609,17 +617,18 @@ test("vector-pack freshness treats malformed represented documents as stale", as
       },
     })
 
-    const result = await validateVectorPackFile({
-      pluginRoot,
-      packPath: paths.packPath,
-      manifestPath: paths.manifestPath,
-      checksumPath: paths.checksumPath,
-      expectedSpec: ACTIVE_EMBEDDING_SPEC,
-      expectedDocumentTreeHash: `sha256:${"c".repeat(64)}`,
-      expectedDocuments: [],
-    })
-
-    assert.equal(result.freshness.document_tree, "stale")
+    await assert.rejects(
+      () => validateVectorPackFile({
+        pluginRoot,
+        packPath: paths.packPath,
+        manifestPath: paths.manifestPath,
+        checksumPath: paths.checksumPath,
+        expectedSpec: ACTIVE_EMBEDDING_SPEC,
+        expectedDocumentTreeHash: `sha256:${"c".repeat(64)}`,
+        expectedDocuments: [],
+      }),
+      /represented_documents/u,
+    )
   }
 })
 
@@ -632,7 +641,7 @@ test("vector-pack freshness treats malformed expected documents as stale", async
     chunk: { text: "malformed expected document tree chunk" },
   })
   const representedDocuments = [
-    { path: "trackA/task-1/task.md", hash: "a".repeat(64) },
+    { path: "trackA/task-1/task.md", hash: `sha256:${"a".repeat(64)}` },
   ]
   const paths = await writePack({
     pluginRoot,
@@ -839,7 +848,7 @@ test("vector pack validation rejects malformed manifests before import", async (
     {
       name: "bad-row-count",
       manifest: { row_count: -1 },
-      pattern: /row_count.*non-negative integer/u,
+      pattern: /row_count.*integer/u,
     },
     {
       name: "bad-rows-sha",

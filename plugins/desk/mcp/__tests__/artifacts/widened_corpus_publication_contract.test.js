@@ -23,6 +23,7 @@ import {
   buildSnapshotFromLocalDb,
   buildVectorPackFromLocalDb,
 } from "../../src/artifacts/artifact-scripts.js"
+import manifestContracts from "../../src/artifacts/manifest-contracts.cjs"
 import {
   evaluateArtifactPublication,
 } from "../../src/artifacts/policy.js"
@@ -88,28 +89,9 @@ const MANIFEST_VALUE_LEAK_PROBES = Object.freeze([
   "SYNTHETIC_PRIVATE_SNIPPET_MARKER",
   "SYNTHETIC_PRIVATE_QUERY_MARKER",
 ])
-const WIDENED_SOURCE_SCOPE_PATHS = Object.freeze([
-  "plugins/desk/mcp/src/artifacts/tombstones.js",
-  "plugins/desk/mcp/src/indexer/chunk.js",
-  "plugins/desk/mcp/src/indexer/discover.js",
-  "plugins/desk/mcp/src/indexer/document-tree.js",
-  "plugins/desk/mcp/src/indexer/exclusions.js",
-  "plugins/desk/mcp/src/indexer/index.js",
-  "plugins/desk/mcp/src/indexer/refs.js",
-  "plugins/desk/mcp/src/indexer/vector-packs.js",
-  "plugins/desk/mcp/src/snapshots/manifest.js",
-  "plugins/desk/mcp/src/snapshots/restore.js",
-  "plugins/desk/mcp/src/artifacts/artifact-scripts.js",
-  "plugins/desk/mcp/src/artifacts/policy.js",
-  "plugins/desk/mcp/src/server-helpers.js",
-  "plugins/desk/mcp/scripts/build-vector-pack.js",
-  "plugins/desk/mcp/scripts/build-snapshot.js",
-  "plugins/desk/mcp/scripts/verify-snapshot.js",
-  "plugins/desk/mcp/scripts/validate-artifacts.js",
-  "plugins/desk/mcp/src/db/schema.sql",
-  "plugins/desk/mcp/package.json",
-  "plugins/desk/mcp/package-lock.json",
-])
+const {
+  ARTIFACT_SOURCE_PATHS: WIDENED_SOURCE_SCOPE_PATHS,
+} = manifestContracts
 const PUBLICATION_GUIDANCE_DOCS = Object.freeze([
   "plugins/desk/README.md",
   "plugins/desk/mcp/README.md",
@@ -163,86 +145,6 @@ const VECTOR_PACK_ROW_KEYS = Object.freeze([
   "text_hash",
   "vector",
 ])
-const IDENTIFIER_SCHEMA = Object.freeze({
-  type: "string",
-  pattern: /^[a-z0-9][a-z0-9._-]*$/iu,
-})
-const SHA256_SCHEMA = Object.freeze({
-  type: "string",
-  pattern: /^sha256:[a-f0-9]{64}$/u,
-})
-const REPRESENTED_DOCUMENT_SCHEMA = objectSchema({
-  hash: SHA256_SCHEMA,
-  path: { type: "string", minLength: 1 },
-})
-const SHARED_MANIFEST_SCHEMA = Object.freeze({
-  artifact_source_scope_hash: SHA256_SCHEMA,
-  created_at: { type: "string", format: "iso-timestamp" },
-  dimension: { type: "number", integer: true, const: ACTIVE_EMBEDDING_SPEC.dimension },
-  discovery_grammar_version: { type: "number", integer: true, const: 2 },
-  document_tree_hash: SHA256_SCHEMA,
-  embedding_spec_id: { type: "string", const: ACTIVE_EMBEDDING_SPEC.id },
-  represented_documents: arraySchema(REPRESENTED_DOCUMENT_SCHEMA),
-  schema_version: { type: "number", integer: true, const: 1 },
-  source_paths: arraySchema({ type: "string", minLength: 1 }),
-})
-const VECTOR_PACK_MANIFEST_SCHEMA = objectSchema({
-  ...SHARED_MANIFEST_SCHEMA,
-  encoding: { type: "string", const: "float32-json" },
-  pack_id: IDENTIFIER_SCHEMA,
-  provenance: provenanceSchema("plugins/desk/mcp/scripts/build-vector-pack.js"),
-  row_count: { type: "number", integer: true, minimum: 0 },
-  rows_sha256: { type: "string", pattern: /^[a-f0-9]{64}$/u },
-})
-const SNAPSHOT_MANIFEST_SCHEMA = objectSchema({
-  ...SHARED_MANIFEST_SCHEMA,
-  artifact: objectSchema({
-    compressed: { type: "boolean", const: true },
-    file: { type: "string", pattern: /^[a-z0-9][a-z0-9._-]*\.sqlite\.zst$/iu },
-    format: { type: "string", const: "sqlite-zstd" },
-    sha256: SHA256_SCHEMA,
-  }),
-  chunker_id: { type: "string", const: ACTIVE_EMBEDDING_SPEC.chunker_id },
-  db_schema: objectSchema({
-    id: { type: "string", const: "desk-index-sqlite-v1" },
-    version: { type: "number", integer: true, const: 1 },
-  }),
-  included_pack_ids: arraySchema(IDENTIFIER_SCHEMA),
-  normalization_id: { type: "string", const: ACTIVE_EMBEDDING_SPEC.normalization_id },
-  provenance: provenanceSchema("plugins/desk/mcp/scripts/build-snapshot.js"),
-  runtime: objectSchema({
-    arch: { type: "string", const: "portable" },
-    node_abi: { type: "string", const: "portable" },
-    platform: { type: "string", const: "portable" },
-  }),
-  snapshot_id: IDENTIFIER_SCHEMA,
-  sqlite_vec: objectSchema({
-    package: { type: "string", const: "sqlite-vec" },
-    table: { type: "string", const: "vec0" },
-    version: { type: "string", pattern: /^\d+\.\d+\.\d+$/u },
-  }),
-})
-const MANIFEST_SCHEMAS = Object.freeze({
-  snapshot: SNAPSHOT_MANIFEST_SCHEMA,
-  "vector-pack": VECTOR_PACK_MANIFEST_SCHEMA,
-})
-
-function objectSchema(properties) {
-  return Object.freeze({ type: "object", properties: Object.freeze(properties) })
-}
-
-function arraySchema(items) {
-  return Object.freeze({ type: "array", items })
-}
-
-function provenanceSchema(builder) {
-  return objectSchema({
-    builder: { type: "string", const: builder },
-    commit: { type: "string", pattern: /^[a-f0-9]{40}$/u },
-    source: { type: "string", const: "local-db" },
-  })
-}
-
 async function collectSyntheticFixtureBodyMarkers() {
   const markers = new Set(EXCLUDED_MARKERS)
   const visit = async (directory) => {
@@ -1180,6 +1082,13 @@ test("artifact source-scope hashing invalidates deterministically when restored-
   const discoverPath = path.join(scratchMcpRoot, "src", "indexer", "discover.js")
   const helpersPath = path.join(scratchMcpRoot, "src", "server-helpers.js")
   try {
+    await mkdir(path.join(scratchMcpRoot, "src", "artifacts"), {
+      recursive: true,
+    })
+    await cp(
+      path.join(mcpRoot, "src", "artifacts", "manifest-contracts.cjs"),
+      path.join(scratchMcpRoot, "src", "artifacts", "manifest-contracts.cjs"),
+    )
     await writeText(scratchMcpRoot, "src/indexer/discover.js", "discover-v1\n")
     await writeText(scratchMcpRoot, "src/server-helpers.js", "restore-v1\n")
     const baseline = generatedArtifacts.artifactSourceScopeHash(scratchMcpRoot)

@@ -8,6 +8,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import matter from "gray-matter"
 
+import manifestContracts from "../../src/artifacts/manifest-contracts.cjs"
 import { closeDb, openDb } from "../../src/db/init.js"
 import { chunkBody } from "../../src/indexer/chunk.js"
 import {
@@ -30,6 +31,7 @@ import {
 } from "../../src/server-helpers.js"
 import { desk_reindex } from "../../src/tools/reindex.js"
 
+const { ARTIFACT_SOURCE_PATHS } = manifestContracts
 const NO_RELEASE_ARTIFACTS = { snapshots: false, vectorPacks: false }
 
 async function tmpRoot(prefix = "desk-vector-rebuild-") {
@@ -107,9 +109,11 @@ async function writePack({ deskRoot, pluginRoot, packId, rows }) {
       represented_documents: representedDocuments,
       created_at: "2026-06-15T00:00:00.000Z",
       provenance: {
-        builder: "artifact:vector-pack:build",
-        source: "unit-test",
+        builder: "plugins/desk/mcp/scripts/build-vector-pack.js",
+        source: "local-db",
+        commit: "0123456789abcdef0123456789abcdef01234567",
       },
+      source_paths: ARTIFACT_SOURCE_PATHS,
     }, null, 2)}\n`,
     "utf8",
   )

@@ -10,6 +10,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
+import manifestContracts from "../../src/artifacts/manifest-contracts.cjs"
 import { closeDb, openDb } from "../../src/db/init.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
@@ -25,6 +26,7 @@ import {
 } from "../../src/snapshots/manifest.js"
 
 const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
+const { ARTIFACT_SOURCE_PATHS } = manifestContracts
 const repoRoot = path.resolve(mcpRoot, "..", "..", "..")
 const deskPluginRoot = path.join(repoRoot, "plugins", "desk")
 const publicationPolicySchemaPath = path.join(
@@ -132,12 +134,17 @@ async function writeVectorValidationFixture({
       encoding: "float32-json",
       row_count: 1,
       rows_sha256: packSha,
+      artifact_source_scope_hash: SNAPSHOT_SOURCE_SCOPE_HASH,
+      document_tree_hash: SNAPSHOT_DOCUMENT_TREE_HASH,
+      discovery_grammar_version: 2,
       represented_documents,
       created_at: "2026-06-15T00:00:00.000Z",
       provenance: {
-        builder: "artifact:vector-pack:build",
-        source: "unit-test",
+        builder: "plugins/desk/mcp/scripts/build-vector-pack.js",
+        source: "local-db",
+        commit: "0123456789abcdef0123456789abcdef01234567",
       },
+      source_paths: ARTIFACT_SOURCE_PATHS,
     }, null, 2)}\n`,
     "utf8",
   )
@@ -177,6 +184,7 @@ async function writeSnapshotValidationFixture({
       runtime: SNAPSHOT_RUNTIME,
       artifact_source_scope_hash: SNAPSHOT_SOURCE_SCOPE_HASH,
       document_tree_hash: SNAPSHOT_DOCUMENT_TREE_HASH,
+      discovery_grammar_version: 2,
       included_pack_ids: ["redaction-pack"],
       represented_documents,
       created_at: "2026-06-15T00:00:00.000Z",
@@ -188,14 +196,10 @@ async function writeSnapshotValidationFixture({
       },
       provenance: {
         builder: "plugins/desk/mcp/scripts/build-snapshot.js",
-        source: "unit-test",
+        source: "local-db",
         commit: "0123456789abcdef0123456789abcdef01234567",
       },
-      source_paths: [
-        "plugins/desk/mcp/src/snapshots/restore.js",
-        "plugins/desk/mcp/src/db/schema.sql",
-        "plugins/desk/mcp/package-lock.json",
-      ],
+      source_paths: ARTIFACT_SOURCE_PATHS,
     }, null, 2)}\n`,
     "utf8",
   )
@@ -229,6 +233,75 @@ async function fileHashes(root) {
 
 function sha256(value) {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`
+}
+
+function writerPayload(artifactType, artifactId, sourceDocs) {
+  const primaryBytes = artifactType === "vector-pack"
+    ? Buffer.alloc(0)
+    : Buffer.from("sqlite bytes", "utf8")
+  const artifactHash = sha256(primaryBytes)
+  const representedDocuments = sourceDocs.map(({ path: documentPath, hash }) => ({
+    path: documentPath,
+    hash,
+  }))
+  const common = {
+    schema_version: 1,
+    embedding_spec_id: ACTIVE_EMBEDDING_SPEC.id,
+    dimension: ACTIVE_EMBEDDING_SPEC.dimension,
+    artifact_source_scope_hash: SNAPSHOT_SOURCE_SCOPE_HASH,
+    document_tree_hash: SNAPSHOT_DOCUMENT_TREE_HASH,
+    discovery_grammar_version: 2,
+    represented_documents: representedDocuments,
+    created_at: "2026-06-15T00:00:00.000Z",
+    source_paths: ARTIFACT_SOURCE_PATHS,
+  }
+  const manifest = artifactType === "vector-pack"
+    ? {
+        ...common,
+        pack_id: artifactId,
+        encoding: "float32-json",
+        row_count: 0,
+        rows_sha256: artifactHash.slice("sha256:".length),
+        provenance: {
+          builder: "plugins/desk/mcp/scripts/build-vector-pack.js",
+          source: "local-db",
+          commit: "0123456789abcdef0123456789abcdef01234567",
+        },
+      }
+    : {
+        ...common,
+        snapshot_id: artifactId,
+        chunker_id: ACTIVE_EMBEDDING_SPEC.chunker_id,
+        normalization_id: ACTIVE_EMBEDDING_SPEC.normalization_id,
+        db_schema: SNAPSHOT_DB_SCHEMA,
+        sqlite_vec: SNAPSHOT_SQLITE_VEC,
+        runtime: SNAPSHOT_RUNTIME,
+        included_pack_ids: [],
+        artifact: {
+          file: `${artifactId}.sqlite.zst`,
+          format: "sqlite-zstd",
+          sha256: artifactHash,
+          compressed: true,
+        },
+        provenance: {
+          builder: "plugins/desk/mcp/scripts/build-snapshot.js",
+          source: "local-db",
+          commit: "0123456789abcdef0123456789abcdef01234567",
+        },
+      }
+  return {
+    primaryBytes,
+    manifestBytes: `${JSON.stringify(manifest, null, 2)}\n`,
+    checksumBytes: `${
+      artifactType === "vector-pack"
+        ? artifactHash.slice("sha256:".length)
+        : artifactHash
+    }  ${
+      artifactType === "vector-pack"
+        ? `${artifactId}.jsonl`
+        : `${artifactId}.sqlite.zst`
+    }\n`,
+  }
 }
 
 function tombstoneRow(overrides = {}) {
@@ -765,23 +838,29 @@ test("artifact writers reject tombstoned active and archived source docs before 
   }
   assert.deepEqual(await fileHashes(artifactsRoot), beforeRejectedWrites)
 
+  const safePack = writerPayload("vector-pack", "safe-pack", safeSourceDocs)
   await assert.doesNotReject(() => writeVectorPackArtifact({
     pluginRoot,
     deskRoot,
     packId: "safe-pack",
-    packBytes: "",
-    manifestBytes: "{}\n",
-    checksumBytes: "sha256:safe  safe-pack.jsonl\n",
+    packBytes: safePack.primaryBytes,
+    manifestBytes: safePack.manifestBytes,
+    checksumBytes: safePack.checksumBytes,
     policy: approvedPublicationPolicy(),
     sourceDocs: safeSourceDocs,
   }))
+  const safeSnapshot = writerPayload(
+    "snapshot",
+    "safe-snapshot",
+    safeSourceDocs,
+  )
   await assert.doesNotReject(() => writeSnapshotArtifact({
     pluginRoot,
     deskRoot,
     snapshotId: "safe-snapshot",
-    snapshotBytes: "sqlite bytes",
-    manifestBytes: "{}\n",
-    checksumBytes: "sha256:safe  safe-snapshot.sqlite.zst\n",
+    snapshotBytes: safeSnapshot.primaryBytes,
+    manifestBytes: safeSnapshot.manifestBytes,
+    checksumBytes: safeSnapshot.checksumBytes,
     policy: approvedPublicationPolicy(),
     sourceDocs: safeSourceDocs,
   }))

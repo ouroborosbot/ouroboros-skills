@@ -596,7 +596,6 @@ test("production artifact checksums can be validated from string git blobs", asy
     const expectation = await tempExpectation({
       tempDir,
       modules: {
-        activeEmbeddingSpec: { id: "unit-spec" },
         validateArtifacts: async (args) => {
           validationArgs = args
           return greenValidation()
@@ -613,10 +612,42 @@ test("production artifact checksums can be validated from string git blobs", asy
       documentTreeHash: docTree(currentDocs),
     })
     writeProductionPolicy(expectation.pluginRoot, validPublicationPolicy())
-    const manifest = {
+    const packTemplate = JSON.parse(readFileSync(path.join(
+      pluginRoot,
+      "artifacts",
+      "vector-packs",
+      expectation.embeddingSpecId,
+      "repo-public-bootstrap-2026-06-15.manifest.json",
+    ), "utf8"))
+    const snapshotTemplate = JSON.parse(readFileSync(path.join(
+      pluginRoot,
+      "artifacts",
+      "snapshots",
+      expectation.embeddingSpecId,
+      "repo-public-bootstrap-2026-06-15.manifest.json",
+    ), "utf8"))
+    const packManifest = {
+      ...packTemplate,
+      pack_id: "unit-pack",
+      row_count: 0,
+      rows_sha256: sha256("artifact bytes\n").slice("sha256:".length),
       artifact_source_scope_hash: sourceHash,
       document_tree_hash: docTree(currentDocs),
       represented_documents: currentDocs,
+      source_paths: expectation.modules.artifactSourcePaths,
+    }
+    const snapshotManifest = {
+      ...snapshotTemplate,
+      snapshot_id: "unit-snapshot",
+      artifact_source_scope_hash: sourceHash,
+      document_tree_hash: docTree(currentDocs),
+      represented_documents: currentDocs,
+      artifact: {
+        ...snapshotTemplate.artifact,
+        file: "unit-snapshot.sqlite.zst",
+        sha256: sha256("artifact bytes\n"),
+      },
+      source_paths: expectation.modules.artifactSourcePaths,
     }
     const vectorPrimaryPath = writeFile(expectation.vectorPackDir, "unit-pack.jsonl", "artifact bytes\n")
     const vectorChecksumPath = writeFile(
@@ -624,14 +655,14 @@ test("production artifact checksums can be validated from string git blobs", asy
       "unit-pack.sha256",
       `${sha256("artifact bytes\n")}  unit-pack.jsonl\n`,
     )
-    writeJson(expectation.vectorPackDir, "unit-pack.manifest.json", manifest)
+    writeJson(expectation.vectorPackDir, "unit-pack.manifest.json", packManifest)
     const snapshotPrimaryPath = writeFile(expectation.snapshotDir, "unit-snapshot.sqlite.zst", "artifact bytes\n")
     const snapshotChecksumPath = writeFile(
       expectation.snapshotDir,
       "unit-snapshot.sha256",
       `${sha256("artifact bytes\n")}  unit-snapshot.sqlite.zst\n`,
     )
-    writeJson(expectation.snapshotDir, "unit-snapshot.manifest.json", manifest)
+    writeJson(expectation.snapshotDir, "unit-snapshot.manifest.json", snapshotManifest)
     const blobs = new Map([
       [repoPath(vectorPrimaryPath), "artifact bytes\n"],
       [repoPath(vectorChecksumPath), `${sha256("artifact bytes\n")}  unit-pack.jsonl\n`],

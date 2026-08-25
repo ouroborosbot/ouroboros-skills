@@ -141,9 +141,24 @@ export async function rebuildIndex(deskRoot, opts = {}) {
       }
     }
     if (deletedPaths.length) {
+      const chunkIdsForDoc = db.prepare(
+        `SELECT c.id
+         FROM chunks c
+         JOIN docs d ON d.id = c.doc_id
+         WHERE d.path = ?
+         ORDER BY c.id`,
+      )
+      const delVecStmt = db.prepare(
+        "DELETE FROM chunk_vecs WHERE chunk_id = ?",
+      )
       const delStmt = db.prepare("DELETE FROM docs WHERE path = ?")
       const delTxn = db.transaction((paths) => {
-        for (const p of paths) delStmt.run(p)
+        for (const p of paths) {
+          for (const chunk of chunkIdsForDoc.all(p)) {
+            delVecStmt.run(BigInt(chunk.id))
+          }
+          delStmt.run(p)
+        }
       })
       delTxn(deletedPaths)
       summary.docs_removed = deletedPaths.length

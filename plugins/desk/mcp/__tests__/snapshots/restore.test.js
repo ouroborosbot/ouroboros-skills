@@ -9,10 +9,12 @@ import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { zstdCompressSync } from "node:zlib"
 
+import manifestContracts from "../../src/artifacts/manifest-contracts.cjs"
 import { indexDbPath } from "../../src/db/init.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
 
 const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
+const { ARTIFACT_SOURCE_PATHS } = manifestContracts
 const SOURCE_SCOPE_HASH = `sha256:${"a".repeat(64)}`
 const DOCUMENT_TREE_HASH = `sha256:${"b".repeat(64)}`
 const DB_SCHEMA = { id: "desk-index-sqlite-v1", version: 1 }
@@ -62,6 +64,8 @@ function validManifest({
     runtime: RUNTIME,
     artifact_source_scope_hash: SOURCE_SCOPE_HASH,
     document_tree_hash: DOCUMENT_TREE_HASH,
+    discovery_grammar_version: 2,
+    represented_documents: [],
     included_pack_ids: ["desk-base-pack"],
     created_at: createdAt,
     artifact: {
@@ -72,14 +76,10 @@ function validManifest({
     },
     provenance: {
       builder: "plugins/desk/mcp/scripts/build-snapshot.js",
-      source: "unit-test",
+      source: "local-db",
       commit: "0123456789abcdef0123456789abcdef01234567",
     },
-    source_paths: [
-      "plugins/desk/mcp/src/snapshots/restore.js",
-      "plugins/desk/mcp/src/db/schema.sql",
-      "plugins/desk/mcp/package-lock.json",
-    ],
+    source_paths: ARTIFACT_SOURCE_PATHS,
   }
 }
 

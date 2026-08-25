@@ -24,28 +24,6 @@ const defaultProductionNotesPath = path.join(
 const productionCurrentSourceHashField = "current_artifact_source_scope_hash";
 const productionCurrentDocumentHashField = "current_document_tree_hash";
 const productionArtifactTypes = Object.freeze(["vector-pack", "snapshot"]);
-const snapshotSourceScopePaths = Object.freeze([
-  "plugins/desk/mcp/src/artifacts/tombstones.js",
-  "plugins/desk/mcp/src/indexer/chunk.js",
-  "plugins/desk/mcp/src/indexer/discover.js",
-  "plugins/desk/mcp/src/indexer/document-tree.js",
-  "plugins/desk/mcp/src/indexer/exclusions.js",
-  "plugins/desk/mcp/src/indexer/index.js",
-  "plugins/desk/mcp/src/indexer/refs.js",
-  "plugins/desk/mcp/src/indexer/vector-packs.js",
-  "plugins/desk/mcp/src/snapshots/manifest.js",
-  "plugins/desk/mcp/src/snapshots/restore.js",
-  "plugins/desk/mcp/src/artifacts/artifact-scripts.js",
-  "plugins/desk/mcp/src/artifacts/policy.js",
-  "plugins/desk/mcp/src/server-helpers.js",
-  "plugins/desk/mcp/scripts/build-vector-pack.js",
-  "plugins/desk/mcp/scripts/build-snapshot.js",
-  "plugins/desk/mcp/scripts/verify-snapshot.js",
-  "plugins/desk/mcp/scripts/validate-artifacts.js",
-  "plugins/desk/mcp/src/db/schema.sql",
-  "plugins/desk/mcp/package.json",
-  "plugins/desk/mcp/package-lock.json",
-]);
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -68,6 +46,7 @@ async function loadRuntimeDeps(mcpRoot = defaultMcpRoot) {
 }
 
 async function loadProductionArtifactModules(mcpRoot = defaultMcpRoot) {
+  const manifestContracts = loadManifestContracts(mcpRoot);
   const [spec, artifactScripts, policy] = await Promise.all([
     import(pathToFileURL(path.join(mcpRoot, "src", "indexer", "spec.js")).href),
     import(pathToFileURL(path.join(mcpRoot, "src", "artifacts", "artifact-scripts.js")).href),
@@ -75,10 +54,16 @@ async function loadProductionArtifactModules(mcpRoot = defaultMcpRoot) {
   ]);
   return {
     activeEmbeddingSpec: spec.ACTIVE_EMBEDDING_SPEC,
+    artifactSourcePaths: manifestContracts.ARTIFACT_SOURCE_PATHS,
     evaluateArtifactPublication: policy.evaluateArtifactPublication,
     loadPublicationPolicy: policy.loadPublicationPolicy,
+    validateArtifactManifest: manifestContracts.validateArtifactManifest,
     validateArtifacts: artifactScripts.validateArtifacts,
   };
+}
+
+function loadManifestContracts(mcpRoot = defaultMcpRoot) {
+  return require(path.join(mcpRoot, "src", "artifacts", "manifest-contracts.cjs"));
 }
 
 function publishedRuntimePackTargets(options = {}) {
@@ -768,6 +753,13 @@ function verifyFreshnessManifests({ errors, expectation, expectedHashes, vectorP
       manifest,
       expectedHashes,
     });
+    verifyProductionManifestContract({
+      artifactType: "vector-pack",
+      errors,
+      expectation,
+      label: "production vector pack manifest contract",
+      manifest,
+    });
     verifyCurrentRepresentedDocuments({
       errors,
       expectation,
@@ -786,6 +778,13 @@ function verifyFreshnessManifests({ errors, expectation, expectedHashes, vectorP
       manifest,
       expectedHashes,
     });
+    verifyProductionManifestContract({
+      artifactType: "snapshot",
+      errors,
+      expectation,
+      label: "production snapshot manifest contract",
+      manifest,
+    });
     verifyCurrentRepresentedDocuments({
       errors,
       expectation,
@@ -793,6 +792,25 @@ function verifyFreshnessManifests({ errors, expectation, expectedHashes, vectorP
       manifest,
       expectedHashes,
     });
+  }
+}
+
+function verifyProductionManifestContract({
+  artifactType,
+  errors,
+  expectation,
+  label,
+  manifest,
+}) {
+  try {
+    expectation.modules.validateArtifactManifest({
+      artifactType,
+      manifest,
+      expectedSpec: expectation.modules.activeEmbeddingSpec,
+      expectedSourcePaths: expectation.modules.artifactSourcePaths,
+    });
+  } catch (error) {
+    errors.push(`${label}: ${formatErrorMessage(error)}`);
   }
 }
 
@@ -872,14 +890,7 @@ function normalizedRelativeDocPath(value) {
 }
 
 function artifactSourceScopeHash(mcpRoot) {
-  const hash = createHash("sha256");
-  for (const repoPath of snapshotSourceScopePaths) {
-    const relFromMcp = repoPath.replace(/^plugins\/desk\/mcp\//u, "");
-    hash.update(`${repoPath}\0`);
-    hash.update(readFileIfPresent(path.join(mcpRoot, relFromMcp)) ?? Buffer.alloc(0));
-    hash.update("\0");
-  }
-  return `sha256:${hash.digest("hex")}`;
+  return loadManifestContracts(mcpRoot).artifactSourceScopeHash(mcpRoot);
 }
 
 function documentTreeHash(docs) {
