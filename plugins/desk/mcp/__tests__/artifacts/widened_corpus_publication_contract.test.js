@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url"
 import { zstdDecompressSync } from "node:zlib"
 
 import {
+  __artifactScriptInternalsForTests,
   buildSnapshotFromLocalDb,
   buildVectorPackFromLocalDb,
 } from "../../src/artifacts/artifact-scripts.js"
@@ -314,13 +315,17 @@ async function copyDeskWithoutLocalState(sourceRoot, targetRoot) {
 
 function embedFetch(prompts = []) {
   return async (_url, request) => {
-    prompts.push(JSON.parse(request.body).prompt)
+    const prompt = JSON.parse(request.body).prompt
+    prompts.push(prompt)
+    const digest = createHash("sha256").update(prompt).digest()
     return {
       ok: true,
       json: async () => ({
         embedding: Array.from(
           { length: ACTIVE_EMBEDDING_SPEC.dimension },
-          (_, index) => (index % 31) / 31,
+          (_, index) => (
+            (digest[index % digest.length] + index * 17) % 251
+          ) / 251,
         ),
       }),
     }
@@ -407,11 +412,31 @@ function indexedChunks(deskRoot) {
   const db = openDb(deskRoot)
   try {
     return db.prepare(
-      `SELECT d.path, c.chunk_key, c.text_hash, c.text
+      `SELECT d.path, c.chunk_key, c.text_hash, c.text, v.embedding
        FROM chunks c
        JOIN docs d ON d.id = c.doc_id
+       LEFT JOIN chunk_vecs v ON v.chunk_id = c.id
        ORDER BY d.path, c.chunk_index`,
-    ).all()
+    ).all().map((row) => ({
+      ...row,
+      vector_hex: row.embedding === null
+        ? null
+        : Buffer.from(row.embedding).toString("hex"),
+    }))
+  } finally {
+    closeDb(db)
+  }
+}
+
+function indexedVectors(deskRoot) {
+  const db = openDb(deskRoot)
+  try {
+    return db.prepare(
+      "SELECT chunk_id, embedding FROM chunk_vecs ORDER BY chunk_id",
+    ).all().map((row) => ({
+      chunk_id: row.chunk_id,
+      vector_hex: Buffer.from(row.embedding).toString("hex"),
+    }))
   } finally {
     closeDb(db)
   }
@@ -425,9 +450,10 @@ function captureRemovedDocuments(deskRoot) {
       .join("\n")
     return REMOVED_DOCUMENTS.map((document) => {
       const chunks = db.prepare(
-        `SELECT c.chunk_key, c.text_hash, c.text
+        `SELECT c.chunk_key, c.text_hash, c.text, v.embedding
          FROM chunks c
          JOIN docs d ON d.id = c.doc_id
+         JOIN chunk_vecs v ON v.chunk_id = c.id
          WHERE d.path = ?
          ORDER BY c.chunk_index`,
       ).all(document.path)
@@ -447,6 +473,8 @@ function captureRemovedDocuments(deskRoot) {
         chunks: chunks.map((chunk) => ({
           chunk_key: chunk.chunk_key,
           text_hash: chunk.text_hash,
+          vector_bytes: Buffer.from(chunk.embedding),
+          vector_hex: Buffer.from(chunk.embedding).toString("hex"),
         })),
       }
     })
@@ -460,20 +488,31 @@ function capturedIdentity(identity) {
 }
 
 function assertCapturedDocumentsPresent(rows, captures, label) {
-  const identities = new Set(rows.map(capturedIdentity))
+  const rowsByIdentity = new Map(rows.map((row) => [capturedIdentity(row), row]))
   for (const capture of captures) {
     for (const identity of capture.chunks) {
       assert.ok(
-        identities.has(capturedIdentity(identity)),
+        rowsByIdentity.has(capturedIdentity(identity)),
         `${label} must initially contain captured identity for ${capture.path}`,
+      )
+      assert.equal(
+        vectorHexFromValues(rowsByIdentity.get(capturedIdentity(identity)).vector),
+        identity.vector_hex,
+        `${label} must initially contain captured vector for ${capture.path}`,
       )
     }
   }
 }
 
+function vectorHexFromValues(vector) {
+  const values = Float32Array.from(vector)
+  return Buffer.from(values.buffer, values.byteOffset, values.byteLength).toString("hex")
+}
+
 function assertCapturedDocumentsAbsent(rows, captures, label, { text = true } = {}) {
   const chunkKeys = new Set(rows.map((row) => row.chunk_key))
   const textHashes = new Set(rows.map((row) => row.text_hash))
+  const vectorHexes = new Set(rows.map((row) => row.vector_hex).filter(Boolean))
   const liveText = text
     ? rows.map((row) => row.text ?? "").join("\n")
     : ""
@@ -495,6 +534,24 @@ function assertCapturedDocumentsAbsent(rows, captures, label, { text = true } = 
         textHashes.has(identity.text_hash),
         false,
         `${label} leaked removed text hash for ${capture.path}`,
+      )
+      assert.equal(
+        vectorHexes.has(identity.vector_hex),
+        false,
+        `${label} leaked removed vector payload for ${capture.path}`,
+      )
+    }
+  }
+}
+
+function assertCapturedVectorsAbsent(rows, captures, label) {
+  const vectorHexes = new Set(rows.map((row) => row.vector_hex))
+  for (const capture of captures) {
+    for (const identity of capture.chunks) {
+      assert.equal(
+        vectorHexes.has(identity.vector_hex),
+        false,
+        `${label} leaked removed vector payload for ${capture.path}`,
       )
     }
   }
@@ -553,70 +610,18 @@ function assertSerializedTreeExcludesCaptured(value, captures, label) {
 }
 
 function assertAllowedManifestSchema(manifest, artifactType, label) {
-  const schema = MANIFEST_SCHEMAS[artifactType]
-  assert.ok(schema, `${label} must identify a supported artifact type`)
-  const visit = (value, currentSchema, location) => {
-    if (currentSchema.type === "object") {
-      assert.ok(
-        value !== null && typeof value === "object" && !Array.isArray(value),
-        `${label} ${location} must be an object`,
-      )
-      assert.deepEqual(
-        Object.keys(value).sort(),
-        Object.keys(currentSchema.properties).sort(),
-        `${label} ${location} must contain exactly the allowed fields`,
-      )
-      for (const [key, childSchema] of Object.entries(currentSchema.properties)) {
-        visit(value[key], childSchema, `${location}.${key}`)
-      }
-      return
-    }
-    if (currentSchema.type === "array") {
-      assert.ok(Array.isArray(value), `${label} ${location} must be an array`)
-      value.forEach((entry, index) => {
-        visit(entry, currentSchema.items, `${location}[${index}]`)
-      })
-      return
-    }
-    assert.equal(typeof value, currentSchema.type, `${label} ${location} has the wrong type`)
-    if (currentSchema.type === "number") {
-      assert.ok(Number.isFinite(value), `${label} ${location} must be finite`)
-      if (currentSchema.integer) {
-        assert.ok(Number.isInteger(value), `${label} ${location} must be an integer`)
-      }
-      if (currentSchema.minimum !== undefined) {
-        assert.ok(value >= currentSchema.minimum, `${label} ${location} is below its minimum`)
-      }
-    }
-    if (currentSchema.type === "string" && currentSchema.minLength !== undefined) {
-      assert.ok(
-        value.length >= currentSchema.minLength,
-        `${label} ${location} must not be empty`,
-      )
-    }
-    if (currentSchema.pattern) {
-      assert.match(value, currentSchema.pattern, `${label} ${location} has an invalid value`)
-    }
-    if (currentSchema.format === "iso-timestamp") {
-      const parsed = new Date(value)
-      assert.equal(
-        Number.isNaN(parsed.getTime()) ? null : parsed.toISOString(),
-        value,
-        `${label} ${location} must be an ISO timestamp`,
-      )
-    }
-    if (Object.hasOwn(currentSchema, "const")) {
-      assert.equal(value, currentSchema.const, `${label} ${location} must preserve its contract`)
-    }
-  }
-  visit(manifest, schema, "$")
-  if (artifactType === "snapshot") {
-    assert.equal(
-      manifest.artifact.file,
-      `${manifest.snapshot_id}.sqlite.zst`,
-      `${label} artifact file must match snapshot_id`,
-    )
-  }
+  assert.equal(
+    typeof __artifactScriptInternalsForTests.validateArtifactManifest,
+    "function",
+    `${label} must use the production manifest contract`,
+  )
+  __artifactScriptInternalsForTests.validateArtifactManifest({
+    artifactType,
+    manifest,
+    expectedSpec: ACTIVE_EMBEDDING_SPEC,
+    expectedDiscoveryGrammarVersion: 2,
+    expectedSourcePaths: WIDENED_SOURCE_SCOPE_PATHS,
+  })
 }
 
 function manifestStringValueLeaks(value, forbiddenMarkers, location = "$", leaks = []) {
@@ -725,6 +730,13 @@ function assertSnapshotBytesExcludeCaptured(sqliteBytes, captures, label) {
       leaks.push(`${removed.kind} for ${removed.path}`)
     }
   }
+  for (const capture of captures) {
+    for (const identity of capture.chunks) {
+      if (sqliteBytes.includes(identity.vector_bytes)) {
+        leaks.push(`vector payload for ${capture.path}`)
+      }
+    }
+  }
   assert.deepEqual(leaks, [], `${label} leaked captured values:\n${leaks.join("\n")}`)
 }
 
@@ -750,11 +762,23 @@ async function inspectSnapshotPayload({
       sqliteBytes,
       docs: db.prepare("SELECT path FROM docs ORDER BY path").all().map((row) => row.path),
       chunks: db.prepare(
-        `SELECT d.path, c.chunk_key, c.text_hash, c.text
+        `SELECT d.path, c.chunk_key, c.text_hash, c.text, v.embedding
          FROM chunks c
          JOIN docs d ON d.id = c.doc_id
+         LEFT JOIN chunk_vecs v ON v.chunk_id = c.id
          ORDER BY d.path, c.chunk_index`,
-      ).all(),
+      ).all().map((row) => ({
+        ...row,
+        vector_hex: row.embedding === null
+          ? null
+          : Buffer.from(row.embedding).toString("hex"),
+      })),
+      vectors: db.prepare(
+        "SELECT chunk_id, embedding FROM chunk_vecs ORDER BY chunk_id",
+      ).all().map((row) => ({
+        chunk_id: row.chunk_id,
+        vector_hex: Buffer.from(row.embedding).toString("hex"),
+      })),
     }
   } finally {
     closeDb(db)
@@ -778,6 +802,12 @@ function artifactPaths(targetPluginRoot, artifactType, artifactId) {
 
 async function readJson(filePath) {
   return JSON.parse(await readFile(filePath, "utf8"))
+}
+
+function withoutField(value, field) {
+  const copy = { ...value }
+  delete copy[field]
+  return copy
 }
 
 function assertManifestIsMetadataOnly(
@@ -950,6 +980,14 @@ test("tombstones and deletions cannot reappear through packs, snapshots, restore
       closeDb(initialDb)
     }
     const removedCaptures = captureRemovedDocuments(deskRoot)
+    const removedVectorPayloads = removedCaptures.flatMap((capture) =>
+      capture.chunks.map((chunk) => chunk.vector_hex)
+    )
+    assert.equal(
+      new Set(removedVectorPayloads).size,
+      removedVectorPayloads.length,
+      "removed documents must have deterministic distinct vector payloads",
+    )
 
     const historicalPackId = "synthetic-before-redaction"
     await buildVectorPackFromLocalDb({
@@ -996,6 +1034,11 @@ test("tombstones and deletions cannot reappear through packs, snapshots, restore
       removedCaptures.filter((capture) => capture.path !== "references/cache-only.md"),
       "post-tombstone live index",
     )
+    assertCapturedVectorsAbsent(
+      indexedVectors(deskRoot),
+      removedCaptures.filter((capture) => capture.path !== "references/cache-only.md"),
+      "post-tombstone live vectors",
+    )
 
     const cacheSnapshotId = "synthetic-before-cache-delete"
     await buildSnapshotFromLocalDb({
@@ -1015,6 +1058,11 @@ test("tombstones and deletions cannot reappear through packs, snapshots, restore
       indexedChunks(deskRoot),
       removedCaptures,
       "post-deletion live index",
+    )
+    assertCapturedVectorsAbsent(
+      indexedVectors(deskRoot),
+      removedCaptures,
+      "post-deletion live vectors",
     )
 
     await copyDeskWithoutLocalState(deskRoot, restoredRoot)
@@ -1093,6 +1141,11 @@ test("tombstones and deletions cannot reappear through packs, snapshots, restore
         snapshot.chunks,
         removedCaptures,
         "decoded current snapshot DB",
+      )
+      assertCapturedVectorsAbsent(
+        snapshot.vectors,
+        removedCaptures,
+        "decoded current snapshot vectors",
       )
       for (const marker of EXCLUDED_MARKERS) {
         assert.equal(
@@ -1266,6 +1319,38 @@ test("manifest privacy guards reject unknown fields, scalar drift, and every pri
       },
     },
     {
+      label: "vector missing required field",
+      artifactType: "vector-pack",
+      manifest: withoutField(vectorManifest, "created_at"),
+    },
+    {
+      label: "vector duplicate source paths",
+      artifactType: "vector-pack",
+      manifest: {
+        ...vectorManifest,
+        source_paths: [...vectorManifest.source_paths, vectorManifest.source_paths[0]],
+      },
+    },
+    {
+      label: "vector subset source paths",
+      artifactType: "vector-pack",
+      manifest: {
+        ...vectorManifest,
+        source_paths: vectorManifest.source_paths.slice(1),
+      },
+    },
+    {
+      label: "vector private source path",
+      artifactType: "vector-pack",
+      manifest: {
+        ...vectorManifest,
+        source_paths: [
+          ...vectorManifest.source_paths.slice(0, -1),
+          "plugins/desk/mcp/.state/private.json",
+        ],
+      },
+    },
+    {
       label: "snapshot DB schema unknown field",
       artifactType: "snapshot",
       manifest: {
@@ -1315,6 +1400,53 @@ test("manifest privacy guards reject unknown fields, scalar drift, and every pri
           unexpected: "metadata",
         }],
       },
+    },
+    {
+      label: "snapshot missing required field",
+      artifactType: "snapshot",
+      manifest: withoutField(snapshotManifest, "created_at"),
+    },
+    {
+      label: "snapshot duplicate source paths",
+      artifactType: "snapshot",
+      manifest: {
+        ...snapshotManifest,
+        source_paths: [...snapshotManifest.source_paths, snapshotManifest.source_paths[0]],
+      },
+    },
+    {
+      label: "snapshot subset source paths",
+      artifactType: "snapshot",
+      manifest: {
+        ...snapshotManifest,
+        source_paths: snapshotManifest.source_paths.slice(1),
+      },
+    },
+    {
+      label: "snapshot private source path",
+      artifactType: "snapshot",
+      manifest: {
+        ...snapshotManifest,
+        source_paths: [
+          ...snapshotManifest.source_paths.slice(0, -1),
+          "plugins/desk/mcp/.state/private.json",
+        ],
+      },
+    },
+    {
+      label: "snapshot body field",
+      artifactType: "snapshot",
+      manifest: { ...snapshotManifest, body: "private body" },
+    },
+    {
+      label: "vector raw field",
+      artifactType: "vector-pack",
+      manifest: { ...vectorManifest, raw: "private raw" },
+    },
+    {
+      label: "vector content field",
+      artifactType: "vector-pack",
+      manifest: { ...vectorManifest, content: "private content" },
     },
     {
       label: "vector row count scalar drift",

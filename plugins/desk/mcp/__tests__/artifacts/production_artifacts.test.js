@@ -1253,3 +1253,100 @@ test("production verifier reports stale source scope, policy denial, and tombsto
     rmSync(tempDir, { recursive: true, force: true })
   }
 })
+
+test("generated artifact verification enforces the production manifest contract", async () => {
+  const tempDir = mkdtempSync(path.join(tmpdir(), "desk-production-manifest-contract-"))
+  try {
+    const sourceHash = artifactSourceScopeHash()
+    const documentBody = "current"
+    const currentDocs = [{
+      path: "tasks/dependency-activation/task.md",
+      hash: sha256(documentBody),
+    }]
+    const expectation = await tempExpectation({
+      tempDir,
+      modules: {
+        validateArtifacts: async () => greenValidation(),
+      },
+    })
+    writeFile(
+      tempDir,
+      path.join("desk", currentDocs[0].path),
+      documentBody,
+    )
+    writeProductionNotes(expectation.notesPath, {
+      artifactSourceScopeHash: sourceHash,
+      documentTreeHash: docTree(currentDocs),
+    })
+    writeProductionPolicy(expectation.pluginRoot, validPublicationPolicy())
+
+    const packTemplate = JSON.parse(readFileSync(path.join(
+      pluginRoot,
+      "artifacts",
+      "vector-packs",
+      expectation.embeddingSpecId,
+      "repo-public-bootstrap-2026-06-15.manifest.json",
+    ), "utf8"))
+    const snapshotTemplate = JSON.parse(readFileSync(path.join(
+      pluginRoot,
+      "artifacts",
+      "snapshots",
+      expectation.embeddingSpecId,
+      "repo-public-bootstrap-2026-06-15.manifest.json",
+    ), "utf8"))
+    const primaryBytes = "artifact bytes\n"
+    const artifactSha = sha256(primaryBytes)
+    const packManifest = {
+      ...packTemplate,
+      pack_id: "unit-pack",
+      row_count: 0,
+      rows_sha256: artifactSha.slice("sha256:".length),
+      artifact_source_scope_hash: sourceHash,
+      document_tree_hash: docTree(currentDocs),
+      represented_documents: currentDocs,
+      unexpected: "must be rejected",
+    }
+    const snapshotManifest = {
+      ...snapshotTemplate,
+      snapshot_id: "unit-snapshot",
+      artifact_source_scope_hash: sourceHash,
+      document_tree_hash: docTree(currentDocs),
+      represented_documents: currentDocs,
+      artifact: {
+        ...snapshotTemplate.artifact,
+        file: "unit-snapshot.sqlite.zst",
+        sha256: artifactSha,
+      },
+      unexpected: "must be rejected",
+    }
+    writePrimaryWithSidecars({
+      dir: expectation.vectorPackDir,
+      id: "unit-pack",
+      primarySuffix: ".jsonl",
+      manifest: packManifest,
+    })
+    writePrimaryWithSidecars({
+      dir: expectation.snapshotDir,
+      id: "unit-snapshot",
+      primarySuffix: ".sqlite.zst",
+      manifest: snapshotManifest,
+    })
+
+    const result = await generatedArtifacts.verifyProductionSharedArtifacts({
+      expectation,
+      spawn: () => ({ status: 0, stdout: "", stderr: "" }),
+    })
+
+    assert.equal(result.ok, false)
+    assert.match(
+      result.errors.join("\n"),
+      /production vector pack manifest contract.*unexpected|production vector pack manifest.*unknown field/u,
+    )
+    assert.match(
+      result.errors.join("\n"),
+      /production snapshot manifest contract.*unexpected|production snapshot manifest.*unknown field/u,
+    )
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})

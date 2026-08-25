@@ -799,6 +799,13 @@ test("vector pack validation rejects malformed manifests before import", async (
   const { validateVectorPackFile } = await loadVectorPackModule()
   const root = await tmpRoot()
   const pluginRoot = path.join(root, "plugins", "desk")
+  const productionManifest = JSON.parse(await fs.readFile(path.join(
+    deskPluginRoot,
+    "artifacts",
+    "vector-packs",
+    ACTIVE_EMBEDDING_SPEC.id,
+    "repo-public-bootstrap-2026-06-15.manifest.json",
+  ), "utf8"))
   const identity = chunkIdentity({
     docPath: "trackA/task-1/task.md",
     chunk: { text: "manifest validation chunk" },
@@ -843,6 +850,68 @@ test("vector pack validation rejects malformed manifests before import", async (
       name: "row-count-mismatch",
       manifest: { row_count: 2 },
       pattern: /row_count.*match vector pack rows/u,
+    },
+    {
+      name: "unknown-manifest-field",
+      manifest: { unexpected: "metadata" },
+      pattern: /unknown|unsupported|allowed fields/u,
+    },
+    {
+      name: "missing-created-at",
+      manifest: { created_at: undefined },
+      pattern: /created_at|required/u,
+    },
+    {
+      name: "duplicate-source-paths",
+      manifest: {
+        source_paths: [
+          ...productionManifest.source_paths,
+          productionManifest.source_paths[0],
+        ],
+      },
+      pattern: /source_paths|source paths/u,
+    },
+    {
+      name: "subset-source-paths",
+      manifest: {
+        source_paths: productionManifest.source_paths.slice(1),
+      },
+      pattern: /source_paths|source paths/u,
+    },
+    {
+      name: "private-source-path",
+      manifest: {
+        source_paths: [
+          ...productionManifest.source_paths.slice(0, -1),
+          "plugins/desk/mcp/.state/private.json",
+        ],
+      },
+      pattern: /source_paths|source paths|private|\.state/u,
+    },
+    {
+      name: "private-provenance-source",
+      manifest: {
+        provenance: {
+          ...productionManifest.provenance,
+          source: "nested/.state/private.json",
+        },
+      },
+      pattern: /provenance|private|\.state/u,
+    },
+    {
+      name: "duplicate-represented-document",
+      manifest: {
+        represented_documents: [
+          productionManifest.represented_documents[0],
+          { ...productionManifest.represented_documents[0] },
+        ],
+      },
+      pattern: /duplicate represented document/u,
+    },
+    {
+      name: "body-field",
+      manifest: { body: "private body" },
+      pattern: /unknown|unsupported|allowed fields|body/u,
     },
   ]
 

@@ -863,17 +863,65 @@ test("deleting a doc removes it from the index on next pass", async () => {
   await w(root, "trackA/task-1/task.md", "---\nstatus: processing\n---\nbody")
   await w(root, "trackA/task-1/planning.md", "plan")
 
-  await rebuildIndex(root, indexOpts)
+  const embedding = Array.from({ length: 768 }, (_, index) => (index % 19) / 19)
+  const embed = {
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({ embedding }),
+    }),
+  }
+  await rebuildIndex(root, { embed })
+  const before = openDb(root)
+  let removedChunkIds
+  try {
+    removedChunkIds = before.prepare(
+      `SELECT c.id
+       FROM chunks c
+       JOIN docs d ON d.id = c.doc_id
+       WHERE d.path = ?
+       ORDER BY c.id`,
+    ).all("trackA/task-1/planning.md").map((row) => row.id)
+    assert.ok(removedChunkIds.length > 0)
+    assert.equal(
+      before.prepare(
+        `SELECT COUNT(*) AS count
+         FROM chunk_vecs
+         WHERE chunk_id IN (${removedChunkIds.map(() => "?").join(", ")})`,
+      ).get(...removedChunkIds).count,
+      removedChunkIds.length,
+    )
+  } finally {
+    closeDb(before)
+  }
 
   await fs.unlink(path.join(root, "trackA/task-1/planning.md"))
 
-  const summary = await rebuildIndex(root, indexOpts)
+  const summary = await rebuildIndex(root, { embed })
   assert.equal(summary.docs_removed, 1)
 
   const db = openDb(root)
   try {
     const remaining = db.prepare("SELECT path FROM docs").all().map((r) => r.path)
     assert.deepEqual(remaining, ["trackA/task-1/task.md"])
+    assert.equal(
+      db.prepare(
+        `SELECT COUNT(*) AS count
+         FROM chunk_vecs
+         WHERE chunk_id IN (${removedChunkIds.map(() => "?").join(", ")})`,
+      ).get(...removedChunkIds).count,
+      0,
+      "doc deletion must remove manually managed sqlite-vec rows",
+    )
+    assert.equal(
+      db.prepare(
+        `SELECT COUNT(*) AS count
+         FROM chunk_vecs v
+         LEFT JOIN chunks c ON c.id = v.chunk_id
+         WHERE c.id IS NULL`,
+      ).get().count,
+      0,
+      "live indexes must not retain orphan chunk vectors",
+    )
   } finally {
     closeDb(db)
   }

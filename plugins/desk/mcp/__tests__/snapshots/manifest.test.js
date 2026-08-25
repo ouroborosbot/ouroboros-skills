@@ -437,6 +437,72 @@ test("snapshot manifest rejects compatibility and provenance drift", async () =>
     }),
     /artifact sha256/u,
   )
+  assert.throws(
+    () => validate({ ...base, unexpected: "metadata" }),
+    /unknown|unsupported|allowed fields/u,
+  )
+  assert.throws(
+    () => validate({
+      ...base,
+      artifact: { ...base.artifact, unexpected: "metadata" },
+    }),
+    /unknown|unsupported|allowed fields/u,
+  )
+  assert.throws(
+    () => validate({
+      ...base,
+      provenance: { ...base.provenance, unexpected: "metadata" },
+    }),
+    /unknown|unsupported|allowed fields/u,
+  )
+  assert.throws(
+    () => validate({
+      ...base,
+      represented_documents: [{
+        ...base.represented_documents[0],
+        unexpected: "metadata",
+      }],
+    }),
+    /unknown|unsupported|allowed fields/u,
+  )
+  assert.throws(
+    () => validate({
+      ...base,
+      represented_documents: [
+        base.represented_documents[0],
+        { ...base.represented_documents[0] },
+      ],
+    }),
+    /duplicate represented document/u,
+  )
+  assert.throws(
+    () => validate({
+      ...base,
+      source_paths: [...base.source_paths, base.source_paths[0]],
+    }),
+    /source_paths|source paths/u,
+  )
+  assert.throws(
+    () => validate({
+      ...base,
+      source_paths: base.source_paths.slice(1),
+    }),
+    /source_paths|source paths/u,
+  )
+  assert.throws(
+    () => validate({
+      ...base,
+      provenance: {
+        ...base.provenance,
+        source: "nested/.state/private.json",
+      },
+    }),
+    /provenance|private|\.state/u,
+  )
+  assert.throws(
+    () => validate({ ...base, body: "private body" }),
+    /unknown|unsupported|allowed fields|body/u,
+  )
 })
 
 test("snapshot manifests reject absolute, traversal, and unexpected source paths", async () => {
