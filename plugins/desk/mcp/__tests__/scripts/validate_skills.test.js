@@ -148,6 +148,7 @@ test("validate-skills exports a testable CLI contract and validates a healthy re
     "startCli",
     "validateAll",
     "validateAppleDistributionKitSkill",
+    "validateCanonicalPluginCopies",
     "validateDeskMcpPackageScripts",
     "validateManifest",
     "validatePluginMetadata",
@@ -291,6 +292,62 @@ test("validateWorkSuiteCopies catches set, missing file, and drift errors", asyn
     (root) => validator.validateWorkSuiteCopies({ repoRoot: root }),
     /out of sync/u,
   )
+})
+
+test("canonical plugin copy validation is declared and reusable without Plain Language", async () => {
+  assert.deepEqual(
+    validator.canonicalPluginCopyGroups.map((group) => ({
+      id: group.id,
+      pluginRoot: group.pluginRoot,
+      names: group.copies.map((copy) => copy.name),
+    })),
+    [{
+      id: "work-suite",
+      pluginRoot: "plugins/work-suite/skills",
+      names: expectedSkillNames,
+    }],
+  )
+
+  await withFixtureRepo((fixtureRoot) => {
+    const copies = [
+      {
+        name: "alpha",
+        canonicalPath: "canonical/alpha.md",
+        pluginPath: "plugins/example/copies/alpha.md",
+      },
+      {
+        name: "beta",
+        canonicalPath: "canonical/beta.md",
+        pluginPath: "plugins/example/copies/beta.md",
+      },
+    ]
+    writeText(fixtureRoot, copies[0].canonicalPath, "alpha\n")
+    writeText(fixtureRoot, copies[0].pluginPath, "alpha\n")
+    writeText(fixtureRoot, copies[1].canonicalPath, "beta\n")
+    writeText(fixtureRoot, copies[1].pluginPath, "beta\n")
+
+    validator.validateCanonicalPluginCopies({
+      repoRoot: fixtureRoot,
+      copyGroups: [{
+        id: "example",
+        pluginRoot: "plugins/example/copies",
+        copies,
+      }],
+    })
+
+    writeText(fixtureRoot, copies[1].pluginPath, "drift\n")
+    assert.throws(
+      () => validator.validateCanonicalPluginCopies({
+        repoRoot: fixtureRoot,
+        copyGroups: [{
+          id: "example",
+          pluginRoot: "plugins/example/copies",
+          copies,
+        }],
+      }),
+      /example copy beta: .* is out of sync with canonical\/beta\.md/u,
+    )
+  })
 })
 
 test("validatePluginMetadata catches host manifest and marketplace drift", async () => {
