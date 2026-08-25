@@ -11,6 +11,17 @@ const repoRoot = rootArg >= 0 ? path.resolve(process.argv[rootArg + 1]) : path.r
 const vendorRoot = path.join(repoRoot, "plugins", "plain-language", "vendor");
 const lock = JSON.parse(fs.readFileSync(path.join(repoRoot, "upstream-sources.lock.json"), "utf8"));
 const expected = new Set(["plugins/plain-language/vendor/NOTICE.md"]);
+const canonicalSkill = fs.readFileSync(path.join(repoRoot, "skills", "plain-language", "SKILL.md"), "utf8");
+const pluginSkill = fs.readFileSync(path.join(repoRoot, "plugins", "plain-language", "skills", "plain-language", "SKILL.md"), "utf8");
+
+assert.equal(pluginSkill, canonicalSkill);
+assert.match(canonicalSkill, /## Write for the reader/u);
+assert.match(canonicalSkill, /## Preserve meaning/u);
+assert.match(canonicalSkill, /## Keep the right voice and format/u);
+assert.doesNotMatch(
+  canonicalSkill,
+  /Source basis|ISO|conformance|protected standard|public MIT|upstream-sources|readability scores|dogfood|interaction-style|evidence-discipline|operator-voice-comments/iu,
+);
 
 for (const source of lock.sources) {
   assert.match(source.repository, /^[^/]+\/[^/]+$/u);

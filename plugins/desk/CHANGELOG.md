@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 2.1.1 — 2026-08-25
+
+**Plain Language now contains only the output contract agents need at runtime.** Source provenance, legal positioning, scoring commentary, and internal skill-precedence names no longer consume prompt space; the contract states the reader outcomes, meaning-preservation floor, and destination-appropriate voice directly. Plain Language moves to 0.1.1 and Work Suite to 2.1.1. `desk-mcp@1.3.3` remains unchanged.
+
 ## 2.1.0 — 2026-08-25
 
 **Upstream source checks are now read-only, identity-verified, and approval-safe.** The steward tracks the latest non-stale release or default branch for every public source, verifies repository identity, license, forward ancestry, and selected-file hashes, and reports exact candidate digests. Selected instruction or executable changes stop at `needs-human-approval`; API, auth, rate-limit, identity, and ancestry failures stop as `blocked`. `desk-mcp@1.3.3` remains unchanged.

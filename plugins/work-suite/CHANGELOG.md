@@ -1,5 +1,9 @@
 # Work Suite changelog
 
+## 2.1.1 — 2026-08-25
+
+Work Suite now consumes Plain Language 0.1.1, whose runtime contract is limited to reader outcomes, preserved meaning, and destination-appropriate voice.
+
 ## 2.1.0 — 2026-08-25
 
 Work Suite now ships with the read-only upstream source steward for its Plain Language and Ponytail dependencies. The steward reports current, forward-no-payload-change, `needs-human-approval`, or blocked status without modifying vendored source or lock state.
