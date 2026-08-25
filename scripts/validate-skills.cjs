@@ -18,6 +18,30 @@ const requiredDeskMcpPackageScripts = {
   "artifact:snapshot:verify": "node scripts/verify-snapshot.js",
   "artifact:validate": "node scripts/validate-artifacts.js",
 };
+const workSuiteSkillNames = [
+  "autopilot",
+  "deep-research",
+  "inch-worm",
+  "stay-in-turn",
+  "visual-qa-dogfood",
+  "watchdog-mode",
+  "work-doer",
+  "work-ideator",
+  "work-merger",
+  "work-planner",
+];
+const canonicalPluginCopyGroups = [
+  {
+    id: "work-suite",
+    pluginRoot: "plugins/work-suite/skills",
+    expectedPluginEntries: workSuiteSkillNames,
+    copies: workSuiteSkillNames.map((name) => ({
+      name,
+      canonicalPath: path.join("skills", name, "SKILL.md"),
+      pluginPath: path.join("plugins/work-suite/skills", name, "SKILL.md"),
+    })),
+  },
+];
 
 function repoPath(filePath, { repoRoot = process.cwd() } = {}) {
   return path.isAbsolute(filePath) ? filePath : path.join(repoRoot, filePath);
@@ -135,47 +159,48 @@ function validateManifest(options = {}) {
   console.log(`Validated ${manifest.skills.length} skills.`);
 }
 
+function validateCanonicalPluginCopies(options = {}) {
+  const copyGroups = options.copyGroups ?? canonicalPluginCopyGroups;
+  let validatedCopies = 0;
+
+  for (const group of copyGroups) {
+    if (group.expectedPluginEntries) {
+      const pluginEntries = readDir(group.pluginRoot, options)
+        .filter((name) => stat(path.join(group.pluginRoot, name), options).isDirectory())
+        .sort();
+      const expectedEntries = [...group.expectedPluginEntries].sort();
+      const missing = expectedEntries.filter((name) => !pluginEntries.includes(name));
+      const extra = pluginEntries.filter((name) => !expectedEntries.includes(name));
+      if (missing.length > 0 || extra.length > 0) {
+        throw new Error(`${group.id} skill set mismatch: missing=[${missing.join(", ")}] extra=[${extra.join(", ")}]`);
+      }
+    }
+
+    for (const copy of group.copies) {
+      if (!exists(copy.canonicalPath, options)) {
+        throw new Error(`${group.id} copy ${copy.name}: missing canonical ${copy.canonicalPath}`);
+      }
+      if (!exists(copy.pluginPath, options)) {
+        throw new Error(`${group.id} copy ${copy.name}: missing plugin copy ${copy.pluginPath}`);
+      }
+      const canonical = readText(copy.canonicalPath, options);
+      const pluginCopy = readText(copy.pluginPath, options);
+      if (canonical !== pluginCopy) {
+        throw new Error(`${group.id} copy ${copy.name}: ${copy.pluginPath} is out of sync with ${copy.canonicalPath}`);
+      }
+      validatedCopies += 1;
+    }
+  }
+
+  console.log(`Validated ${validatedCopies} canonical plugin copies across ${copyGroups.length} group(s).`);
+}
+
 function validateWorkSuiteCopies(options = {}) {
-  const pluginSkillsDir = "plugins/work-suite/skills";
-  const expectedSkillNames = [
-    "autopilot",
-    "deep-research",
-    "inch-worm",
-    "stay-in-turn",
-    "visual-qa-dogfood",
-    "watchdog-mode",
-    "work-doer",
-    "work-ideator",
-    "work-merger",
-    "work-planner",
-  ];
-  const pluginSkillNames = readDir(pluginSkillsDir, options)
-    .filter((name) => stat(path.join(pluginSkillsDir, name), options).isDirectory())
-    .sort();
-
-  const missing = expectedSkillNames.filter((name) => !pluginSkillNames.includes(name));
-  const extra = pluginSkillNames.filter((name) => !expectedSkillNames.includes(name));
-  if (missing.length > 0 || extra.length > 0) {
-    throw new Error(`work-suite skill set mismatch: missing=[${missing.join(", ")}] extra=[${extra.join(", ")}]`);
-  }
-
-  for (const name of expectedSkillNames) {
-    const canonicalPath = path.join("skills", name, "SKILL.md");
-    const pluginPath = path.join(pluginSkillsDir, name, "SKILL.md");
-    if (!exists(canonicalPath, options)) {
-      throw new Error(`work-suite skill ${name}: missing canonical ${canonicalPath}`);
-    }
-    if (!exists(pluginPath, options)) {
-      throw new Error(`work-suite skill ${name}: missing plugin copy ${pluginPath}`);
-    }
-    const canonical = readText(canonicalPath, options);
-    const pluginCopy = readText(pluginPath, options);
-    if (canonical !== pluginCopy) {
-      throw new Error(`work-suite skill ${name}: ${pluginPath} is out of sync with ${canonicalPath}`);
-    }
-  }
-
-  console.log(`Validated ${expectedSkillNames.length} work-suite plugin skill copies.`);
+  const workSuiteGroups = canonicalPluginCopyGroups.filter((group) => group.id === "work-suite");
+  return validateCanonicalPluginCopies({
+    ...options,
+    copyGroups: workSuiteGroups,
+  });
 }
 
 function validatePluginMetadata(options = {}) {
@@ -455,7 +480,7 @@ function validateSkillDescriptionLimits(options = {}) {
 function validateAll(options = {}) {
   validateSkillDescriptionLimits(options);
   validateManifest(options);
-  validateWorkSuiteCopies(options);
+  validateCanonicalPluginCopies(options);
   validatePluginMetadata(options);
   validateAppleDistributionKitSkill(options);
   runDeskFreshnessChecks(options);
@@ -506,6 +531,7 @@ function startCli({
 }
 
 module.exports = {
+  canonicalPluginCopyGroups,
   readJson,
   run,
   runDeskFreshnessChecks,
@@ -513,6 +539,7 @@ module.exports = {
   startCli,
   validateAll,
   validateAppleDistributionKitSkill,
+  validateCanonicalPluginCopies,
   validateDeskMcpPackageScripts,
   validateManifest,
   validatePluginMetadata,
