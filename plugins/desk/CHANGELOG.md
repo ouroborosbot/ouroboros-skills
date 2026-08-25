@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 2.1.0 — 2026-08-25
+
+**Upstream source checks are now read-only, identity-verified, and approval-safe.** The steward tracks the latest non-stale release or default branch for every public source, verifies repository identity, license, forward ancestry, and selected-file hashes, and reports exact candidate digests. Selected instruction or executable changes stop at `needs-human-approval`; API, auth, rate-limit, identity, and ancestry failures stop as `blocked`. `desk-mcp@1.3.3` remains unchanged.
+
 ## 2.0.0 — 2026-08-25
 
 **Workers now load upstream Ponytail for coding and use a direct Work Suite 2 workflow.** Clear tasks skip ideation and planning, implementation proof follows risk instead of ritual, review runs once at the branch boundary, and merge remains responsible for release or install refresh, smoke, cleanup, and continuation. Plain Language remains authoritative for human-readable output. `desk-mcp@1.3.3` remains unchanged.
