@@ -1,18 +1,18 @@
 {
   "schema_version": 1,
   "id": "desk",
-  "version": "2.1.2",
+  "version": "2.1.3",
   "dependencies": [
     {
       "id": "desk",
       "kind": "substrate",
-      "version": "2.1.2",
+      "version": "2.1.3",
       "provenance": {
         "source": "plugins/desk/.codex-plugin/plugin.json",
         "package": "ourostack/desk"
       },
       "lock": {
-        "version": "2.1.2",
+        "version": "2.1.3",
         "integrity": "sha256-desk-activation-manifest-v1"
       }
     },
