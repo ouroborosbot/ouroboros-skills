@@ -9,7 +9,7 @@ This skill teaches agents how to discover, install, track, update, and contribut
 
 **Skills repo**: `github.com/ourostack/ouroboros-skills` -- a public repo containing shared skill definitions as `SKILL.md` files.
 
-**Manifest**: `manifest.json` at the repo root -- a machine-readable index of all available skills with names, paths, descriptions, and tags.
+**Manifest**: `manifest.json` at the repo root -- a machine-readable index of all available skills with names, repository-relative paths, descriptions, and tags. The manifest path is authoritative; a skill may live in the canonical library or inside a plugin.
 
 **Registry**: `_registry.json` -- a local file in the agent's skills directory that tracks which skills are installed, where they came from, and when they were last updated.
 
@@ -58,9 +58,9 @@ Query the manifest to see what skills are available.
    }
    ```
 3. Present the list to the user or filter by tags/keywords as needed.
-4. To read a skill's full content before installing, fetch:
+4. To read a skill's full content before installing, fetch the `path` from its manifest entry:
    ```
-   https://raw.githubusercontent.com/ourostack/ouroboros-skills/main/skills/<skill-name>/SKILL.md
+   https://raw.githubusercontent.com/ourostack/ouroboros-skills/main/<manifest-path>
    ```
 
 ---
@@ -71,28 +71,28 @@ Fetch a skill from the repo and install it into the local skills directory.
 
 ### Steps
 
-1. Determine the skills directory for the current runtime (see table above).
-2. Create the skill subdirectory if it does not exist:
+1. Find the skill in `manifest.json`. Set `<source-skill-dir>` to the directory containing its `path`; for example, `skills/work-planner` or `plugins/plain-language/skills/plain-language`.
+2. Determine the skills directory for the current runtime (see table above), then create the destination if it does not exist:
    ```
    mkdir -p <skills-dir>/<skill-name>/
    ```
-3. Install the complete upstream skill directory, not only `SKILL.md`, because modern skills may include `agents/`, `scripts/`, `references/`, or `assets/`:
+3. Install the complete manifest-selected skill directory, not only `SKILL.md`, because modern skills may include `agents/`, `scripts/`, `references/`, or `assets/`:
    ```bash
    tmpdir="$(mktemp -d)"
    git clone --depth 1 --filter=blob:none --sparse https://github.com/ourostack/ouroboros-skills.git "$tmpdir/ouroboros-skills"
-   git -C "$tmpdir/ouroboros-skills" sparse-checkout set "skills/<skill-name>"
-   rsync -a --delete "$tmpdir/ouroboros-skills/skills/<skill-name>/" "<skills-dir>/<skill-name>/"
+   git -C "$tmpdir/ouroboros-skills" sparse-checkout set "<source-skill-dir>"
+   rsync -a --delete "$tmpdir/ouroboros-skills/<source-skill-dir>/" "<skills-dir>/<skill-name>/"
    rm -rf "$tmpdir"
    ```
    If `git` is unavailable but `gh` is available, download the directory recursively through the GitHub contents API. If neither can fetch a directory, stop and report that the install would be incomplete; do not silently install only `SKILL.md` for a skill that has bundled resources.
-4. To inspect or manually repair the main skill file, fetch the raw `SKILL.md` content:
+4. To inspect or manually repair the main skill file, fetch the manifest path:
    ```
-   https://raw.githubusercontent.com/ourostack/ouroboros-skills/main/skills/<skill-name>/SKILL.md
+   https://raw.githubusercontent.com/ourostack/ouroboros-skills/main/<manifest-path>
    ```
 5. Get the latest commit SHA for the complete upstream skill directory:
    ```bash
    # Use the GitHub API to get the latest commit touching any file in the skill directory
-   curl -s "https://api.github.com/repos/ourostack/ouroboros-skills/commits?path=skills/<skill-name>&per_page=1" | jq -r '.[0].sha'
+   curl -s "https://api.github.com/repos/ourostack/ouroboros-skills/commits?path=<source-skill-dir>&per_page=1" | jq -r '.[0].sha'
    ```
 6. Update `_registry.json` (see Track Provenance below).
 
@@ -137,7 +137,7 @@ Steps:
    https://raw.githubusercontent.com/ourostack/ouroboros-skills/main/manifest.json
    ```
 3. For each local skill directory containing `SKILL.md`:
-   - If the skill name appears in the manifest, compare the full local skill directory against the upstream `skills/<skill-name>/` directory, and fetch the latest commit SHA for the directory path.
+   - If the skill name appears in the manifest, compare the full local skill directory against the directory containing that entry's manifest `path`, and fetch the latest commit SHA for that directory path.
    - If the local directory is byte-for-byte identical to upstream, add a normal shared-skill registry entry with `source`, `commit`, `installed`, and `selfAuthored: false`.
    - If any local file differs from upstream, including bundled `agents/`, `scripts/`, `references/`, or `assets/`, preserve the local directory and add a local/self-authored registry entry with `source: "local"`, `commit: ""`, `installed`, and `selfAuthored: true`. Report that it is a local adaptation instead of overwriting it.
    - If the skill name is not in the manifest, add the same local/self-authored registry entry.
@@ -154,7 +154,7 @@ Freshness checks must fail closed when `_registry.json` is missing. Print the ex
 ```json
 {
   "<skill-name>": {
-    "source": "https://github.com/ourostack/ouroboros-skills/tree/main/skills/<skill-name>",
+    "source": "https://github.com/ourostack/ouroboros-skills/tree/main/<source-skill-dir>",
     "commit": "<sha of the commit that last touched this skill directory>",
     "installed": "<ISO 8601 datetime of when the skill was installed or last updated>",
     "selfAuthored": false
@@ -193,9 +193,9 @@ Compare locally installed skills against the latest versions in the repo.
    https://raw.githubusercontent.com/ourostack/ouroboros-skills/main/manifest.json
    ```
 3. For each skill in `_registry.json` where `selfAuthored` is `false`:
-   a. Get the latest commit SHA for the complete skill directory from the GitHub API:
+   a. Resolve `<source-skill-dir>` from the skill's current manifest entry, then get the latest commit SHA for that directory from the GitHub API:
       ```bash
-      curl -s "https://api.github.com/repos/ourostack/ouroboros-skills/commits?path=skills/<skill-name>&per_page=1" | jq -r '.[0].sha'
+      curl -s "https://api.github.com/repos/ourostack/ouroboros-skills/commits?path=<source-skill-dir>&per_page=1" | jq -r '.[0].sha'
       ```
    b. Compare against the `commit` field in `_registry.json`.
    c. If they differ, the skill has been updated upstream.
@@ -210,7 +210,7 @@ Compare locally installed skills against the latest versions in the repo.
 
 For a fast staleness check without full update:
 1. Read `_registry.json`.
-2. For each non-self-authored skill, compare the local `commit` SHA against the latest commit touching the upstream `skills/<skill-name>` directory from the API.
+2. For each non-self-authored skill, resolve `<source-skill-dir>` from its manifest entry and compare the local `commit` SHA against the latest commit touching that directory.
 3. Report: "X skills up to date, Y skills have updates available."
 
 ---

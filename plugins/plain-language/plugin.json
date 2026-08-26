@@ -1,7 +1,7 @@
 {
   "name": "plain-language",
-  "version": "0.1.1",
-  "description": "Reader-centered guidance for clear human-readable agent output that preserves facts, evidence state, uncertainty, attribution, safety, accessibility, technical precision, schemas, and source-preserved content.",
+  "version": "0.2.0",
+  "description": "A first-party output policy that makes human-readable agent prose easy to find, understand, and use without weakening evidence, uncertainty, safety, precision, schemas, quotations, or requested voice.",
   "author": {
     "name": "ourostack",
     "url": "https://github.com/ourostack/ouroboros-skills"

@@ -285,7 +285,7 @@ function checkClaudePlugin({ repoRoot, errors, checked }) {
   }
   if (
     deskPlugin.dependencies?.[1]?.name !== "plain-language" ||
-    deskPlugin.dependencies?.[1]?.version !== "0.1.1"
+    deskPlugin.dependencies?.[1]?.version !== plainLanguagePlugin.version
   ) {
     errors.push("claude-plugin Plain Language dependency drift");
   }

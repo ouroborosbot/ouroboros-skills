@@ -32,7 +32,6 @@ const workSuiteSkillNames = [
 ];
 const canonicalPluginCopies = {
   "work-suite": workSuiteSkillNames,
-  "plain-language": ["plain-language"],
 };
 
 function repoPath(filePath, { repoRoot = process.cwd() } = {}) {

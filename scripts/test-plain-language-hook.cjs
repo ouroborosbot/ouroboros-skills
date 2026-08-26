@@ -23,8 +23,12 @@ for (const event of ["SessionStart", "SubagentStart"]) {
   const output = JSON.parse(result.stdout);
   assert.equal(output.hookSpecificOutput.hookEventName, event);
   assert.match(output.hookSpecificOutput.additionalContext, /^\[PLAIN_LANGUAGE_CONTRACT\]/u);
-  assert.match(output.hookSpecificOutput.additionalContext, /Write for the reader/u);
+  assert.match(output.hookSpecificOutput.additionalContext, /## Serve the reader/u);
+  assert.match(output.hookSpecificOutput.additionalContext, /## Report work precisely/u);
+  assert.match(output.hookSpecificOutput.additionalContext, /## Check before sending/u);
+  assert.match(output.hookSpecificOutput.additionalContext, /The integration test is still running/u);
   assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /^---/u);
+  assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /vendor|upstream-sources|conformance/iu);
 }
 
 const missingEvent = run(hook, "");

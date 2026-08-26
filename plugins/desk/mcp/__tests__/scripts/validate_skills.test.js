@@ -66,7 +66,6 @@ function createFixtureRepo(root) {
     writeText(root, `skills/${name}/SKILL.md`, skillBody(name))
     writeText(root, `plugins/work-suite/skills/${name}/SKILL.md`, skillBody(name))
   }
-  writeText(root, "skills/plain-language/SKILL.md", skillBody("plain-language"))
   writeText(
     root,
     "plugins/plain-language/skills/plain-language/SKILL.md",
@@ -276,7 +275,6 @@ test("validateManifest reports every schema and skill-copy failure mode", async 
 test("validateCanonicalPluginCopies catches set, missing file, and drift errors", async () => {
   assert.deepEqual(validator.canonicalPluginCopies, {
     "work-suite": expectedSkillNames,
-    "plain-language": ["plain-language"],
   })
   await assertThrowsWith(
     (root) => {
@@ -301,17 +299,6 @@ test("validateCanonicalPluginCopies catches set, missing file, and drift errors"
     (root) => validator.validateCanonicalPluginCopies({ repoRoot: root }),
     /out of sync/u,
   )
-  await withFixtureRepo((fixtureRoot) => {
-    writeText(
-      fixtureRoot,
-      "plugins/plain-language/skills/plain-language/SKILL.md",
-      skillBody("plain-language").replace("# plain-language", "# drift"),
-    )
-    assert.throws(
-      () => validator.validateCanonicalPluginCopies({ repoRoot: fixtureRoot }),
-      /plain-language skill plain-language: .* is out of sync/u,
-    )
-  })
 })
 
 test("validatePluginMetadata catches host manifest and marketplace drift", async () => {

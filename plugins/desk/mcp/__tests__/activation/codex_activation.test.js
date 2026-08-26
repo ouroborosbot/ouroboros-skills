@@ -16,6 +16,13 @@ const repoRoot = path.resolve(
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
 const fixturesRoot = path.join(mcpRoot, "__tests__", "fixtures", "activation", "codex")
 const ledgerPath = ".codex/desk-activation-ledger.json"
+const expectedDeskVersion = JSON.parse(
+  readFileSync(path.join(repoRoot, "plugins", "desk", "activation", "desk.activation.json"), "utf8"),
+).version
+const expectedGlobalMarker = new RegExp(
+  `# BEGIN desk activation: desk@${expectedDeskVersion.replaceAll(".", "\\.")} mode=global-personal owner=desk-activation`,
+  "u",
+)
 
 const existingConfig = `# user-authored Codex config
 model = "gpt-5.4"
@@ -487,12 +494,12 @@ test("Codex activation preserves user-authored config and instructions with owne
   const result = materializeCodexActivation(activationInput("global-personal"))
 
   assert.equal(result.generatedConfig.startsWith(existingConfig), true)
-  assert.match(result.generatedConfig, /# BEGIN desk activation: desk@2\.1\.1 mode=global-personal owner=desk-activation/)
+  assert.match(result.generatedConfig, expectedGlobalMarker)
   assert.match(result.generatedConfig, /# END desk activation/)
   assert.equal(result.generatedConfig.match(/# BEGIN desk activation/g).length, 1)
   assert.equal(result.generatedConfig.match(/# END desk activation/g).length, 1)
   assert.equal(result.generatedInstructions.startsWith(existingInstructions), true)
-  assert.match(result.generatedInstructions, /# BEGIN desk activation: desk@2\.1\.1 mode=global-personal owner=desk-activation/)
+  assert.match(result.generatedInstructions, expectedGlobalMarker)
   assert.match(result.generatedInstructions, /Apply the `plain-language` skill to every human-readable response and artifact/u)
   assert.match(result.generatedInstructions, /# END desk activation/)
   assert.equal(result.generatedInstructions.match(/# BEGIN desk activation/g).length, 1)
