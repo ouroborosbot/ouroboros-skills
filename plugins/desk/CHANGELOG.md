@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 2.1.3 — 2026-08-26
+
+**First-person future language now keeps live-action ownership with the operator.** Statements such as "I'll send it" or "I'll share it" authorize preparation at most; worker sends or posts only when the operator explicitly delegates that action. `desk-mcp@1.3.3` remains unchanged.
+
 ## 2.1.2 — 2026-08-25
 
 **Plain Language is now a substantive first-party output policy.** The standalone plugin keeps one skill source plus its parent/subagent hook, removes unused upstream snapshots and maintenance, and adds concrete rules for replies, work reports, documents, meaning preservation, and pre-send review. Plain Language moves to 0.2.0 and Work Suite to 2.1.2. `desk-mcp@1.3.3` remains unchanged.
