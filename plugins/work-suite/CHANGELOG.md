@@ -1,5 +1,9 @@
 # Work Suite changelog
 
+## 2.1.2 — 2026-08-25
+
+Work Suite now consumes the first-party Plain Language 0.2.0 output policy. Plain Language keeps its always-on hook while replacing upstream snapshots and maintenance machinery with one substantive runtime skill.
+
 ## 2.1.1 — 2026-08-25
 
 Work Suite now consumes Plain Language 0.1.1, whose runtime contract is limited to reader outcomes, preserved meaning, and destination-appropriate voice.

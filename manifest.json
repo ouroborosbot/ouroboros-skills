@@ -163,8 +163,8 @@
     },
     {
       "name": "plain-language",
-      "path": "skills/plain-language/SKILL.md",
-      "description": "Apply reader-centered plain-language principles to human-readable agent output while preserving facts, uncertainty, attribution, safety, accessibility, technical precision, schemas, and source-preserved content.",
+      "path": "plugins/plain-language/skills/plain-language/SKILL.md",
+      "description": "Make human-readable replies, documents, reviews, status updates, and handoffs easy for their intended readers to find, understand, and use without weakening facts, uncertainty, safety, technical precision, schemas, quotations, or requested voice.",
       "tags": [
         "writing",
         "communication",

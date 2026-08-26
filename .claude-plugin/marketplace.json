@@ -14,7 +14,7 @@
       "name": "desk",
       "source": "./plugins/desk",
       "description": "A quiet workspace substrate for long-running engineering agents: tracks, tasks, friction notes, lessons, lifecycle skills, and an MCP server for desk CRUD plus search. Ships a default 'worker' agent that makes the plugin standalone-functional; overlays (corporate, autonomous, personal-coding) layer their own agents on top.",
-      "version": "2.1.1",
+      "version": "2.1.2",
       "category": "agent-substrate",
       "tags": [
         "workspace",
@@ -28,7 +28,7 @@
       "name": "work-suite",
       "source": "./plugins/work-suite",
       "description": "A lean workflow primitive for orchestrator agents: resolve material unknowns, plan only when needed, implement the smallest correct vertical slice, merge through terminal delivery, and keep authorized autopilot work moving. Uses pinned upstream Ponytail for coding posture and Plain Language for human-readable output.",
-      "version": "2.1.1",
+      "version": "2.1.2",
       "category": "workflow",
       "tags": [
         "ponytail",
@@ -53,8 +53,8 @@
     {
       "name": "plain-language",
       "source": "./plugins/plain-language",
-      "description": "Reader-centered guidance for clear human-readable agent output that preserves facts, evidence state, uncertainty, attribution, safety, accessibility, technical precision, schemas, and source-preserved content.",
-      "version": "0.1.1",
+      "description": "A first-party output policy that makes human-readable agent prose easy to find, understand, and use without weakening evidence, uncertainty, safety, precision, schemas, quotations, or requested voice.",
+      "version": "0.2.0",
       "category": "productivity",
       "tags": [
         "writing",

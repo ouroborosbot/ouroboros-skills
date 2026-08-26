@@ -1,18 +1,18 @@
 {
   "schema_version": 1,
   "id": "desk",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "dependencies": [
     {
       "id": "desk",
       "kind": "substrate",
-      "version": "2.1.1",
+      "version": "2.1.2",
       "provenance": {
         "source": "plugins/desk/.codex-plugin/plugin.json",
         "package": "ourostack/desk"
       },
       "lock": {
-        "version": "2.1.1",
+        "version": "2.1.2",
         "integrity": "sha256-desk-activation-manifest-v1"
       }
     },
@@ -25,20 +25,20 @@
         "package": "ourostack/work-suite"
       },
       "lock": {
-        "version": "2.1.1",
+        "version": "2.1.2",
         "integrity": "sha256-work-suite-activation-manifest-v1"
       }
     },
     {
       "id": "plain-language",
       "kind": "plugin",
-      "version_range": "0.1.1",
+      "version_range": "0.2.0",
       "provenance": {
         "source": "plugins/plain-language/.codex-plugin/plugin.json",
         "package": "ourostack/plain-language"
       },
       "lock": {
-        "version": "0.1.1",
+        "version": "0.2.0",
         "integrity": "sha256-plain-language-activation-manifest-v1"
       }
     },
@@ -198,12 +198,12 @@
       "dependencies": {
         "work-suite": {
           "path": "../work-suite",
-          "version": "2.1.1",
+          "version": "2.1.2",
           "resolution": "native"
         },
         "plain-language": {
           "path": "../plain-language",
-          "version": "0.1.1",
+          "version": "0.2.0",
           "resolution": "native"
         },
         "ponytail-upstream": {

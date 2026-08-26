@@ -16,12 +16,42 @@ const {
   selectedPayloadDigest,
 } = require("./check-upstream-sources.cjs");
 
+const repoRoot = path.resolve(__dirname, "..");
 const lockedCommit = "1".repeat(40);
 const candidateCommit = "2".repeat(40);
 
 function hash(content) {
   return crypto.createHash("sha256").update(content).digest("hex");
 }
+
+const checkedInLock = JSON.parse(
+  fs.readFileSync(path.join(repoRoot, "upstream-sources.lock.json"), "utf8"),
+);
+
+for (const lockedSource of checkedInLock.sources) {
+  for (const file of lockedSource.files) {
+    const generated = path.join(repoRoot, file.generatedPath);
+    assert.equal(fs.statSync(generated).isFile(), true);
+    assert.equal(hash(fs.readFileSync(generated)), file.sha256, `${file.generatedPath} hash drifted`);
+  }
+}
+
+const ponytailRoot = path.join(repoRoot, "plugins", "ponytail-upstream");
+const expectedPonytailFiles = checkedInLock.sources
+  .flatMap((lockedSource) => lockedSource.files)
+  .map((file) => file.generatedPath)
+  .filter((file) => file.startsWith("plugins/ponytail-upstream/"))
+  .sort();
+const actualPonytailFiles = fs.readdirSync(ponytailRoot, { recursive: true, withFileTypes: true })
+  .map((entry) => (
+    entry.isFile()
+      ? path.relative(repoRoot, path.join(entry.parentPath, entry.name)).split(path.sep).join("/")
+      : null
+  ))
+  .filter((file) => file && !file.includes("/.claude-plugin/") && !file.includes("/.codex-plugin/"))
+  .filter((file) => file !== "plugins/ponytail-upstream/plugin.json")
+  .sort();
+assert.deepEqual(actualPonytailFiles, expectedPonytailFiles);
 
 function source(content = "locked") {
   return {

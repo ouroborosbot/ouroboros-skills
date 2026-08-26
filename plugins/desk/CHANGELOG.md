@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 2.1.2 — 2026-08-25
+
+**Plain Language is now a substantive first-party output policy.** The standalone plugin keeps one skill source plus its parent/subagent hook, removes unused upstream snapshots and maintenance, and adds concrete rules for replies, work reports, documents, meaning preservation, and pre-send review. Plain Language moves to 0.2.0 and Work Suite to 2.1.2. `desk-mcp@1.3.3` remains unchanged.
+
 ## 2.1.1 — 2026-08-25
 
 **Plain Language now contains only the output contract agents need at runtime.** Source provenance, legal positioning, scoring commentary, and internal skill-precedence names no longer consume prompt space; the contract states the reader outcomes, meaning-preservation floor, and destination-appropriate voice directly. Plain Language moves to 0.1.1 and Work Suite to 2.1.1. `desk-mcp@1.3.3` remains unchanged.

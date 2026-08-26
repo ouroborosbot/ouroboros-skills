@@ -32,6 +32,13 @@ const installedProfileSmokePath = path.join(
 )
 const supportMatrixPath = path.join(repoRoot, "plugins", "desk", "activation", "support-matrix.json")
 const codexDesktopUnsupportedPrimitive = "codex-desktop-scriptable-activation-smoke"
+const expectedDeskVersion = loadJson(
+  path.join(repoRoot, "plugins", "desk", "activation", "desk.activation.json"),
+).version
+const expectedGlobalMarker = new RegExp(
+  `# BEGIN desk activation: desk@${expectedDeskVersion.replaceAll(".", "\\.")} mode=global-personal owner=desk-activation`,
+  "u",
+)
 
 async function loadCodexSmokeHarness() {
   return import(pathToFileURL(path.join(mcpRoot, "src", "activation", "codex-smoke.js")))
@@ -243,13 +250,13 @@ test("Codex CLI activation smoke uses a temp profile and proves worker instructi
         const generatedConfig = readFileSync(configPath, "utf8")
         const generatedActivationConfig = readFileSync(activationConfigPath, "utf8")
         const generatedInstructions = readFileSync(instructionsPath, "utf8")
-        assert.match(generatedConfig, /# BEGIN desk activation: desk@2\.1\.1 mode=global-personal owner=desk-activation/u)
+        assert.match(generatedConfig, expectedGlobalMarker)
         assert.match(generatedConfig, /\[plugins\."desk@ourostack"\]/u)
         assert.match(generatedConfig, /\[plugins\."desk@ourostack"\.mcp_servers\.desk\]/u)
         assert.match(generatedConfig, /\[mcp_servers\.desk\]/u)
         assert.match(generatedConfig, /--activation-config/u)
         assert.match(generatedConfig, /enabled = true/u)
-        assert.match(generatedInstructions, /# BEGIN desk activation: desk@2\.1\.1 mode=global-personal owner=desk-activation/u)
+        assert.match(generatedInstructions, expectedGlobalMarker)
         assert.match(generatedInstructions, /You are the desk worker by default\./u)
         assert.match(generatedInstructions, /desk:session-start/u)
         const activationConfig = JSON.parse(generatedActivationConfig)

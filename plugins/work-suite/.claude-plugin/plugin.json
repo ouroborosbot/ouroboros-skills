@@ -1,6 +1,6 @@
 {
   "name": "work-suite",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "A lean workflow primitive for orchestrator agents: resolve material unknowns, plan only when needed, implement the smallest correct vertical slice, merge through terminal delivery, and keep authorized autopilot work moving. Uses pinned upstream Ponytail for coding posture and Plain Language for human-readable output.",
   "author": {
     "name": "ourostack",
@@ -10,7 +10,7 @@
   "dependencies": [
     {
       "name": "plain-language",
-      "version": "0.1.1"
+      "version": "0.2.0"
     },
     {
       "name": "ponytail-upstream",
