@@ -23,7 +23,7 @@ function contract(label, check) {
   try {
     check();
   } catch (error) {
-    contractFailures.push(`${label}: ${error.message}`);
+    contractFailures.push(`${label}: ${error.message.split("\n", 1)[0]}`);
   }
 }
 
@@ -93,6 +93,72 @@ for (const file of [
   requires(file, "doer records build and full-suite proof", /record[\s\S]+build[\s\S]+full (?:existing )?suite/iu);
   requires(file, "doer composes visual QA", /visual-qa-dogfood/u);
   requires(file, "doer preserves operator ownership of future sends", /I'll send|I’ll send/iu);
+}
+
+for (const file of [
+  "skills/work-merger/SKILL.md",
+  "plugins/work-suite/skills/work-merger/SKILL.md",
+]) {
+  requires(file, "merger verifies remote authority before writes", /before[\s\S]{0,120}(push|PR|merge|deploy)[\s\S]{0,160}(authority|contribution path|identity)|(?:authority|contribution path|identity)[\s\S]{0,160}before[\s\S]{0,120}(push|PR|merge|deploy)/iu);
+  requires(file, "merger resolves the actual target", /actual target|PR base[\s\S]+main[\s\S]+master[\s\S]+release/iu);
+  requires(file, "merger preserves unrelated dirty work", /unrelated[\s\S]+dirty[\s\S]+preserv/iu);
+  requires(file, "merger binds checks to the exact source SHA", /checks?[\s\S]+exact[\s\S]+(?:source )?SHA/iu);
+  requires(file, "merger verifies command and remote outcome", /command exit[\s\S]+remote (?:state|outcome)|remote (?:state|outcome)[\s\S]+command exit/iu);
+  requires(file, "merger handles successful commands with open PRs", /zero[\s\S]+(?:open|queued)/iu);
+  requires(file, "merger handles failed commands with merged PRs", /nonzero[\s\S]+MERGED/iu);
+  requires(file, "merger verifies landed commit and tree before cleanup", /landed[\s\S]+commit[\s\S]+tree[\s\S]+before[\s\S]+cleanup/iu);
+  requires(file, "merger composes same-turn waiting", /stay-in-turn/u);
+  requires(file, "merger maps policy gates without unconditional handback", /needs-human-approval[\s\S]+needs reviewer gate[\s\S]+human-only/iu);
+}
+
+for (const file of [
+  "skills/autopilot/SKILL.md",
+  "plugins/work-suite/skills/autopilot/SKILL.md",
+]) {
+  requires(file, "autopilot preserves operator-owned live sends", /I'll send|I’ll send/iu);
+  requires(file, "autopilot preserves partner-operated boundaries", /partner-operated|partner owned/iu);
+  requires(file, "autopilot emits the audited state headings", /Current Item[\s\S]+Terminal Evidence[\s\S]+Continuation Scan[\s\S]+Stop Condition/iu);
+  requires(file, "autopilot emits the audited table", /candidate[\s\S]+classification[\s\S]+evidence[\s\S]+disposition/iu);
+  requires(file, "autopilot revalidates persisted claims", /revalidat[\s\S]+persist/iu);
+  requires(file, "autopilot compares source and installed state", /source[\s\S]+installed/iu);
+  requires(file, "autopilot pairs hot patches with source", /hot.patch[\s\S]+source/iu);
+  requires(file, "autopilot owns long-horizon wakeups", /^## Long-horizon wakeup$/mu);
+  requires(file, "autopilot maps non-human approval to reviewer gate", /needs-human-approval[\s\S]+needs reviewer gate/iu);
+  requires(file, "autopilot maps human-only approval to hard exception", /needs-human-approval[\s\S]+hard exception[\s\S]+human-only|human-only[\s\S]+hard exception/iu);
+}
+
+for (const file of [
+  "skills/stay-in-turn/SKILL.md",
+  "plugins/work-suite/skills/stay-in-turn/SKILL.md",
+]) {
+  requires(file, "stay-in-turn chooses by host capability", /host[\s\S]+capabilit/iu);
+  requires(file, "stay-in-turn has a foreground fallback", /foreground[\s\S]+fallback/iu);
+  requires(file, "stay-in-turn observes success and failure", /success[\s\S]+failure[\s\S]+terminal/iu);
+}
+
+for (const file of [
+  "skills/inch-worm/SKILL.md",
+  "plugins/work-suite/skills/inch-worm/SKILL.md",
+  "skills/watchdog-mode/SKILL.md",
+  "plugins/work-suite/skills/watchdog-mode/SKILL.md",
+]) {
+  requires(file, "waiting callers use the host-capability branch", /stay-in-turn[\s\S]+host[\s\S]+capabilit/iu);
+  contract("waiting callers do not prescribe Monitor unconditionally", () => {
+    assert.doesNotMatch(text(file), /right shape is[\s\S]{0,160}(?:a driver script \+ `Monitor`|driver-plus-Monitor)/iu);
+  });
+}
+
+for (const file of [
+  "plugins/desk/skills/work-orchestration/SKILL.md",
+]) {
+  requires(file, "orchestration checks authority before mutation", /before[\s\S]{0,100}(branch|worktree|source edit)[\s\S]{0,140}(authority|contribution path)|(?:authority|contribution path)[\s\S]{0,140}before[\s\S]{0,100}(branch|worktree|source edit)/iu);
+  requires(file, "orchestration uses an explicit DAG", /explicit DAG/iu);
+  requires(file, "orchestration rejects array-order inference", /repos\[\][\s\S]+never[\s\S]+(?:order|dependency)/iu);
+  requires(file, "orchestration rejects invalid dependency graphs", /cycle[\s\S]+unknown dependenc[\s\S]+failed predecessor/iu);
+  requires(file, "orchestration coordinates shared version files", /shared[\s\S]+version[\s\S]+serializ|version[\s\S]+conflict/iu);
+  requires(file, "orchestration leaves task lifecycle to Desk", /Desk[\s\S]+task[\s\S]+iteration[\s\S]+state/iu);
+  requires(file, "orchestration returns nested review to its parent", /nested[\s\S]+parent/iu);
+  requires(file, "orchestration maps non-human policy gates", /needs-human-approval[\s\S]+needs reviewer gate/iu);
 }
 
 for (const [file, hooks] of [
