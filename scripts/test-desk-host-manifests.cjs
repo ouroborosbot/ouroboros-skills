@@ -277,7 +277,7 @@ function checkClaudePlugin({ repoRoot, errors, checked }) {
   if (deskPlugin.outputStyles !== "./output-styles/") {
     errors.push("claude-plugin output style surface drift");
   }
-  if (deskPlugin.dependencies?.[0]?.name !== "work-suite" || deskPlugin.dependencies?.[0]?.version !== "^2.0.0") {
+  if (deskPlugin.dependencies?.[0]?.name !== "work-suite" || deskPlugin.dependencies?.[0]?.version !== "^3.0.0") {
     errors.push("claude-plugin Work Suite dependency drift");
   }
   if (workSuitePlugin.version !== workSuiteLock) {

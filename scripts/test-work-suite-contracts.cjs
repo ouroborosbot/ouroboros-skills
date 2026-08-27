@@ -9,6 +9,18 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
 const changedSkills = ["autopilot", "work-ideator", "work-planner", "work-doer", "work-merger"];
+const workSuiteSkillNames = [
+  "autopilot",
+  "deep-research",
+  "inch-worm",
+  "stay-in-turn",
+  "visual-qa-dogfood",
+  "watchdog-mode",
+  "work-doer",
+  "work-ideator",
+  "work-merger",
+  "work-planner",
+];
 const contractFailures = [];
 
 function text(file) {
@@ -177,7 +189,6 @@ for (const [file, hooks] of [
 }
 
 for (const file of [
-  "plugins/work-suite/plugin.json",
   "plugins/work-suite/.claude-plugin/plugin.json",
   "plugins/work-suite/.codex-plugin/plugin.json",
 ]) {
@@ -187,6 +198,65 @@ for (const file of [
   ))?.version ?? plugin.activation?.codex?.dependencies?.["ponytail-upstream"]?.version;
   assert.equal(dependencyVersion, "4.9.0");
 }
+
+contract("Work Suite root manifest omits inert dependency metadata", () => {
+  const plugin = json("plugins/work-suite/plugin.json");
+  assert.equal(plugin.version, "3.0.0");
+  assert.equal(Object.hasOwn(plugin, "dependencies"), false);
+  assert.equal(Object.hasOwn(plugin, "activation"), false);
+});
+
+for (const file of [
+  "plugins/work-suite/.claude-plugin/plugin.json",
+  "plugins/work-suite/.codex-plugin/plugin.json",
+]) {
+  contract(`${file} releases Work Suite 3.0.0`, () => {
+    assert.equal(json(file).version, "3.0.0");
+  });
+}
+
+for (const file of [
+  "plugins/desk/plugin.json",
+  "plugins/desk/.claude-plugin/plugin.json",
+  "plugins/desk/.codex-plugin/plugin.json",
+]) {
+  contract(`${file} releases Desk 3.0.0`, () => {
+    assert.equal(json(file).version, "3.0.0");
+  });
+}
+
+contract("direct Copilot companion versions match their manifests", () => {
+  const readme = text("plugins/work-suite/README.md");
+  const plainLanguageVersion = json("plugins/plain-language/plugin.json").version;
+  const ponytailVersion = json("plugins/ponytail-upstream/plugin.json").version;
+  assert.match(readme, new RegExp(`Plain Language v${plainLanguageVersion.replaceAll(".", "\\.")}`, "u"));
+  assert.match(readme, new RegExp(`Ponytail v${ponytailVersion.replaceAll(".", "\\.")}`, "u"));
+});
+
+for (const file of ["README.md", "plugins/work-suite/README.md"]) {
+  contract(`${file} runtime audit names every Work Suite skill`, () => {
+    const activeSkills = text(file).match(/--active-skills (?<skills>[^\n\\]+)/u)?.groups?.skills ?? "";
+    for (const skill of workSuiteSkillNames) assert.match(activeSkills, new RegExp(`(?:^|,)${skill}(?:,|$)`, "u"));
+  });
+}
+
+contract("Work Suite CI includes the Autopilot state audit", () => {
+  assert.match(
+    text(".github/workflows/validate-skills.yml"),
+    /node scripts\/test-autopilot-state-audit\.cjs/u,
+  );
+});
+
+contract("coverage exclusion list has no campaign additions", () => {
+  assert.deepEqual(
+    json("plugins/desk/mcp/config/coverage-gate.json").exclusions.map(({ path: file }) => file).sort(),
+    ["scripts/audit-work-suite-runtime.cjs", "scripts/validate-skills.cjs"],
+  );
+});
+
+assert.equal(json("plugins/plain-language/plugin.json").version, "0.2.0");
+assert.equal(json("plugins/ponytail-upstream/plugin.json").version, "4.9.0");
+assert.equal(json("plugins/desk/mcp/package.json").version, "1.3.3");
 
 const hookData = fs.mkdtempSync(path.join(os.tmpdir(), "ponytail-provider-"));
 try {
