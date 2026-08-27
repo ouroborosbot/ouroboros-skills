@@ -43,6 +43,12 @@ function requires(file, label, pattern) {
   contract(label, () => assert.match(text(file), pattern));
 }
 
+function subsection(file, heading) {
+  const body = text(file).split(`### ${heading}\n`, 2)[1];
+  assert.ok(body, `${file} is missing subsection ${heading}`);
+  return body.split(/\n#{2,3} /u, 1)[0];
+}
+
 for (const skill of changedSkills) {
   const canonical = text(`skills/${skill}/SKILL.md`);
   assert.equal(canonical, text(`plugins/work-suite/skills/${skill}/SKILL.md`));
@@ -61,6 +67,28 @@ assert.match(text("plugins/desk/skills/task-lifecycle/SKILL.md"), /release\/inst
 assert.doesNotMatch(text("plugins/desk/skills/task-lifecycle/SKILL.md"), /Operator approves the planning doc/u);
 assert.match(text("plugins/desk/skills/start-task/SKILL.md"), /Hand off to `work-orchestration`/u);
 assert.match(text("plugins/desk/skills/session-resumption/SKILL.md"), /transition clear work directly to `processing`/u);
+assert.match(
+  text("plugins/desk/skills/git-hygiene/SKILL.md").split("---", 3)[1],
+  /after every ref change[\s\S]+required check fails[\s\S]+validation proof may be reused/iu,
+);
+contract("git hygiene attributes failures only after they occur", () => {
+  assert.match(
+    subsection("plugins/desk/skills/git-hygiene/SKILL.md", "Attribute failures after they happen"),
+    /do not establish[\s\S]+baseline preemptively[\s\S]+check fails[\s\S]+may be\s+pre-existing[\s\S]+target CI[\s\S]+exact target SHA[\s\S]+same command[\s\S]+clean merge-base worktree[\s\S]+recorded[\s\S]+reproducible baseline[\s\S]+commit[\s\S]+unknown remains failed/iu,
+  );
+});
+contract("git hygiene reuses proof only while its inputs match", () => {
+  assert.match(
+    subsection("plugins/desk/skills/git-hygiene/SKILL.md", "Reuse proof only while inputs match"),
+    /reuse[\s\S]+only while[\s\S]+source\/diff\s+fingerprint[\s\S]+exact command and selection[\s\S]+dependency and[\s\S]+configuration fingerprint[\s\S]+environment all match[\s\S]+input\s+changed[\s\S]+rerun/iu,
+  );
+});
+contract("git hygiene rechecks executable repository configuration after ref changes", () => {
+  assert.match(
+    subsection("plugins/desk/skills/git-hygiene/SKILL.md", "Folder trust is path trust, not revision trust"),
+    /after every ref change[\s\S]+inspect[\s\S]+repository-owned\s+executable[\s\S]+before[\s\S]+(?:load|run)/iu,
+  );
+});
 
 for (const file of [
   "skills/work-planner/SKILL.md",
