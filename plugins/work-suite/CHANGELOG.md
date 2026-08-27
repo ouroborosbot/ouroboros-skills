@@ -1,5 +1,9 @@
 # Work Suite changelog
 
+## 3.0.0 — 2026-08-26
+
+**Restore the operational workflow contract without restoring universal ceremony.** Clear work still routes directly. Coordinated and high-risk work regain source-grounded planning, strict TDD, complete changed-production coverage, verified merge outcomes, host-portable same-turn waiting, audited Autopilot state, and explicit cross-repo dependency handling. Direct Copilot loads now document their Plain Language v0.2.0 and Ponytail v4.9.0 companions instead of relying on inert root dependency metadata.
+
 ## 2.1.2 — 2026-08-25
 
 Work Suite now consumes the first-party Plain Language 0.2.0 output policy. Plain Language keeps its always-on hook while replacing upstream snapshots and maintenance machinery with one substantive runtime skill.

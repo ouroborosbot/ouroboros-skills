@@ -235,7 +235,7 @@ contract("direct Copilot companion versions match their manifests", () => {
 
 for (const file of ["README.md", "plugins/work-suite/README.md"]) {
   contract(`${file} runtime audit names every Work Suite skill`, () => {
-    const activeSkills = text(file).match(/--active-skills (?<skills>[^\n\\]+)/u)?.groups?.skills ?? "";
+    const activeSkills = (text(file).match(/--active-skills (?<skills>[^\n\\]+)/u)?.groups?.skills ?? "").trim();
     for (const skill of workSuiteSkillNames) assert.match(activeSkills, new RegExp(`(?:^|,)${skill}(?:,|$)`, "u"));
   });
 }
@@ -298,4 +298,4 @@ assert.equal(
   `Work Suite capability contracts failed:\n${contractFailures.join("\n")}`,
 );
 
-console.log("work-suite 2 contracts passed.");
+console.log("Work Suite contracts passed.");

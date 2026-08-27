@@ -103,7 +103,7 @@ node scripts/audit-work-suite-runtime.cjs --repo-root .
 node scripts/audit-work-suite-runtime.cjs --repo-root . \
   --skill-root ~/.agents/skills \
   --skill-root ~/.codex/skills \
-  --active-skills autopilot,work-ideator,work-planner,work-doer,work-merger,stay-in-turn,inch-worm,visual-qa-dogfood \
+  --active-skills autopilot,deep-research,inch-worm,stay-in-turn,visual-qa-dogfood,watchdog-mode,work-doer,work-ideator,work-merger,work-planner \
   --strict-active
 ```
 

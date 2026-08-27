@@ -1,6 +1,6 @@
 # work-suite
 
-Work Suite 2 is the portable Ourostack workflow bundle. It keeps the useful lifecycle—understand, plan when needed, implement, merge, and verify—without making ceremony the default.
+Work Suite 3 is the portable Ourostack workflow bundle. It preserves direct routing for clear work while restoring strict TDD, complete changed-production coverage, risk-graded review, verified delivery, and audited autonomous continuation.
 
 | Skill | Purpose |
 |-------|---------|
@@ -15,7 +15,7 @@ Work Suite 2 is the portable Ourostack workflow bundle. It keeps the useful life
 
 ## Ponytail dependency
 
-Work Suite depends on the packaged upstream `ponytail-upstream` plugin, pinned to Ponytail v4.9.0. Coding work follows Ponytail's ladder: question whether code needs to exist, reuse the codebase, prefer standard-library/native/already-installed capabilities, choose the simplest viable approach, and write custom machinery only when necessary.
+Work Suite uses Plain Language v0.2.0 for human-readable output and the packaged `ponytail-upstream` plugin, pinned to Ponytail v4.9.0. Coding work follows Ponytail's ladder: question whether code needs to exist, reuse the codebase, prefer standard-library/native/already-installed capabilities, choose the simplest viable approach, and write custom machinery only when necessary.
 
 Ponytail applies to coding work, including implementation, refactoring, debugging, tests, and code review. It does not truncate requested research, documentation, analysis, or operational work. Plain Language remains the authority for human-readable output.
 
@@ -23,7 +23,7 @@ The upstream files are vendored unmodified and hash-locked in `upstream-sources.
 
 ## Autopilot mode
 
-When the principal delegates sustained autonomy, `autopilot` keeps selecting ready work until the requested outcome is terminal. It stops only for a true human-only access wall, an uncovered irreversible action, or `needs-human-approval`.
+When the principal delegates sustained autonomy, `autopilot` keeps selecting ready work until the requested outcome is terminal. A policy state named `needs-human-approval` maps to a hard exception only when genuinely human-only; otherwise it becomes a blocking reviewer gate while independent work continues.
 
 Terminal state includes merged changes, green required checks, applicable release/install/deploy and smoke evidence, current durable state, and no stale branch, PR, or worktree from the run. Reviews are risk-driven: cross-cutting, novel, or high-risk planning uses fresh **Tinfoil Hat** and **Stranger With Candy** reviews; coordinated doing-only work uses one risk-selected cold reviewer; clear work skips Planner.
 
@@ -35,7 +35,7 @@ The work-suite contract includes a small source/runtime audit:
 node scripts/audit-work-suite-runtime.cjs --repo-root /path/to/ouroboros-skills \
   --skill-root ~/.agents/skills \
   --skill-root ~/.codex/skills \
-  --active-skills autopilot,work-ideator,work-planner,work-doer,work-merger,visual-qa-dogfood,stay-in-turn,inch-worm
+  --active-skills autopilot,deep-research,inch-worm,stay-in-turn,visual-qa-dogfood,watchdog-mode,work-doer,work-ideator,work-merger,work-planner
 ```
 
 Use it when a skill was installed or updated but the current host menu may be stale. Source drift is a hard failure. Installed-root drift and active-menu gaps are explicit runtime evidence: read the installed `SKILL.md` directly for the current run, record the mismatch in durable state, and refresh or restart the host before relying on menu discovery.
@@ -60,7 +60,7 @@ Pick the command for your engine:
 # top-level skills/ directory using the skill-management flow instead.
 ```
 
-Copilot-compatible hosts normally receive Work Suite through Desk's generated flattened bundle metadata. Install this plugin directly only when you want the workflow skills without Desk.
+Copilot-compatible hosts normally receive Work Suite through Desk's generated flattened bundle metadata. A direct Copilot load must explicitly include Work Suite 3.0.0, Plain Language v0.2.0, and Ponytail v4.9.0 because the root Copilot manifest does not resolve plugin dependencies.
 
 ## Relationship to `skills/`
 

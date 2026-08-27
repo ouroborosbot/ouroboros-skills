@@ -14,7 +14,7 @@
       "name": "desk",
       "source": "./plugins/desk",
       "description": "A quiet workspace substrate for long-running engineering agents: tracks, tasks, friction notes, lessons, lifecycle skills, and an MCP server for desk CRUD plus search. Ships a default 'worker' agent that makes the plugin standalone-functional; overlays (corporate, autonomous, personal-coding) layer their own agents on top.",
-      "version": "2.1.3",
+      "version": "3.0.0",
       "category": "agent-substrate",
       "tags": [
         "workspace",
@@ -27,8 +27,8 @@
     {
       "name": "work-suite",
       "source": "./plugins/work-suite",
-      "description": "A lean workflow primitive for orchestrator agents: resolve material unknowns, plan only when needed, implement the smallest correct vertical slice, merge through terminal delivery, and keep authorized autopilot work moving. Uses pinned upstream Ponytail for coding posture and Plain Language for human-readable output.",
-      "version": "2.1.2",
+      "description": "A risk-graded workflow bundle with strict TDD, complete changed-production coverage, verified delivery, and audited autonomous continuation. Uses pinned upstream Ponytail for coding posture and Plain Language for human-readable output.",
+      "version": "3.0.0",
       "category": "workflow",
       "tags": [
         "ponytail",
