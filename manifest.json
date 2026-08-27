@@ -16,7 +16,7 @@
     {
       "name": "autopilot",
       "path": "skills/autopilot/SKILL.md",
-      "description": "Keep control of an explicitly delegated long-horizon task through implementation, merge, release or install refresh, smoke, cleanup, and the next ready item. Use when the user says autopilot, keep going, do not return control, ship it, or equivalent.",
+      "description": "Keep an explicitly delegated long-horizon task moving through audited durable state, terminal delivery, and the next ready item without returning routine control.",
       "tags": [
         "meta",
         "workflow",
@@ -208,7 +208,7 @@
     {
       "name": "stay-in-turn",
       "path": "skills/stay-in-turn/SKILL.md",
-      "description": "Stay-in-turn for long-running work. Replaces the background+ScheduleWakeup+yield anti-pattern with a Monitor stream that produces events back into the same turn. Reach for this whenever the operator says 'do not return control until X' or whenever a task involves waiting on CI, a chain of merges, a build, or any operation longer than ~2 minutes.",
+      "description": "Keep long-running CI, deploy, merge, smoke, and batch work in the current turn by choosing the host's native notification path or a bounded foreground fallback.",
       "tags": [
         "meta",
         "workflow",
@@ -282,7 +282,7 @@
     {
       "name": "work-merger",
       "path": "skills/work-merger/SKILL.md",
-      "description": "Drive a finished branch through sync, PR, required checks, merge, release or install refresh, consuming-surface smoke, cleanup, and continuation. Use after implementation; never report an open or merely merged PR as done.",
+      "description": "Drive an authorized finished branch through current-target sync, exact-head checks, verified remote outcome, release or install, smoke, cleanup, and continuation.",
       "tags": [
         "workflow",
         "git",

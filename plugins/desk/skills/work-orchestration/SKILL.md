@@ -1,6 +1,6 @@
 ---
 name: work-orchestration
-description: "Route engineering work through only the phases it needs: direct implementation for clear changes, planning for coordinated or risky work, then merge and terminal delivery."
+description: "Route authorized work through only the phases it needs, validate cross-repo dependencies, isolate parallel worktrees, and leave lifecycle state to Desk."
 ---
 
 # Work Orchestration
@@ -15,6 +15,22 @@ Worker remains the engineer; the `work-*` skills are optional workflow tools.
 
 Apply Ponytail inside coding and review. Skip a phase when its output would only restate what is already known. Use one cold branch review, escalating only a concrete high-risk finding.
 
-Each repository gets its own branch and merge cycle. Independent parallel branches use separate worktrees and explicit `git -C <worktree>` commands. Human-only gates belong as late as possible and never interrupt ordinary authorized work.
+## Before mutation
+
+Verify repository authority and the approved contribution path before any branch, worktree, or source edit. A read-only request or unapproved repository does not mutate.
+
+## Cross-repo execution
+
+The cross-repo plan owns an explicit DAG. `repos[]` order is never dependency order.
+
+Before mutation, reject a dependency cycle or unknown dependency. A failed predecessor blocks its dependents while independent ready nodes continue.
+
+Each repository gets its own branch and merge cycle. Independent parallel branches use separate worktrees and explicit `git -C <worktree>` commands. Shared and version files serialize or merge; never force-push through a coordinated-file conflict.
+
+A policy state named `needs-human-approval` maps to `hard exception` only when genuinely human-only. Otherwise map it to blocking `needs reviewer gate` while independent ready work continues.
+
+Mechanical review uses the Planner reviewer rule. A nested host emits the required briefs and returns review to its parent rather than self-certifying.
+
+Desk owns task, iteration, and archive state. Work Orchestration routes child skills and does not duplicate that lifecycle.
 
 The terminal state is merged, released or installed as applicable, smoked through the consuming surface, cleaned, and followed by an empty or out-of-scope continuation scan.
