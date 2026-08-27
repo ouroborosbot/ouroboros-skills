@@ -25,7 +25,7 @@ The upstream files are vendored unmodified and hash-locked in `upstream-sources.
 
 When the principal delegates sustained autonomy, `autopilot` keeps selecting ready work until the requested outcome is terminal. It stops only for a true human-only access wall, an uncovered irreversible action, or `needs-human-approval`.
 
-Terminal state includes merged changes, green required checks, applicable release/install/deploy and smoke evidence, current durable state, and no stale branch, PR, or worktree from the run. Reviews are risk-driven rather than a fixed ladder: use one cold review for cross-cutting or high-risk work, fix meaningful findings, and continue.
+Terminal state includes merged changes, green required checks, applicable release/install/deploy and smoke evidence, current durable state, and no stale branch, PR, or worktree from the run. Reviews are risk-driven: cross-cutting, novel, or high-risk planning uses fresh **Tinfoil Hat** and **Stranger With Candy** reviews; coordinated doing-only work uses one risk-selected cold reviewer; clear work skips Planner.
 
 ### Runtime visibility audit
 

@@ -262,7 +262,7 @@
     {
       "name": "work-doer",
       "path": "skills/work-doer/SKILL.md",
-      "description": "Execute an engineering task to a tested branch using the smallest complete implementation. Applies Ponytail to coding, uses proof proportional to risk, and hands the finished branch to work-merger.",
+      "description": "Execute an authorized engineering task with strict TDD, complete changed-production coverage, and the smallest implementation that reaches a tested branch.",
       "tags": [
         "workflow",
         "execution",
@@ -292,7 +292,7 @@
     {
       "name": "work-planner",
       "path": "skills/work-planner/SKILL.md",
-      "description": "Turn substantial or ambiguous engineering work into one executable plan and doing document. Skip for trivial or already-obvious changes; use the existing task description directly.",
+      "description": "Turn coordinated or risky engineering work into the smallest executable planning contract. Skip trivial work, reuse existing planning artifacts, and review in proportion to risk.",
       "tags": [
         "workflow",
         "planning"
