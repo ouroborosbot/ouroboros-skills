@@ -34,4 +34,4 @@ Before push, PR, merge, release, or deploy:
 
 Use normal git and `gh` behavior already present in the repository. Do not build orchestration around orchestration.
 
-A policy state named `needs-human-approval` maps to `needs reviewer gate` by default and becomes a hard exception only when genuinely human-only. Keep reviewer-gated lanes blocking while other ready work continues. A real credential wall or unrecoverable destructive shared-state action may return control.
+An explicit producer state named `needs-human-approval` is a hard exception; do not replace required human approval with agent review. Use `needs reviewer gate` only when the producer explicitly permits machine review. A real credential wall or unrecoverable destructive shared-state action may return control.

@@ -13,7 +13,7 @@ Worker remains the engineer; the `work-*` skills are optional workflow tools.
 | Coordinated behavior change | short `work-planner` → `work-doer` → `work-merger` |
 | Ambiguous, novel, or high risk | `work-ideator` → `work-planner` → `work-doer` → `work-merger` |
 
-Apply Ponytail inside coding and review. Skip a phase when its output would only restate what is already known. Use one cold branch review, escalating only a concrete high-risk finding.
+Apply Ponytail inside coding and review. Skip a phase when its output would only restate what is already known. Use one fresh cold branch review at the diff boundary; planning-stage review follows the Planner rule below.
 
 ## Before mutation
 
@@ -27,7 +27,7 @@ Before mutation, reject a dependency cycle or unknown dependency. A failed prede
 
 Each repository gets its own branch and merge cycle. Independent parallel branches use separate worktrees and explicit `git -C <worktree>` commands. Shared and version files serialize or merge; never force-push through a coordinated-file conflict.
 
-A policy state named `needs-human-approval` maps to `hard exception` only when genuinely human-only. Otherwise map it to blocking `needs reviewer gate` while independent ready work continues.
+An explicit producer state named `needs-human-approval` is a `hard exception`; do not replace required human approval with agent review. Use `needs reviewer gate` only when the producer explicitly permits machine review.
 
 Mechanical review uses the Planner reviewer rule. A nested host emits the required briefs and returns review to its parent rather than self-certifying.
 

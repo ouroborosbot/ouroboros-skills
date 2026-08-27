@@ -6,7 +6,7 @@
     "url": "https://github.com/ourostack/ouroboros-skills"
   },
   "metadata": {
-    "description": "Cross-engine skills and agent substrate for long-running engineering agents. Desk supplies durable work state; Work Suite 2 routes only the workflow phases a task needs; Plain Language governs human-readable output; and the pinned upstream Ponytail provider keeps coding work minimal. Works on Claude Code, Copilot CLI, and Codex.",
+    "description": "Cross-engine skills and agent substrate for long-running engineering agents. Desk supplies durable work state; Work Suite routes work by risk with strict TDD, complete changed-production coverage, and verified delivery; Plain Language governs human-readable output; and the pinned upstream Ponytail provider keeps coding work minimal. Works on Claude Code, Copilot CLI, and Codex.",
     "version": "1.0.0"
   },
   "plugins": [

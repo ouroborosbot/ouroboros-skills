@@ -43,8 +43,8 @@ Use the `stay-in-turn` host-capability branch while an active command, agent, mo
 
 - a human-only credential or capability;
 - an unrecoverable destructive shared-state action;
-- the requested outcome is delivered and the continuation scan is empty or deferred by scope.
+- the requested outcome is delivered and the continuation scan is empty or out of scope.
 
-A policy state named `needs-human-approval` maps to `hard exception` only when it is genuinely human-only. Otherwise map it to blocking `needs reviewer gate`, keep working, and do not write the literal policy state in the classification cell.
+An explicit producer state named `needs-human-approval` is a `hard exception`; do not replace required human approval with agent review. Use `needs reviewer gate` only when the producer explicitly permits machine review.
 
 Do not manufacture approval, park at a planning boundary, treat context size as a limit, or return an option menu where the task already authorizes a decision.

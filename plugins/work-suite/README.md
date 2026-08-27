@@ -23,7 +23,7 @@ The upstream files are vendored unmodified and hash-locked in `upstream-sources.
 
 ## Autopilot mode
 
-When the principal delegates sustained autonomy, `autopilot` keeps selecting ready work until the requested outcome is terminal. A policy state named `needs-human-approval` maps to a hard exception only when genuinely human-only; otherwise it becomes a blocking reviewer gate while independent work continues.
+When the principal delegates sustained autonomy, `autopilot` keeps selecting ready work until the requested outcome is terminal. An explicit producer state named `needs-human-approval` is a hard exception; `needs reviewer gate` is reserved for producers that explicitly permit machine review.
 
 Terminal state includes merged changes, green required checks, applicable release/install/deploy and smoke evidence, current durable state, and no stale branch, PR, or worktree from the run. Reviews are risk-driven: cross-cutting, novel, or high-risk planning uses fresh **Tinfoil Hat** and **Stranger With Candy** reviews; coordinated doing-only work uses one risk-selected cold reviewer; clear work skips Planner.
 

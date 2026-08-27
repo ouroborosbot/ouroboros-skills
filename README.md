@@ -69,10 +69,10 @@ See the **Contribute** section in [`skills/skill-management/SKILL.md`](skills/sk
 |-------|-------------|
 | **skill-management** | Browse, install, update, and contribute skills from this repo. |
 | **autopilot** | Keep authorized long-horizon work moving through terminal delivery and the continuation scan. |
-| **stay-in-turn** | Keep long-running work in the same turn with monitor-style waiting instead of background wakeup deferral. |
+| **stay-in-turn** | Keep long-running work in the same turn with a native notification path or bounded foreground fallback. |
 | **work-ideator** | Resolve material ambiguity and choose the smallest viable shape; skip when the task is clear. |
 | **work-planner** | Plan coordinated or risky work; skip when the task description is sufficient. |
-| **work-doer** | Implement the smallest complete vertical change with proof proportional to risk. |
+| **work-doer** | Implement the smallest complete vertical change test-first, with complete coverage of changed production paths. |
 | **work-merger** | Drive a branch through PR, merge, release/install, smoke, cleanup, and continuation. |
 | **visual-qa-dogfood** | Screenshot-backed dogfooding for UI/rendering work so visual absurdity cannot hide behind passing metrics. |
 | **workbench-operator** | Use Ouro Workbench as the native control room for terminal/TUI agents, Desk mirrors, and boss-agent check-ins. |

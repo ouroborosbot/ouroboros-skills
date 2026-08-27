@@ -104,7 +104,7 @@ Skills come from the Desk and Work Suite plugins, with two first-class companion
 | `codex-onboarding` | Verify Desk, Work Suite, Plain Language, Ponytail, MCP, cache, and active-session visibility on Codex |
 | `work-ideator` | Resolve material ambiguity and choose the smallest viable shape |
 | `work-planner` | Plan coordinated or risky work; skip when the task is already clear |
-| `work-doer` | Implement the smallest complete vertical change with proof proportional to risk |
+| `work-doer` | Implement the smallest complete vertical change test-first, with complete coverage of changed production paths |
 | `work-merger` | Drive the branch through PR, merge, release/install, smoke, cleanup, and continuation |
 | `autopilot` | Operator hands a long-horizon mandate ("autopilot", "you got this", "keep the ship moving") — stay in the loop driver across silences |
 | `stay-in-turn` | Long-running CI/deploy/smoke waits — keep the chain in the same turn instead of yielding |
