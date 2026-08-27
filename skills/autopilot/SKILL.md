@@ -1,27 +1,50 @@
 ---
 name: autopilot
-description: Keep control of an explicitly delegated long-horizon task through implementation, merge, release or install refresh, smoke, cleanup, and the next ready item. Use when the user says autopilot, keep going, do not return control, ship it, or equivalent.
+description: Keep an explicitly delegated long-horizon task moving through audited durable state, terminal delivery, and the next ready item without returning routine control.
 ---
 
 # Autopilot
 
 Authorization covers the complete stated outcome and its obvious continuation. Decide routine scope, sequencing, implementation, review, and repair without handing control back.
 
+## Authority
+
+First-person future wording such as "I'll send it" preserves operator ownership of the live send; it is not delegation. Partner-operated or destructive shared-state mutation requires an owner SOP or explicit authority.
+
+## Durable state
+
+Keep one current record with these exact sections:
+
+- `## Current Item`
+- `## Terminal Evidence`
+- `## Continuation Scan`
+- `## Stop Condition`
+
+The Continuation Scan uses `candidate | classification | evidence | disposition`. Allowed classifications are `ready`, `needs reviewer gate`, `hard exception`, `deferred by scope`, and `none`.
+
+Revalidate persisted terminal, source, and installed claims against live state before trusting or resuming them. Pair every durable hot-patch with its source change and delivery path.
+
 ## Loop
 
 1. Read durable state and the first non-terminal task.
-2. Choose the next ready action.
-3. Execute it with the relevant skill and update durable state after material transitions.
-4. Drive code through `work-merger`; merged without release/install/smoke/cleanup is not terminal.
-5. Scan again. If ready work remains inside scope, start it.
+2. Revalidate the recorded source, remote, release or install, and smoke evidence.
+3. Choose the next ready action.
+4. Execute it with the relevant skill and update durable state after material transitions.
+5. Drive code through `work-merger`; merged without release/install/smoke/cleanup is not terminal.
+6. Scan again. If ready work remains inside scope, start it.
 
-Prefer direct progress over status narration. Use scheduled wakes only when the runtime cannot notify you and no active command or agent can keep the turn alive.
+Prefer direct progress over status narration.
+
+## Long-horizon wakeup
+
+Use the `stay-in-turn` host-capability branch while an active command, agent, monitor, notification, or bounded foreground fallback can keep work alive. Schedule a wake only when conditions must change outside this turn and the continuation scan proves no other work is ready.
 
 ## Stops
 
 - a human-only credential or capability;
 - an unrecoverable destructive shared-state action;
-- a `needs-human-approval` state explicitly owned by another policy;
 - the requested outcome is delivered and the continuation scan is empty or out of scope.
+
+An explicit producer state named `needs-human-approval` is a `hard exception`; do not replace required human approval with agent review. Use `needs reviewer gate` only when the producer explicitly permits machine review.
 
 Do not manufacture approval, park at a planning boundary, treat context size as a limit, or return an option menu where the task already authorizes a decision.

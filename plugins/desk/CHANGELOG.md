@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 3.0.0 — 2026-08-26
+
+**Align Desk with Work Suite 3.** Desk's Claude, Codex, and Copilot activation metadata now lock Work Suite 3.0.0, including the Claude `^3.0.0` dependency range. Work Orchestration verifies authority before mutation, validates explicit cross-repo dependency graphs, isolates parallel worktrees, coordinates shared version files, and leaves task/iteration lifecycle state to Desk. `desk-mcp@1.3.3`, Plain Language v0.2.0, and Ponytail v4.9.0 remain unchanged.
+
 ## 2.1.3 — 2026-08-26
 
 **First-person future language now keeps live-action ownership with the operator.** Statements such as "I'll send it" or "I'll share it" authorize preparation at most; worker sends or posts only when the operator explicitly delegates that action. `desk-mcp@1.3.3` remains unchanged.

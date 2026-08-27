@@ -37,7 +37,7 @@ Watchdog mode is a loop, not a one-shot action:
 
 ## Cadence
 
-Wakeup mechanics are inherited from `autopilot` -- `ScheduleWakeup` (or the engine's equivalent), the "schedule-ends-the-turn" caveat, the cache-warmth tradeoffs. Don't restate them here; see autopilot's long-horizon wakeup section.
+Invoke `stay-in-turn` and use its host-capability branch for active checks: native notifications first, then a host monitor when available, otherwise the bounded foreground fallback. For genuine future checks after no ready work remains, use Autopilot's long-horizon wakeup section.
 
 What's watchdog-specific is **tuning the cadence to match what's being watched**:
 

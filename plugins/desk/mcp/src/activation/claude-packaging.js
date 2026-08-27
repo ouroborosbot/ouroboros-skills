@@ -1,7 +1,7 @@
 const CLAUDE_WORKER_AGENT_PATH = "./agents/worker.md"
 const CLAUDE_WORKER_SOURCE = "agents/worker.md"
 const WORK_SUITE_DEPENDENCY_NAME = "work-suite"
-const WORK_SUITE_DEPENDENCY_RANGE = "^2.0.0"
+const WORK_SUITE_DEPENDENCY_RANGE = "^3.0.0"
 const SUPPORTED_SESSION_STATUSES = new Set([
   "supported",
   "supported-with-version-floor",
@@ -22,7 +22,7 @@ export function validateClaudePackagingContract(input) {
   if (workSuiteDependency === undefined) {
     errors.push("missing Work Suite dependency in Claude plugin metadata")
   } else if (workSuiteDependency.version !== WORK_SUITE_DEPENDENCY_RANGE) {
-    errors.push("Claude Work Suite dependency range must be ^2.0.0")
+    errors.push("Claude Work Suite dependency range must be ^3.0.0")
   }
 
   if (input.workSuitePlugin.version !== lockedWorkSuiteVersion) {

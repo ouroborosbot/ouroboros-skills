@@ -1,7 +1,7 @@
 {
   "name": "work-suite",
-  "version": "2.1.2",
-  "description": "A lean workflow primitive for orchestrator agents: resolve material unknowns, plan only when needed, implement the smallest correct vertical slice, merge through terminal delivery, and keep authorized autopilot work moving.",
+  "version": "3.0.0",
+  "description": "A risk-graded workflow bundle with strict TDD, complete changed-production coverage, verified delivery, and audited autonomous continuation.",
   "author": {
     "name": "ourostack",
     "url": "https://github.com/ourostack/ouroboros-skills"
@@ -20,7 +20,7 @@
     "codex": {
       "dependencyProvider": {
         "id": "work-suite",
-        "version": "2.1.2",
+        "version": "3.0.0",
         "resolution": "flattened"
       },
       "dependencies": {
@@ -40,7 +40,7 @@
   "interface": {
     "displayName": "Work Suite",
     "shortDescription": "Ideation, planning, doing, merging, and autonomous execution skills.",
-    "longDescription": "Work Suite packages the canonical Ourostack workflow skills for Codex and other agent runtimes: work-ideator, work-planner, work-doer, work-merger, visual-qa-dogfood, autopilot, stay-in-turn, and inch-worm. Work Suite 2 plans only when needed, uses pinned upstream Ponytail for the smallest correct coding change, preserves risk-driven review and validation, and keeps authorized autopilot work moving through terminal delivery.",
+    "longDescription": "Work Suite packages ten canonical Ourostack workflow skills for Codex and other agent runtimes. Work Suite 3 preserves direct routing for clear work, requires strict TDD and complete changed-production coverage, uses risk-graded reviews, verifies delivery, and keeps authorized autopilot work moving through audited terminal state.",
     "developerName": "ourostack",
     "category": "Engineering",
     "capabilities": [

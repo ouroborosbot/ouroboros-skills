@@ -1,6 +1,6 @@
 {
   "name": "desk",
-  "version": "2.1.3",
+  "version": "3.0.0",
   "description": "A quiet workspace substrate for long-running agents: tracks, tasks, friction notes, lessons, lifecycle skills, and an MCP server for desk CRUD plus search.",
   "author": {
     "name": "ourostack",
@@ -48,7 +48,7 @@
       "dependencies": {
         "work-suite": {
           "path": "../work-suite",
-          "version": "2.1.2",
+          "version": "3.0.0",
           "resolution": "flattened"
         },
         "plain-language": {
