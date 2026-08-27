@@ -1,6 +1,6 @@
 ---
 name: git-hygiene
-description: Keep the code repos the agent touches synced and never leave state behind. Use at session start, before starting work in a code repo, before every push, and at session end.
+description: Keep the code repos the agent touches synced and never leave state behind. Use at session start, before starting work in a code repo, after every ref change, when a required check fails or previous validation proof may be reused, before every push, and at session end.
 ---
 
 # Git hygiene
@@ -39,6 +39,15 @@ The rule:
 2. **Quantify the gap before branching.** `git rev-list --count HEAD..origin/main` — a non-zero count means your local base is behind; sync (`git checkout main && git pull --rebase`, or branch from `origin/main` directly) before doing anything else. Don't trust a green-looking `status`; trust the count after a fresh fetch.
 3. **Cross-check HEAD against the real artifact when the work targets one.** If you're changing something with a deployed/published form (an installed app, a released package, a live service), compare the clone's version/HEAD against what's actually running (installed version, latest release tag, live response). A gap between the clone and reality is a second, independent staleness signal — stop and sync first.
 4. **"Done" means the operator's real artifact changed — not "a PR exists" or "a harness passed."** Verify the outcome against the thing the operator actually uses (the installed binary, the live endpoint, the rendered output), not only a synthetic test or an open PR. A green proxy can hide that the operator's experience is unchanged.
+
+### Folder trust is path trust, not revision trust
+
+A host may use path-level folder trust to load repository-owned
+executable configuration. After every ref change, inspect that
+repository-owned executable configuration before the host can load
+or run it. A trusted path does not make a new revision trusted. For
+read-only inspection of untrusted source, use the remote source API
+instead of trusting the checkout only to read it.
 
 **During work**: `work-doer` handles commit + push per its own protocol.
 
@@ -195,6 +204,28 @@ At end-of-loop (convergence reached, findings drained, or operator
 interrupt), wait for the most recent push's pipelines to finalize.
 If any pipeline goes red, treat it as a new finding — fix, push,
 wait again. Only when all pipelines are green does the loop exit.
+
+### Attribute failures after they happen
+
+Do not establish a separate baseline preemptively. When a required
+build, test, or formatter check fails and the failure may be
+pre-existing, preserve the current tree and classify it in this
+order:
+
+1. Current target CI at the exact target SHA.
+2. The same command in a clean merge-base worktree.
+3. A previously recorded, reproducible baseline tied to a commit.
+
+Unknown remains failed evidence. Do not fix an unrelated baseline
+failure unless the task scope requires it.
+
+### Reuse proof only while inputs match
+
+Reuse a previous validation result only while its source/diff
+fingerprint, exact command and selection, dependency and
+configuration fingerprint, and environment all match the current
+run. Record the reused run or artifact. If any relevant input
+changed, rerun the affected proof.
 
 ### Commands are repo-specific
 
