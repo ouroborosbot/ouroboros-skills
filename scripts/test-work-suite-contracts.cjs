@@ -120,7 +120,10 @@ for (const file of [
   requires(file, "merger handles failed commands with merged PRs", /nonzero[\s\S]+MERGED/iu);
   requires(file, "merger verifies landed commit and tree before cleanup", /landed[\s\S]+commit[\s\S]+tree[\s\S]+before[\s\S]+cleanup/iu);
   requires(file, "merger composes same-turn waiting", /stay-in-turn/u);
-  requires(file, "merger maps policy gates without unconditional handback", /needs-human-approval[\s\S]+needs reviewer gate[\s\S]+human-only/iu);
+  requires(file, "merger preserves explicit human approval", /needs-human-approval[\s\S]+hard exception/iu);
+  contract("merger never downgrades explicit human approval", () => {
+    assert.doesNotMatch(text(file), /needs-human-approval[\s\S]{0,120}maps to `needs reviewer gate`/iu);
+  });
 }
 
 for (const file of [
@@ -135,8 +138,12 @@ for (const file of [
   requires(file, "autopilot compares source and installed state", /source[\s\S]+installed/iu);
   requires(file, "autopilot pairs hot patches with source", /hot.patch[\s\S]+source/iu);
   requires(file, "autopilot owns long-horizon wakeups", /^## Long-horizon wakeup$/mu);
-  requires(file, "autopilot maps non-human approval to reviewer gate", /needs-human-approval[\s\S]+needs reviewer gate/iu);
-  requires(file, "autopilot maps human-only approval to hard exception", /needs-human-approval[\s\S]+hard exception[\s\S]+human-only|human-only[\s\S]+hard exception/iu);
+  requires(file, "autopilot preserves explicit human approval", /needs-human-approval[\s\S]+hard exception/iu);
+  requires(file, "autopilot keeps machine review as a distinct state", /needs reviewer gate[\s\S]+machine review|machine review[\s\S]+needs reviewer gate/iu);
+  requires(file, "autopilot emits an auditor-compatible stop condition", /continuation scan is empty or out of scope/iu);
+  contract("autopilot never downgrades explicit human approval", () => {
+    assert.doesNotMatch(text(file), /needs-human-approval[\s\S]{0,120}(?:otherwise )?map(?:s)? it to blocking `needs reviewer gate`/iu);
+  });
 }
 
 for (const file of [
@@ -153,6 +160,7 @@ for (const file of [
   "plugins/work-suite/skills/inch-worm/SKILL.md",
   "skills/watchdog-mode/SKILL.md",
   "plugins/work-suite/skills/watchdog-mode/SKILL.md",
+  "skills/full-systems-audit/SKILL.md",
 ]) {
   requires(file, "waiting callers use the host-capability branch", /stay-in-turn[\s\S]+host[\s\S]+capabilit/iu);
   contract("waiting callers do not prescribe Monitor unconditionally", () => {
@@ -170,7 +178,11 @@ for (const file of [
   requires(file, "orchestration coordinates shared version files", /shared[\s\S]+version[\s\S]+serializ|version[\s\S]+conflict/iu);
   requires(file, "orchestration leaves task lifecycle to Desk", /Desk[\s\S]+task[\s\S]+iteration[\s\S]+state/iu);
   requires(file, "orchestration returns nested review to its parent", /nested[\s\S]+parent/iu);
-  requires(file, "orchestration maps non-human policy gates", /needs-human-approval[\s\S]+needs reviewer gate/iu);
+  requires(file, "orchestration preserves explicit human approval", /needs-human-approval[\s\S]+hard exception/iu);
+  requires(file, "orchestration scopes branch review to the diff boundary", /fresh cold branch review[\s\S]+diff boundary/iu);
+  contract("orchestration never downgrades explicit human approval", () => {
+    assert.doesNotMatch(text(file), /needs-human-approval[\s\S]{0,120}(?:otherwise )?map(?:s)? it to blocking `needs reviewer gate`/iu);
+  });
 }
 
 for (const [file, hooks] of [
@@ -247,6 +259,21 @@ contract("Work Suite CI includes the Autopilot state audit", () => {
   );
 });
 
+contract("marketplace metadata no longer advertises Work Suite 2", () => {
+  assert.doesNotMatch(text(".claude-plugin/marketplace.json"), /Work Suite 2\b/u);
+});
+
+requires(
+  "README.md",
+  "README documents complete Doer proof",
+  /work-doer[\s\S]{0,160}test-first[\s\S]{0,120}complete coverage/iu,
+);
+requires(
+  "README.md",
+  "README documents host-portable waiting",
+  /stay-in-turn[\s\S]{0,180}native notification[\s\S]{0,120}foreground fallback/iu,
+);
+
 contract("coverage exclusion list has no campaign additions", () => {
   assert.deepEqual(
     json("plugins/desk/mcp/config/coverage-gate.json").exclusions.map(({ path: file }) => file).sort(),
@@ -290,6 +317,7 @@ for (const file of [
   assert.match(body, /Ponytail coding/u);
   assert.match(body, /never requested research|never use it to truncate requested research/u);
   assert.doesNotMatch(body, /four-phase doing skills|Phase 1.4 dispatch|strict TDD|after signoff/iu);
+  assert.doesNotMatch(body, /proof proportional to risk/iu);
 }
 
 assert.equal(
