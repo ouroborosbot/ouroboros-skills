@@ -49,6 +49,11 @@ or run it. A trusted path does not make a new revision trusted. For
 read-only inspection of untrusted source, use the remote source API
 instead of trusting the checkout only to read it.
 
+When a checked-out branch modifies a command-bearing file, such as a
+hook, pipeline, task runner, package script, or policy, diff it against
+the protected base and verify explicit approval before executing the
+changed command. Reading a branch is not running it.
+
 **During work**: `work-doer` handles commit + push per its own protocol.
 
 **After merge**: `work-merger` handles the PR + merge flow; on completion, verify main is current.

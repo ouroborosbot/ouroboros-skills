@@ -37,6 +37,12 @@ one of three dispositions:
    one-line rationale on the entry's `Status:` line and stays open on
    the originating friction doc. see the canonical example below.
 
+### Triage the governing rule before encoding
+
+Before choosing `encode-in-skill`, find the rule that should already have covered the card. If it exists, the defect is loading, placement, enforcement, or missing regression evidence; fix that instead of writing the rule twice.
+
+If existing rules conflict, consolidate them under one owner. If instruction volume buried the rule, cut or simplify before adding prose. Group repeated cards by root cause and fix the governing defect instead of accumulating exceptions.
+
 no deferrals. per `principles.md` Invariant 5, every card gets a
 disposition in the same pass. "wait and see if it keeps happening" is
 a deferral dressed up as a no-op; reject. the whole point of the pass

@@ -75,7 +75,7 @@ space?"
 
 Do not change product behavior while the cause remains a hypothesis. A surviving hypothesis is not proof: confirm it counterfactually by changing the one suspected input or condition and observing the symptom appear and disappear with it. If the symptom does not track, return to step 1 because the hypothesis space was incomplete.
 
-Record any temporary instrumentation before use and revert it before handback. A diagnosis leaves no logging, probes, injected failures, temporary configuration, or other diagnostic edits in the worktree.
+Record every temporary diagnostic change before use. Before handback, reverse only that diagnostic delta and verify its added content and artifacts are absent. Preserve unrelated concurrent changes; a pre-investigation fingerprint is evidence, not ownership. Never restore a fingerprint by undoing a concurrent user or tool change. A diagnosis leaves no logging, probes, injected failures, temporary configuration, or other diagnostic edits in the worktree.
 
 ## Asking the operator IS one of the cheapest observations
 

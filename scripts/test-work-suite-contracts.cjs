@@ -84,17 +84,37 @@ contract("git hygiene reuses proof only while its inputs match", () => {
   );
 });
 contract("git hygiene rechecks executable repository configuration after ref changes", () => {
+  const body = subsection("plugins/desk/skills/git-hygiene/SKILL.md", "Folder trust is path trust, not revision trust");
   assert.match(
-    subsection("plugins/desk/skills/git-hygiene/SKILL.md", "Folder trust is path trust, not revision trust"),
+    body,
     /after every ref change[\s\S]+inspect[\s\S]+repository-owned\s+executable[\s\S]+before[\s\S]+(?:load|run)/iu,
+  );
+  assert.match(
+    body,
+    /command-bearing file[\s\S]+diff it against[\s\S]+protected base[\s\S]+explicit approval[\s\S]+before executing/iu,
   );
 });
 contract("runtime investigation proves causality and removes diagnostic changes", () => {
   assert.match(
     subsection("plugins/desk/skills/runtime-symptom-investigation/SKILL.md", "Prove the cause before changing behavior"),
-    /do not change product behavior[\s\S]+counterfactual[\s\S]+symptom[\s\S]+instrumentation[\s\S]+revert[\s\S]+before handback/iu,
+    /do not change product behavior[\s\S]+counterfactual[\s\S]+symptom[\s\S]+record every temporary diagnostic change[\s\S]+before handback[\s\S]+reverse only that diagnostic delta[\s\S]+verify[\s\S]+absent[\s\S]+preserve unrelated concurrent changes[\s\S]+fingerprint is evidence, not ownership[\s\S]+never[\s\S]+concurrent user or tool change/iu,
   );
 });
+requires(
+  "plugins/desk/skills/curator/SKILL.md",
+  "curator triages existing rules before encoding",
+  /already have covered[\s\S]+loading[\s\S]+placement[\s\S]+enforcement[\s\S]+regression evidence[\s\S]+instead of writing the rule twice/iu,
+);
+requires(
+  "plugins/desk/skills/curator/SKILL.md",
+  "curator consolidates governing rules before adding prose",
+  /conflict[\s\S]+consolidate[\s\S]+one owner[\s\S]+buried[\s\S]+cut or simplify[\s\S]+before adding[\s\S]+root cause/iu,
+);
+requires(
+  "plugins/desk/skills/friction-management/SKILL.md",
+  "friction captures question-shaped workflow failures",
+  /operator asks why[\s\S]+omitted[\s\S]+diverged[\s\S]+unexpected[\s\S]+rule already exists[\s\S]+loaded[\s\S]+verified cause[\s\S]+existing rules did not prevent/iu,
+);
 
 for (const file of [
   "skills/work-planner/SKILL.md",
@@ -120,6 +140,30 @@ for (const file of [
     assert.match(
       subsection(file, "Preserve confirmed customer decisions"),
       /derive that inventory from the producing or owning contract[\s\S]+not from a display label[\s\S]+UI grouping[\s\S]+umbrella term[\s\S]+different customer purposes/iu,
+    );
+    assert.match(
+      subsection(file, "Preserve confirmed customer decisions"),
+      /confirmed component boundary[\s\S]+public contract[\s\S]+state owner[\s\S]+trust model[\s\S]+compatibility policy[\s\S]+do not silently replace[\s\S]+reviewer consensus[\s\S]+confirming authority/iu,
+    );
+  });
+  contract(`planner settles durable contracts before propagation in ${file}`, () => {
+    const body = subsection(file, "Settle durable contracts before propagation");
+    assert.match(body, /before creating a durable contract or generating its consumers/iu);
+    assert.match(
+      body,
+      /proposed name and shape[\s\S]+call site[\s\S]+without implementation context[\s\S]+resolve material ambiguity before it propagates[\s\S]+generated clients[\s\S]+tests[\s\S]+telemetry[\s\S]+documentation[\s\S]+downstream consumers[\s\S]+internal consistency[\s\S]+not evidence/iu,
+    );
+  });
+  contract(`planner requires inactive configuration containment in ${file}`, () => {
+    const body = text(file).split("Every behavior-changing slice names:", 2)[1]?.split("\n\nStrict TDD", 1)[0];
+    assert.ok(body, `${file} is missing the behavior-changing slice contract`);
+    assert.match(
+      body,
+      /default-off[\s\S]+configuration-gated[\s\S]+owning contract[\s\S]+activation seam[\s\S]+inactive state[\s\S]+real routing boundary[\s\S]+proves the pre-change path survives/iu,
+    );
+    assert.match(
+      body,
+      /changed boundary[\s\S]+success[\s\S]+when applicable[\s\S]+invalid input[\s\S]+dependency failure[\s\S]+timeout[\s\S]+cancellation[\s\S]+partial mutation[\s\S]+retry[\s\S]+duplication[\s\S]+error translation/iu,
     );
   });
   contract("planner no longer prescribes one review for high-risk work", () => {
@@ -153,6 +197,37 @@ for (const file of [
   requires(file, "doer records build and full-suite proof", /record[\s\S]+build[\s\S]+full (?:existing )?suite/iu);
   requires(file, "doer composes visual QA", /visual-qa-dogfood/u);
   requires(file, "doer preserves operator ownership of future sends", /I'll send|I’ll send/iu);
+  contract(`doer places behavior at its canonical owner in ${file}`, () => {
+    assert.match(
+      subsection(file, "Place behavior at its owner"),
+      /canonical owner[\s\S]+repository evidence[\s\S]+nearest caller[\s\S]+currently open file[\s\S]+narrowest visibility[\s\S]+current production consumers[\s\S]+solely for tests[\s\S]+anticipated reuse/iu,
+    );
+  });
+  contract(`doer contains inactive configuration paths in ${file}`, () => {
+    const body = subsection(file, "Contain configuration-gated behavior");
+    assert.match(
+      body,
+      /default-off[\s\S]+configuration-gated[\s\S]+inactive state[\s\S]+owning contract[\s\S]+real routing boundary/iu,
+    );
+    assert.match(
+      body,
+      /false[\s\S]+missing[\s\S]+malformed[\s\S]+unavailable[\s\S]+stale[\s\S]+unsupported[\s\S]+pre-change behavior[\s\S]+contract defines them as inactive/iu,
+    );
+    assert.match(body, /mutation-test[\s\S]+fails when the preserved route changes/iu);
+    assert.match(body, /calls the new code directly is not containment evidence/iu);
+    assert.match(
+      body,
+      /mutation[\s\S]+weakening production code[\s\S]+mock[\s\S]+shared boundary[\s\S]+activation seam[\s\S]+exceptional[\s\S]+existing consumer/iu,
+    );
+  });
+  contract(`doer proves changed-boundary failure contracts in ${file}`, () => {
+    const body = subsection(file, "Prove changed-boundary failure contracts");
+    assert.match(
+      body,
+      /changed boundary[\s\S]+success[\s\S]+when applicable[\s\S]+invalid input[\s\S]+dependency failure[\s\S]+timeout[\s\S]+cancellation[\s\S]+partial mutation[\s\S]+retry[\s\S]+duplication[\s\S]+error translation/iu,
+    );
+    assert.match(body, /translate errors at the boundary[\s\S]+outgoing contract/iu);
+  });
 }
 
 for (const file of [
@@ -172,7 +247,13 @@ for (const file of [
   contract(`merger reconciles confirmed customer decisions in ${file}`, () => {
     assert.match(
       subsection(file, "Reconcile confirmed customer decisions"),
-      /before merge[\s\S]+after release\/install[\s\S]+separately recorded confirmed customer decision and acceptance criterion[\s\S]+shipped behavior[\s\S]+technical constraint[\s\S]+mismatch[\s\S]+recorded authority/iu,
+      /before merge[\s\S]+after release\/install[\s\S]+separately recorded confirmed customer decision and acceptance criterion[\s\S]+confirmed component boundary[\s\S]+public contract[\s\S]+state owner[\s\S]+trust model[\s\S]+compatibility policy[\s\S]+shipped behavior[\s\S]+technical constraint[\s\S]+mismatch[\s\S]+recorded authority/iu,
+    );
+  });
+  contract(`merger retargets stacked work without inherited diffs in ${file}`, () => {
+    assert.match(
+      subsection(file, "Retarget stacked work without inherited diffs"),
+      /record the base PR[\s\S]+base branch[\s\S]+exact base source SHA[\s\S]+original merge base[\s\S]+base merges[\s\S]+ancestry[\s\S]+recompute the merge base[\s\S]+complete intended diff[\s\S]+retarget only[\s\S]+feature changes[\s\S]+squash[\s\S]+replacement branch[\s\S]+final target[\s\S]+replacement PR[\s\S]+do not force-push[\s\S]+published history[\s\S]+rerun[\s\S]+review and validation/iu,
     );
   });
   contract("merger never downgrades explicit human approval", () => {
