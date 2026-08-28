@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 3.1.0 — 2026-08-27
+
+**Humanize is now available to every Desk consumer as a triggered editorial capability.** Humanize refines prose toward a more natural editorial voice; Plain Language remains the separate always-on policy for making information findable, understandable, usable, and precise. Plain Language keeps its own plugin because it has independent activation and is consumed by both Desk and Work Suite. Humanize has no independent host policy, so its standalone catalog export is removed and Desk becomes its distribution boundary. `desk-mcp@1.3.3`, Work Suite v3.0.0, Plain Language v0.2.0, and Ponytail v4.9.0 remain unchanged.
+
 ## 3.0.0 — 2026-08-26
 
 **Align Desk with Work Suite 3.** Desk's Claude, Codex, and Copilot activation metadata now lock Work Suite 3.0.0, including the Claude `^3.0.0` dependency range. Work Orchestration verifies authority before mutation, validates explicit cross-repo dependency graphs, isolates parallel worktrees, coordinates shared version files, and leaves task/iteration lifecycle state to Desk. `desk-mcp@1.3.3`, Plain Language v0.2.0, and Ponytail v4.9.0 remain unchanged.

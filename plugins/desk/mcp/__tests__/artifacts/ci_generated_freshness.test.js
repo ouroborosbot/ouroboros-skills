@@ -61,10 +61,12 @@ const requiredHostManifestChecks = [
   "codex-plugin",
   "claude-plugin",
   "worker-sources",
+  "humanize-skill",
   "codex-fixtures",
 ]
 
 const hostManifestFixtureFiles = [
+  "manifest.json",
   ".github/workflows/desk-mcp-tests.yml",
   ".github/workflows/validate-skills.yml",
   "desk/tasks/2026-06-14-1335-doing-desk-dependency-activation/host-capability-evidence.md",
@@ -79,6 +81,8 @@ const hostManifestFixtureFiles = [
   "plugins/desk/agents/worker.md",
   "plugins/desk/agents/worker.toml",
   "plugins/desk/hooks/hooks.json",
+  "plugins/desk/skills/humanize/LICENSE",
+  "plugins/desk/skills/humanize/SKILL.md",
   "plugins/desk/mcp/src/activation/adapters/codex.js",
   "plugins/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-activation-config.json",
   "plugins/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-config.toml",
@@ -867,6 +871,15 @@ test("root host-manifest verifier catches stale generated host-facing files", as
           loadText("plugins", "desk", "agents", "worker.toml")
             .replace('name = "worker"', 'name = "worker-stale"'),
         )
+      },
+    },
+    {
+      label: "humanize-skill",
+      errorPattern: /humanize[- ]skill/u,
+      mutate: (fixtureRoot) => {
+        const manifest = loadJson("manifest.json")
+        manifest.skills.push({ name: "humanize" })
+        writeJson(fixtureRoot, "manifest.json", manifest)
       },
     },
     {

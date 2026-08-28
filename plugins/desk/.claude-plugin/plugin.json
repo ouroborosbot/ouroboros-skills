@@ -1,6 +1,6 @@
 {
   "name": "desk",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "a quiet room of work for long-running agents — the universal substrate underneath whichever overlay (corporate worker, autonomous agent, personal coding agent) sits on top. drawers for tracks, manilla envelopes for tasks, a corkboard for friction notes, a small reference shelf for lessons earned; archive at the back of the room, still browsable. provides the workspace conventions, lifecycle states, dispatch, friction registers, and engineering posture skills that turn an agent from one-off helper into a long-running, accountable, learning-over-time worker. cross-context portable: the same skills serve enterprise worker overlays, autonomous agents, and personal coding agents — each consumer agent declares its own workspace path via a $DESK placeholder binding in its preamble, so the layout and ceremonies travel without depending on whose desk it is. depends on work-suite for the doing-phase skills (ideator / planner / doer / merger).",
   "author": {
     "name": "ourostack",

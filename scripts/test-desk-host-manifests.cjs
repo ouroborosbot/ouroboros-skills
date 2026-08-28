@@ -378,6 +378,25 @@ function checkWorkerSources({ repoRoot, errors, checked }) {
   }
 }
 
+function checkHumanizePackaging({ repoRoot, errors, checked }) {
+  checked.push("humanize-skill");
+  const deskSkillRoot = path.join(repoRoot, "plugins", "desk", "skills", "humanize");
+  const standaloneSkillRoot = path.join(repoRoot, "skills", "humanize");
+  const manifest = readJson(repoRoot, "manifest.json");
+
+  for (const file of ["SKILL.md", "LICENSE"]) {
+    if (!fs.existsSync(path.join(deskSkillRoot, file))) {
+      errors.push(`humanize-skill Desk bundle missing ${file}`);
+    }
+  }
+  if (fs.existsSync(standaloneSkillRoot)) {
+    errors.push("humanize-skill remains in the standalone skill catalog");
+  }
+  if (manifest.skills.some((skill) => skill.name === "humanize")) {
+    errors.push("humanize-skill remains exported from the standalone manifest");
+  }
+}
+
 async function expectedCodexFixtures({ repoRoot, mcpRoot }) {
   const { materializeCodexActivation } = await import(pathToFileURL(
     path.join(mcpRoot, "src", "activation", "adapters", "codex.js"),
@@ -446,6 +465,7 @@ async function verifyDeskHostManifests(options = {}) {
     checkCodexPlugin({ repoRoot, errors, checked });
     checkClaudePlugin({ repoRoot, errors, checked });
     checkWorkerSources({ repoRoot, errors, checked });
+    checkHumanizePackaging({ repoRoot, errors, checked });
     await checkCodexFixtures({ repoRoot, mcpRoot, errors, checked });
   } catch (error) {
     errors.push(error instanceof Error ? error.message : String(error));
