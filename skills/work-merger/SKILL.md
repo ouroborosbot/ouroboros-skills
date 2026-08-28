@@ -14,6 +14,10 @@ Before push, PR, merge, release, or deploy:
 3. Fetch that target and classify local changes. Preserve unrelated dirty work; stop only before an operation would overwrite it.
 4. Treat partner-operated mutation as unauthorized until an owner SOP or explicit delegation covers it.
 
+### Reconcile confirmed customer decisions
+
+Before merge, and again after release/install on the consuming surface, reconcile every separately recorded confirmed customer decision and acceptance criterion to the shipped behavior. A technical constraint that drops a confirmed value is a mismatch, not an implicit scope cut. Keep the branch and task unresolved until the recorded authority confirms a changed outcome.
+
 ## Drive
 
 1. Integrate the current target, resolve conflicts by preserving both intents, and run the repository's existing gates.
