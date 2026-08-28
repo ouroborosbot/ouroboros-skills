@@ -71,6 +71,12 @@ space?"
    confirm and explain the surviving hypothesis, not to discover
    it.
 
+### Prove the cause before changing behavior
+
+Do not change product behavior while the cause remains a hypothesis. A surviving hypothesis is not proof: confirm it counterfactually by changing the one suspected input or condition and observing the symptom appear and disappear with it. If the symptom does not track, return to step 1 because the hypothesis space was incomplete.
+
+Record any temporary instrumentation before use and revert it before handback. A diagnosis leaves no logging, probes, injected failures, temporary configuration, or other diagnostic edits in the worktree.
+
 ## Asking the operator IS one of the cheapest observations
 
 The operator has:

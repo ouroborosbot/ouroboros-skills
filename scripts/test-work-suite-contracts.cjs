@@ -89,6 +89,12 @@ contract("git hygiene rechecks executable repository configuration after ref cha
     /after every ref change[\s\S]+inspect[\s\S]+repository-owned\s+executable[\s\S]+before[\s\S]+(?:load|run)/iu,
   );
 });
+contract("runtime investigation proves causality and removes diagnostic changes", () => {
+  assert.match(
+    subsection("plugins/desk/skills/runtime-symptom-investigation/SKILL.md", "Prove the cause before changing behavior"),
+    /do not change product behavior[\s\S]+counterfactual[\s\S]+symptom[\s\S]+instrumentation[\s\S]+revert[\s\S]+before handback/iu,
+  );
+});
 
 for (const file of [
   "skills/work-planner/SKILL.md",
@@ -102,6 +108,16 @@ for (const file of [
   requires(file, "planner requires strict TDD", /strict TDD[\s\S]+observed red/iu);
   requires(file, "planner requires complete changed-production coverage", /100%[\s\S]+statements[\s\S]+branches[\s\S]+functions/iu);
   requires(file, "planner composes visual QA", /visual-qa-dogfood/u);
+  contract(`planner preserves confirmed customer decisions in ${file}`, () => {
+    assert.match(
+      subsection(file, "Preserve confirmed customer decisions"),
+      /customer-visible[\s\S]+canonical value[\s\S]+customer situation[\s\S]+inclusion harm[\s\S]+exclusion harm[\s\S]+evidence[\s\S]+recommendation[\s\S]+counterargument[\s\S]+confirmed outcome[\s\S]+confirming authority[\s\S]+implementation (?:is|was) easier[\s\S]+unresolved conflict[\s\S]+not ready/iu,
+    );
+    assert.match(
+      subsection(file, "Preserve confirmed customer decisions"),
+      /reconcile every confirmed decision and acceptance criterion[\s\S]+chosen design[\s\S]+implementation slice[\s\S]+falsifiable test[\s\S]+consuming-surface proof/iu,
+    );
+  });
   contract("planner no longer prescribes one review for high-risk work", () => {
     assert.doesNotMatch(text(file), /one cold review for cross-cutting or high-risk work/iu);
   });
@@ -149,6 +165,12 @@ for (const file of [
   requires(file, "merger verifies landed commit and tree before cleanup", /landed[\s\S]+commit[\s\S]+tree[\s\S]+before[\s\S]+cleanup/iu);
   requires(file, "merger composes same-turn waiting", /stay-in-turn/u);
   requires(file, "merger preserves explicit human approval", /needs-human-approval[\s\S]+hard exception/iu);
+  contract(`merger reconciles confirmed customer decisions in ${file}`, () => {
+    assert.match(
+      subsection(file, "Reconcile confirmed customer decisions"),
+      /before merge[\s\S]+after release\/install[\s\S]+separately recorded confirmed customer decision and acceptance criterion[\s\S]+shipped behavior[\s\S]+technical constraint[\s\S]+mismatch[\s\S]+recorded authority/iu,
+    );
+  });
   contract("merger never downgrades explicit human approval", () => {
     assert.doesNotMatch(text(file), /needs-human-approval[\s\S]{0,120}maps to `needs reviewer gate`/iu);
   });

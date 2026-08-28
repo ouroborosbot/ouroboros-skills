@@ -34,6 +34,12 @@ Every behavior-changing slice names:
 
 Strict TDD requires an observed red: test first, record the intended failure, freeze the test, implement the minimal green, then refactor while green. UI or rendered-output work also invokes `visual-qa-dogfood`.
 
+### Preserve confirmed customer decisions
+
+When customer-visible behavior differs by status, lifecycle state, type, origin, role, host, platform, permission, or feature configuration, record each canonical value separately with the customer situation, inclusion harm, exclusion harm, evidence, recommendation, strongest counterargument, confirmed outcome, and exact confirming authority. Never combine distinct values or select or exclude one because implementation is easier. An unresolved conflict means the planning document is not ready.
+
+Before marking a doing document ready, reconcile every confirmed decision and acceptance criterion to the chosen design, a planned implementation slice, its falsifiable test, and consuming-surface proof. Missing, contradictory, or implementation-narrowed entries remain unresolved.
+
 ## Review
 
 Review matches the route:
