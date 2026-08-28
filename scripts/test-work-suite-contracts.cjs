@@ -117,6 +117,10 @@ for (const file of [
       subsection(file, "Preserve confirmed customer decisions"),
       /reconcile every confirmed decision and acceptance criterion[\s\S]+chosen design[\s\S]+implementation slice[\s\S]+falsifiable test[\s\S]+consuming-surface proof/iu,
     );
+    assert.match(
+      subsection(file, "Preserve confirmed customer decisions"),
+      /derive that inventory from the producing or owning contract[\s\S]+not from a display label[\s\S]+UI grouping[\s\S]+umbrella term[\s\S]+different customer purposes/iu,
+    );
   });
   contract("planner no longer prescribes one review for high-risk work", () => {
     assert.doesNotMatch(text(file), /one cold review for cross-cutting or high-risk work/iu);
