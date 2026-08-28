@@ -16,7 +16,13 @@ Before push, PR, merge, release, or deploy:
 
 ### Reconcile confirmed customer decisions
 
-Before merge, and again after release/install on the consuming surface, reconcile every separately recorded confirmed customer decision and acceptance criterion to the shipped behavior. A technical constraint that drops a confirmed value is a mismatch, not an implicit scope cut. Keep the branch and task unresolved until the recorded authority confirms a changed outcome.
+Before merge, and again after release/install on the consuming surface, reconcile every separately recorded confirmed customer decision and acceptance criterion, plus every confirmed component boundary, public contract, state owner, trust model, and compatibility policy, to the shipped behavior. A technical constraint that drops a confirmed value is a mismatch, not an implicit scope cut. Keep the branch and task unresolved until the recorded authority confirms a changed outcome.
+
+### Retarget stacked work without inherited diffs
+
+For a stacked PR, record the base PR, base branch, exact base source SHA, and original merge base. After the base merges, inspect ancestry, recompute the merge base, and review the complete intended diff before changing the PR target. Retarget only when the resulting PR contains only the feature changes.
+
+If a squash merge leaves base changes in the retargeted PR, create a replacement branch from the final target, move only the feature changes, and open a replacement PR. Do not force-push or rewrite published history. Recompute the merge base on the replacement and rerun any review and validation invalidated by the base change.
 
 ## Drive
 

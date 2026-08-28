@@ -21,6 +21,8 @@ mixing the two dulls the corkboard. operational knowledge is task knowledge — 
 
 when a card's fix is later encoded (the `curator` pass), *where* it lands — workspace vs plugin, which plugin, always-on vs a triggered skill — is a `content-routing` decision.
 
+When the operator asks why skill-driven work omitted something, diverged from an agreement, or landed somewhere unexpected, treat the question as a friction report. Before continuing, verify whether the applicable rule already exists and whether it was loaded, then record the expected outcome, the verified cause, and why the existing rules did not prevent it. Do not assume the rule is missing; the `curator` pass checks that before encoding.
+
 ## 1. Pin a new card
 
 when the operator hits friction, or when i notice a recurring rough edge:
