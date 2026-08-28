@@ -2,7 +2,7 @@
 
 ## 3.1.0 — 2026-08-27
 
-**Humanize is now available to every Desk consumer as a triggered editorial capability.** Humanize removes AI-writing fingerprints and calibrates prose to a human voice; Plain Language remains the separate always-on policy for making information findable, understandable, usable, and precise. Humanize moves from the standalone skill catalog into Desk because plugins are the supported sharing unit, while Plain Language keeps its own plugin because it applies unconditionally and has its own activation policy. `desk-mcp@1.3.3`, Work Suite v3.0.0, Plain Language v0.2.0, and Ponytail v4.9.0 remain unchanged.
+**Humanize is now available to every Desk consumer as a triggered editorial capability.** Humanize refines prose toward a more natural editorial voice; Plain Language remains the separate always-on policy for making information findable, understandable, usable, and precise. Plain Language keeps its own plugin because it has independent activation and is consumed by both Desk and Work Suite. Humanize has no independent host policy, so its standalone catalog export is removed and Desk becomes its distribution boundary. `desk-mcp@1.3.3`, Work Suite v3.0.0, Plain Language v0.2.0, and Ponytail v4.9.0 remain unchanged.
 
 ## 3.0.0 — 2026-08-26
 
