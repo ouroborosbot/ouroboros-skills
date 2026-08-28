@@ -83,8 +83,7 @@ voice as the load-bearing material and the agent as editor, publisher, and verif
 - **Mentorship/culture claims need concrete, publication-cleared scope or outcome** (method and what changed; counts only when publicly supportable) or they fold into another bullet as a plain noun. Unquantified virtue lines are definitionally slop.
 - **Layers retell one story at different resolutions.** A deliberate one-sentence echo
   across headline/About/entry is coherence; same-resolution duplication is a defect.
-- **Run the `humanize` skill on every published line** (it owns the AI-tell rules; don't
-  restate them). Profile-specific delta: if closes keep failing, the strongest close is none.
+- **When Desk is loaded, run its `humanize` skill on every published line** (it owns the AI-tell rules; don't restate them). Profile-specific delta: if closes keep failing, the strongest close is none.
 
 ## Section mechanics (re-verify limits live before load-bearing use)
 
@@ -128,4 +127,3 @@ Category clarity in 5 seconds · one story across headline/About/Featured/Experi
 fold hooks · accomplishment-driven entries with publication-cleared evidence · pinned skills match the
 story · Featured proves the headline with live thumbnails · fields set intentionally ·
 no stale/contradicting content · verification badges present where eligible.
-

@@ -104,17 +104,6 @@
       ]
     },
     {
-      "name": "humanize",
-      "path": "skills/humanize/SKILL.md",
-      "description": "Use whenever the user asks to \"humanize\", \"make this sound more human\", \"rewrite to avoid AI detection\", \"make this less AI-sounding\", \"add a human voice\", or \"write like a person\". Also use when the user pastes text and asks why it reads as robotic, generic, flat, or AI-like, or when generating new text in a register where AI tells (em dashes, semicolons, hedges, banned vocabulary like \"delve\", \"leverage\", \"robust\") would damage credibility.",
-      "tags": [
-        "writing",
-        "editing",
-        "text",
-        "style"
-      ]
-    },
-    {
       "name": "inch-worm",
       "path": "skills/inch-worm/SKILL.md",
       "description": "Open-ended codebase improvement loop. Start with one concrete seed issue, fix it, log side observations to a bundle task backlog, pick the next highest-value discovery, repeat, and close the backlog when done. Each fix is its own PR.",
