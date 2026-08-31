@@ -394,6 +394,13 @@ contract("Work Suite CI includes the Autopilot state audit", () => {
   );
 });
 
+contract("Work Suite CI includes skill evaluation contracts", () => {
+  assert.match(
+    text(".github/workflows/validate-skills.yml"),
+    /name: Validate skill eval contracts[\s\S]+node scripts\/test-skill-evals\.cjs && node scripts\/skill-evals\.cjs validate/u,
+  );
+});
+
 contract("marketplace metadata no longer advertises Work Suite 2", () => {
   assert.doesNotMatch(text(".claude-plugin/marketplace.json"), /Work Suite 2\b/u);
 });
