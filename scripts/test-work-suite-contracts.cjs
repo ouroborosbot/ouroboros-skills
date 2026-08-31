@@ -419,7 +419,7 @@ requires(
 contract("coverage exclusion list has no campaign additions", () => {
   assert.deepEqual(
     json("plugins/desk/mcp/config/coverage-gate.json").exclusions.map(({ path: file }) => file).sort(),
-    ["scripts/audit-work-suite-runtime.cjs", "scripts/validate-skills.cjs"],
+    ["scripts/audit-work-suite-runtime.cjs", "scripts/skill-evals.cjs", "scripts/validate-skills.cjs"],
   );
 });
 

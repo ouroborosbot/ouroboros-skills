@@ -16,6 +16,11 @@
       "path": "scripts/validate-skills.cjs",
       "owner": "Skill validation CLI",
       "reason": "Root-level skill + manifest validation CLI is exercised directly by the 'Validate skills' CI job (`node scripts/validate-skills.cjs`) and its dedicated unit test; its CLI/error-exit branches run outside the Desk MCP coverage runner, mirroring scripts/audit-work-suite-runtime.cjs."
+    },
+    {
+      "path": "scripts/skill-evals.cjs",
+      "owner": "Skill evaluation contract validator",
+      "reason": "Root-level eval validation CLI is exercised directly by scripts/test-skill-evals.cjs and the 'Validate skill eval contracts' CI step; its CLI branches run outside the Desk MCP coverage runner."
     }
   ]
 }
