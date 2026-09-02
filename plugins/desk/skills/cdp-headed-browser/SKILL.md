@@ -1,6 +1,6 @@
 ---
 name: cdp-headed-browser
-description: Invoke when the agent needs Playwright to drive a web UI behind an interactive auth flow (SSO + device check + FIDO / hardware-key prompts) that a throwaway isolated Chromium can't complete, OR when the operator wants multiple agents to share one auth'd browser, OR when a Playwright MCP session fails because the user-data-dir is unrecognized. Covers the CDP-attach architecture (long-running headed browser + Playwright MCP attaches via `--cdp-endpoint`), the launch ritual, the macOS first-launch trap, the no-`bringToFront()` rule, and reusable `connectOverCDP` patterns. Do NOT invoke for browser tasks against sites where a throwaway isolated Chromium suffices, for headless scraping that doesn't need auth, or when the operator's current Playwright MCP is already working — the architecture switch has a relaunch cost and shouldn't be paid speculatively.
+description: Invoke when the agent needs Playwright to drive a web UI behind an interactive auth flow (SSO + device check + FIDO / hardware-key prompts) that a throwaway isolated Chromium can't complete, OR when the operator wants multiple agents to share one auth'd browser, OR when a Playwright MCP session fails because the user-data-dir is unrecognized. Covers the CDP-attach architecture (long-running headed browser + Playwright MCP attaches via `--cdp-endpoint`), the launch ritual, the macOS first-launch trap, focus-preserving background targets, and reusable `connectOverCDP` patterns. Do NOT invoke for browser tasks against sites where a throwaway isolated Chromium suffices, for headless scraping that doesn't need auth, or when the operator's current Playwright MCP is already working — the architecture switch has a relaunch cost and shouldn't be paid speculatively.
 ---
 
 # cdp-headed-browser
@@ -82,21 +82,36 @@ Expected: a string identifying the browser and version.
 
 On the very first launch with a new `--user-data-dir`, macOS Chromium-derived browsers tend to prioritize their first-run UX (welcome page, default-browser ask, sync setup) over any URL passed as a positional argument. The URL gets dropped on the floor.
 
-Workaround: launch without a URL, wait for CDP to come up, then open the actual target URL via CDP HTTP API:
-
-```bash
-curl -s -X PUT "http://localhost:9222/json/new?https://example.com/..."
-```
+Workaround: launch without a URL, wait for CDP to come up, then create the target with the background-safe CDP pattern below. Do not use the HTTP `/json/new` endpoint: Chromium creates that tab as active and may foreground the browser.
 
 After the profile is established (the first run is over), subsequent launches honor a URL arg normally. The trap only bites once per `--user-data-dir`.
 
-## The no-`bringToFront()` rule
+## Focus preservation
 
-When driving the CDP-attached headed browser, **never call `page.bringToFront()`**. The call yanks the browser app to the OS foreground every time it runs, stealing focus away from whatever the operator is doing in their other windows.
+The shared headed browser is background infrastructure, not a remote-control surface. **Never call `page.bringToFront()`, `Target.activateTarget`, `/json/activate`, or `/json/new` during unattended automation.** The first three explicitly activate a target; `/json/new` looks like a creation endpoint but creates an active tab and may foreground the browser.
 
 This is invisible under the prior `--isolated` headless mode (no window = nothing to raise) but extremely visible under a CDP-attached headed browser. Operators have called it out by name as a focus-grabbing trap.
 
-Playwright's CDP-synthesized click/fill events don't require the window to be in foreground. The page can be backgrounded for the entire automation while still responding to all CDP commands.
+Prefer a direct HTTP/API path when the surface exposes one. If a browser tab is required, create it explicitly in the background:
+
+```js
+const beforePages = new Set(ctx.pages());
+const cdp = await browser.newBrowserCDPSession();
+const { targetId } = await cdp.send('Target.createTarget', { url: '<target-url>', background: true });
+let page;
+for (let i = 0; i < 40 && !page; i++) {
+  await new Promise(resolve => setTimeout(resolve, 50));
+  for (const candidate of ctx.pages().filter(candidate => !beforePages.has(candidate))) {
+    const session = await ctx.newCDPSession(candidate);
+    const { targetInfo } = await session.send('Target.getTargetInfo');
+    await session.detach();
+    if (targetInfo.targetId === targetId) page = candidate;
+  }
+}
+if (!page) throw new Error(`background target ${targetId} did not attach`);
+```
+
+Playwright's CDP-synthesized click/fill events don't require the window to be in foreground. Keep the page backgrounded for the entire automation, close it with `page.close()` or `Target.closeTarget`, then detach from the browser.
 
 If a specific action genuinely needs the page visible (a Save-As dialog, an OS-level permission prompt — rare), surface that to the operator instead of grabbing focus silently.
 
@@ -126,17 +141,11 @@ curl -s http://localhost:9222/json | jq -r '.[] | select(.type=="page") | "\(.id
 # Browser metadata
 curl -s http://localhost:9222/json/version
 
-# Open a new tab to a URL (works around the first-launch trap above)
-curl -s -X PUT "http://localhost:9222/json/new?<URL>"
-
-# Activate (focus) an existing tab
-curl -X PUT "http://localhost:9222/json/activate/<tab-id>"
-
 # Close a tab
 curl -X PUT "http://localhost:9222/json/close/<tab-id>"
 ```
 
-For anything that requires *interaction* (clicks, fills, navigation tracking), use Playwright's `chromium.connectOverCDP()` — see template below.
+The HTTP surface also exposes `/json/new` and `/json/activate`, but both activate targets and are forbidden for unattended work. For background-safe creation or anything that requires interaction, use Playwright's `chromium.connectOverCDP()` and `Target.createTarget({ background: true })`.
 
 ## Playwright `connectOverCDP` template
 
@@ -151,7 +160,7 @@ const browser = await chromium.connectOverCDP('http://localhost:9222');
 const ctx = browser.contexts()[0];                  // default persistent context
 const page = ctx.pages().find(p => p.url().includes('<target>')) || ctx.pages()[0];
 
-// NO page.bringToFront() — see rule above.
+// Keep the page backgrounded — see Focus preservation above.
 
 await page.locator('[aria-label="<label>"]').click();
 // ...
@@ -181,8 +190,8 @@ Chromium-derived browsers spawn helper processes (renderer, GPU, utility) that m
 
 - **CDP not listening (`curl ... | head -c 50` returns empty / connection refused)** — the browser isn't running, or running without `--remote-debugging-port`, or another process is holding the port. Verify with `lsof -i :9222`.
 - **SSO / device-binding error on auth** — the user-data-dir isn't recognized by the IdP. overlay users: consumer overlays may ship IdP-specific fallbacks. Otherwise: accept the one-time interactive auth and rely on cached cookies.
-- **First navigation lands at a welcome / first-run page regardless of URL arg** — first-launch trap; use `/json/new?url=` workaround.
-- **Operator's focus keeps getting stolen** — `bringToFront()` is somewhere in the script. Strip it.
+- **First navigation lands at a welcome / first-run page regardless of URL arg** — first-launch trap; create the target with `Target.createTarget({ background: true })`.
+- **Operator's focus keeps getting stolen** — search for every activation path, not just `bringToFront()`: `/json/new`, `/json/activate`, `Target.activateTarget`, and `page.bringToFront()`.
 - **Playwright `connectOverCDP` returns 0 contexts** — the browser crashed or restarted without the CDP flag. Re-launch.
 - **Never releasing the connection** — every `connectOverCDP` holds one of a small pool of websocket slots on the debug port. A script that exits without calling `browser.close()`, or a loop that reconnects per poll, holds slots indefinitely and eventually starves every session on the machine. The signature is `connectOverCDP` timing out after 30s while `curl` against the same port answers instantly. Diagnose with `lsof -nP -iTCP:9222`, and identify each holder's owner before touching anything — a connection you did not open is not yours to close. Long-running loops connect once and reuse, reconnecting only when `browser.isConnected()` is false.
 
