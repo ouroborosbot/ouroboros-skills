@@ -180,6 +180,21 @@ test("MCP README validation locks the advertised tool surface", () => {
   assert.ok(staleErrors.some((error) => error.includes("stale 12/13 tool counts")))
 })
 
+test("browser focus validation requires background targets and rejects active-tab recipes", () => {
+  const errors = []
+  docsValidator.validateBrowserFocusPolicy(errors, {
+    readFile: () => "Target.createTarget({ url, background: true })",
+  })
+  assert.deepEqual(errors, [])
+
+  const staleErrors = []
+  docsValidator.validateBrowserFocusPolicy(staleErrors, {
+    readFile: () => 'curl -X PUT "http://localhost:9222/json/new?<URL>"',
+  })
+  assert.ok(staleErrors.some((error) => error.includes("background target creation")))
+  assert.ok(staleErrors.some((error) => error.includes("foregrounding CDP HTTP endpoints")))
+})
+
 test("run and startCli expose success, failure, and no-op CLI paths", () => {
   const goodBody = "Embeddings and snapshots are derivative data and may carry privacy risk."
   const workflowBody = [
@@ -201,6 +216,7 @@ test("run and startCli expose success, failure, and no-op CLI paths", () => {
       }],
       readFile: (file) => {
         if (file === "plugins/desk/mcp/README.md") return mcpReadmeBody()
+        if (file === "plugins/desk/skills/cdp-headed-browser/SKILL.md") return "Target.createTarget({ url, background: true })"
         return file.endsWith(".yml") ? workflowBody : goodBody
       },
       stdout: { write: (text) => stdout.push(text) },
