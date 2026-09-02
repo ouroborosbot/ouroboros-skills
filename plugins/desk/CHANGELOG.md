@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 3.1.1 — 2026-09-02
+
+**CDP-attached browser automation now preserves the operator's foreground application.** New pages use background `Target.createTarget` targets; `/json/new`, `/json/activate`, `Target.activateTarget`, and `page.bringToFront()` are forbidden during unattended work; direct APIs remain preferred when they cover the task. `desk-mcp@1.3.3`, Work Suite v3.0.0, Plain Language v0.2.0, and Ponytail v4.9.0 remain unchanged.
+
 ## 3.1.0 — 2026-08-27
 
 **Humanize is now available to every Desk consumer as a triggered editorial capability.** Humanize refines prose toward a more natural editorial voice; Plain Language remains the separate always-on policy for making information findable, understandable, usable, and precise. Plain Language keeps its own plugin because it has independent activation and is consumed by both Desk and Work Suite. Humanize has no independent host policy, so its standalone catalog export is removed and Desk becomes its distribution boundary. `desk-mcp@1.3.3`, Work Suite v3.0.0, Plain Language v0.2.0, and Ponytail v4.9.0 remain unchanged.

@@ -406,6 +406,18 @@ function validateMcpReadmeToolSurface(errors, {
   }
 }
 
+function validateBrowserFocusPolicy(errors, {
+  readFile = (file) => readRepoFile(file),
+} = {}) {
+  const body = readFile("plugins/desk/skills/cdp-headed-browser/SKILL.md");
+  if (!body.includes("Target.createTarget") || !/background:\s*true/u.test(body)) {
+    errors.push("cdp-headed-browser must document background target creation");
+  }
+  if (/curl[^\n]*\/json\/(?:new|activate)/u.test(body)) {
+    errors.push("cdp-headed-browser must not present foregrounding CDP HTTP endpoints as executable recipes");
+  }
+}
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
@@ -510,6 +522,7 @@ function validateAll({
   validateWorkflowWiring(errors, { requirements: workflowRequirements, readFile });
   validateHealthyPathLanguage(errors, { docs, readFile, repoRoot });
   validateMcpReadmeToolSurface(errors, { readFile });
+  validateBrowserFocusPolicy(errors, { readFile });
   validatePrivacyNotes(errors, { docs: privacyRequiredDocs, readFile });
   validateTopicCoverage(errors, { requirements: topicRequirements, readFile, repoRoot });
   return errors;
@@ -556,6 +569,7 @@ module.exports = {
   run,
   startCli,
   validateAll,
+  validateBrowserFocusPolicy,
   validateHealthyPathLanguage,
   validateHealthyPathRecord,
   validateMcpReadmeToolSurface,
