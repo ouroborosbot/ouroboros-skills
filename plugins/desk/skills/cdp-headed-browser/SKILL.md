@@ -101,8 +101,14 @@ const { targetId } = await cdp.send('Target.createTarget', { url: '<target-url>'
 let page;
 for (let i = 0; i < 40 && !page; i++) {
   await new Promise(resolve => setTimeout(resolve, 50));
-  page = ctx.pages().find(candidate => !beforePages.has(candidate));
+  for (const candidate of ctx.pages().filter(candidate => !beforePages.has(candidate))) {
+    const session = await ctx.newCDPSession(candidate);
+    const { targetInfo } = await session.send('Target.getTargetInfo');
+    await session.detach();
+    if (targetInfo.targetId === targetId) page = candidate;
+  }
 }
+if (!page) throw new Error(`background target ${targetId} did not attach`);
 ```
 
 Playwright's CDP-synthesized click/fill events don't require the window to be in foreground. Keep the page backgrounded for the entire automation, close it with `page.close()` or `Target.closeTarget`, then detach from the browser.
