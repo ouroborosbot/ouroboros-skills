@@ -160,7 +160,9 @@ await browser.close({ reason: 'detach' });          // disconnects MCP from brow
                                                     // browser keeps running.
 ```
 
-Important: `browser.close({ reason: 'detach' })` on a CDP-connected browser only disconnects Playwright. The browser process keeps running for the next agent. To actually terminate the browser, use `pkill` (see Cleanup).
+Important: on a CDP-attached browser, `browser.close()` only detaches Playwright — the browser process keeps running for the next agent. That is a property of the attachment, not of the `{ reason }` option: Playwright did not launch this browser, so it does not terminate it. The `reason` is a label that makes a stray call easier to trace, so keep passing it, but do not treat it as the guard. (A browser from `chromium.launch()` *is* owned by the script, and closing that one does terminate it.) To actually terminate an attached browser, use `pkill` (see Cleanup).
+
+There is no `browser.disconnect()`. Calling it throws `TypeError: browser.disconnect is not a function` (checked against `playwright-core` 1.62.1). `close()` is the release call.
 
 ## Cleanup
 
@@ -182,7 +184,7 @@ Chromium-derived browsers spawn helper processes (renderer, GPU, utility) that m
 - **First navigation lands at a welcome / first-run page regardless of URL arg** — first-launch trap; use `/json/new?url=` workaround.
 - **Operator's focus keeps getting stolen** — `bringToFront()` is somewhere in the script. Strip it.
 - **Playwright `connectOverCDP` returns 0 contexts** — the browser crashed or restarted without the CDP flag. Re-launch.
-- **`browser.close()` without `{ reason: 'detach' }`** — may try to actually terminate the browser, killing other agents' tabs. Always pass `{ reason: 'detach' }`.
+- **Never releasing the connection** — every `connectOverCDP` holds one of a small pool of websocket slots on the debug port. A script that exits without calling `browser.close()`, or a loop that reconnects per poll, holds slots indefinitely and eventually starves every session on the machine. The signature is `connectOverCDP` timing out after 30s while `curl` against the same port answers instantly. Diagnose with `lsof -nP -iTCP:9222`, and identify each holder's owner before touching anything — a connection you did not open is not yours to close. Long-running loops connect once and reuse, reconnecting only when `browser.isConnected()` is false.
 
 ## Cross-references
 
