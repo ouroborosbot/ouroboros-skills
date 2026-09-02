@@ -22,7 +22,7 @@ references that layout; it does not duplicate the lens taxonomy.
 
 ## Hard rules
 
-These seven rules apply across phases. A single violation is enough
+These eight rules apply across phases. A single violation is enough
 to make a review untrustworthy, so each one is restated in the phase
 where it actually bites.
 
@@ -67,6 +67,15 @@ where it actually bites.
    captured. Phase 10-11 enforces this — if `promotions:` is empty
    at archive time, go back and either find the insight or make
    skip-by-design explicit.
+
+8. **A candidate finding must survive an explicit disproof pass
+   before the operator sees it as a conclusion.** Verify external
+   platform contracts independently of the PR, trace alternate and
+   fallback paths to their terminal outcome, and enumerate relevant
+   feature-flag states. If the strongest benign explanation remains
+   plausible, keep investigating or cut the finding. Never ask the
+   operator to validate worker's technical reading; their role is
+   product judgment after worker has proved the mechanism.
 
 ## Workspace layout
 
@@ -244,6 +253,34 @@ hunk for large files), worker names what changed and surfaces
 questions; the operator reacts; the conversation produces decisions
 that end up in `notes.md` as backlog candidates (Phase 4) or as
 walked-through-and-no-action notes.
+
+### Finding reality gate before the walkthrough
+
+Before worker presents a privately discovered candidate finding,
+builds a walkthrough around it, or asks the operator for judgment,
+try to disprove it:
+
+1. State the strongest intentional or benign explanation for the
+   observed code.
+2. Trace every alternate, legacy, cached, and fallback path far
+   enough to determine the actual user-visible or persisted outcome.
+   The absence of the new path is not a failure when an existing
+   path still produces the required result.
+3. If the claim depends on an SDK, API, host, deployment, or other
+   system outside the repository, verify that system's authoritative
+   contract independently. The PR description, its design doc, and
+   comments in the changed code are subjects of review, not proof.
+4. For feature-flag or version-skew findings, enumerate the relevant
+   state combinations and trace each one. Do not infer failure merely
+   because an intermediate state bypasses the newly added path.
+5. Write the concrete failing input and terminal outcome. If either
+   remains assumed, the finding is not ready for the operator.
+
+This gate exits in one of two states: the candidate has a verified
+failure mechanism, or it is cut. "Does this match your reading?" is
+not a valid technical gate when the operator relies on worker to
+read the code. Ask them only for the product decision the verified
+mechanism actually needs.
 
 ### Teaching mode for an unfamiliar codebase
 
